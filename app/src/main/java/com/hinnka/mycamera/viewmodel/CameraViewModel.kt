@@ -59,6 +59,7 @@ import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelManager
+import com.hinnka.mycamera.ml.PortraitSubjectMask
 import com.hinnka.mycamera.ml.PortraitVideoSegmenter
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
