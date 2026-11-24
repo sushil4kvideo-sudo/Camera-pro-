@@ -941,10 +941,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 val captured = CompletableDeferred<Bitmap?>()
                 preview.captureOriginalPreviewFrame(320) { bitmap ->
-                    if (!captured.isCompleted) captured.complete(bitmap) else bitmap?.recycle()
+                    // complete() returns false if the capture timed out; recycle late frames.
+                    if (!captured.complete(bitmap)) bitmap?.recycle()
                 }
                 val bitmap = withTimeoutOrNull(1_500L) { captured.await() }
                 if (bitmap == null) {
+                    captured.cancel()
                     delay(40L)
                     continue
                 }
@@ -961,7 +963,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     cameraController.updateVideoPortraitMask(mask.width, mask.height, mask.data)
                 }
                 // Single in-flight inference: never queue stale frames behind a slower model.
-                delay(35L)
+                delay(12L)
             }
         }
     }
