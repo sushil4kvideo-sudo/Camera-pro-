@@ -10415,7 +10415,7 @@ class Camera2Controller(private val context: Context) {
                     override fun onConfigured(session: CameraCaptureSession) {
                         if (generation != spatialVideoStandbySessionGeneration ||
                             device !== spatialVideoStandbyCameraDevice ||
-                            !spatialVideoEnabled
+                            !isUltraWideStandbyPreviewActive()
                         ) {
                             safeCloseCaptureSession(session, "stale Special Video standby session")
                             return
@@ -10455,6 +10455,10 @@ class Camera2Controller(private val context: Context) {
                             )
                             if (encoderSurface != null) {
                                 failSpatialVideoStandby("Ultra-wide Camera2 session configuration failed")
+                            } else if (normalVideoUltraWideInstantSwitchActive) {
+                                handleUltraWideStandbyPreviewFailure(
+                                    "Normal Video ultra-wide preview session configuration failed"
+                                )
                             }
                         }
                     }
@@ -10469,6 +10473,10 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Special Video standby session creation failed: camera=${device.id}, reason=$reason", error)
             if (encoderSurface != null) {
                 failSpatialVideoStandby("Ultra-wide recording session could not be created: ${error.localizedMessage}")
+            } else if (normalVideoUltraWideInstantSwitchActive) {
+                handleUltraWideStandbyPreviewFailure(
+                    "Normal Video ultra-wide preview session could not be created: ${error.localizedMessage}"
+                )
             }
         }
     }
