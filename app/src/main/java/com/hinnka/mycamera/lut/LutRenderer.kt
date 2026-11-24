@@ -80,8 +80,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val enginePreview = RawEnginePreviewGl()
     private val mgcEisHardwareBufferRenderer = MgcEisHardwareBufferRenderer(TAG)
     private val mgcEisYuvRenderer = MgcEisYuvRenderer(TAG)
-    private val portraitBokehGl = PortraitBokehGl(TAG + ".Portrait")
-    @Volatile private var portraitVideoEnabled = false
 
     private data class PreviewCaptureRequest(
         val width: Int,
@@ -577,15 +575,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      * with a bottom-left origin to match gl_FragCoord.
      */
 
-    /** Enable/disable the person-mask bokeh pass; no Camera2 reconfiguration is required. */
-    fun setPortraitVideoEnabled(enabled: Boolean) {
-        portraitVideoEnabled = enabled
-    }
+    /**
+     * Compatibility hooks retained for callers from older preview paths.
+     * Portrait Video rendering has been removed from this renderer.
+     */
+    @Deprecated("Portrait Video has been removed")
+    fun setPortraitVideoEnabled(enabled: Boolean) = Unit
 
-    /** Called on the preview GL thread; mask upload itself is deferred to the next draw. */
-    fun setPortraitMask(width: Int, height: Int, data: ByteArray?) {
-        portraitBokehGl.setMask(width, height, data)
-    }
+    @Deprecated("Portrait Video has been removed")
+    fun setPortraitMask(width: Int, height: Int, data: ByteArray?) = Unit
 
     fun setQuickMenuGlassEffect(
         enabled: Boolean,
@@ -713,7 +711,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         enginePreview.reset()
         mgcEisHardwareBufferRenderer.resetAfterContextLoss()
         mgcEisYuvRenderer.resetAfterContextLoss()
-        portraitBokehGl.onContextLost()
         cameraTextureId = 0
         currentCameraTextureId = 0
         currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
@@ -1144,7 +1141,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     override fun onDrawFrame(gl: GL10?) {
         if (renderingPaused) return
         if (viewportWidth <= 0 || viewportHeight <= 0) return
-        portraitBokehGl.applyPendingUpdates()
 
         val delayedStabilizationRequested = previewStabilizationUseCase != null
         val delayedStabilizationEnabled = delayedStabilizationRequested &&
@@ -1291,7 +1287,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             quickMenuGlassRightPx > quickMenuGlassLeftPx &&
             quickMenuGlassTopPx > quickMenuGlassBottomPx
         val requestedFbo = liveRecorder != null ||
-            (portraitVideoEnabled && portraitBokehGl.hasMask) ||
             postProcessEffectEnabled ||
             clarityEnabled ||
             filmGrainEnabled ||
@@ -1392,15 +1387,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 if (grainOutput != null) {
                     currentTexId = grainOutput.textureId
                 }
-            }
-
-            if (portraitVideoEnabled && portraitBokehGl.hasMask) {
-                val portraitOutput = portraitBokehGl.renderToTexture(
-                    sourceTextureId = currentTexId,
-                    width = currentWidth,
-                    height = currentHeight,
-                )
-                if (portraitOutput != 0) currentTexId = portraitOutput
             }
 
             val outputTexId = currentTexId
