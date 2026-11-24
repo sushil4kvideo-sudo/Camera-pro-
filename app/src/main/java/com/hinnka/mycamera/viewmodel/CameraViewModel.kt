@@ -135,6 +135,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.util.concurrent.Executors
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -609,6 +610,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val oppoPhotoSettings: StateFlow<OppoPhotoSettings> = oppoPhotoSettingsRepository.settings
     private val previewEyeFocusProcessor = PreviewEyeFocusProcessor(application)
     private val portraitVideoSegmenter = PortraitVideoSegmenter(application)
+    // MediaPipe's GPU delegate must be created and used on the same thread.
+    private val portraitSegmentationDispatcher = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "PortraitVideoSegmentation").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -931,23 +936,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun startPortraitVideoSegmentation() {
         if (portraitVideoSegmentationJob?.isActive == true) return
-        portraitVideoSegmentationJob = viewModelScope.launch(Dispatchers.Default) {
-            while (isActive && _videoPortraitEnabled.value && state.value.captureMode == CaptureMode.VIDEO) {
+
+        // Keep model creation, GPU delegate calls and model teardown on one stable thread.
+        portraitVideoSegmentationJob = viewModelScope.launch(portraitSegmentationDispatcher) {
+            while (
+                isActive &&
+                _videoPortraitEnabled.value &&
+                state.value.captureMode == CaptureMode.VIDEO
+            ) {
                 val preview = glSurfaceView
                 if (preview == null) {
-                    delay(100L)
+                    delay(50L)
                     continue
                 }
 
                 val captured = CompletableDeferred<Bitmap?>()
-                preview.captureOriginalPreviewFrame(320) { bitmap ->
+                preview.captureOriginalPreviewFrame(256) { bitmap ->
                     // complete() returns false if the capture timed out; recycle late frames.
                     if (!captured.complete(bitmap)) bitmap?.recycle()
                 }
                 val bitmap = withTimeoutOrNull(1_500L) { captured.await() }
                 if (bitmap == null) {
                     captured.cancel()
-                    delay(40L)
+                    delay(24L)
                     continue
                 }
 
@@ -957,13 +968,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     if (!bitmap.isRecycled) bitmap.recycle()
                 }
 
-                if (mask != null && _videoPortraitEnabled.value) {
+                if (
+                    mask != null &&
+                    _videoPortraitEnabled.value &&
+                    state.value.captureMode == CaptureMode.VIDEO
+                ) {
                     latestVideoPortraitMask = mask
                     preview.setPortraitMask(mask.width, mask.height, mask.data)
                     cameraController.updateVideoPortraitMask(mask.width, mask.height, mask.data)
                 }
-                // Single in-flight inference: never queue stale frames behind a slower model.
-                delay(12L)
+
+                // The next preview sample is captured immediately after inference completes;
+                // no stale frame queue is built up behind a slow model.
+                delay(8L)
             }
         }
     }
@@ -7792,6 +7809,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    override fun onCleared() {
+        portraitVideoSegmentationJob?.cancel()
+        // Model/GL delegate teardown must use the same thread that initialized it.
+        runCatching {
+            runBlocking(portraitSegmentationDispatcher) {
+                portraitVideoSegmenter.close()
+            }
+        }
+        portraitSegmentationDispatcher.close()
+        super.onCleared()
+    }
 }
 
 private fun shouldIncludeCropRegionInOutputSize(imageFormat: Int): Boolean {
