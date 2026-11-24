@@ -380,6 +380,7 @@ fun SettingsScreen(
     val videoLensLockEnabled by viewModel.videoLensLockEnabled.collectAsState()
     val videoWhiteBalanceLockEnabled by viewModel.videoWhiteBalanceLockEnabled.collectAsState()
     val keepUltraWideAeReady by viewModel.keepUltraWideAeReady.collectAsState()
+    val spatialVideoVirtualTelephotoEnabled by viewModel.spatialVideoVirtualTelephotoEnabled.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
     val openAIUrl by viewModel.openAIUrl.collectAsState()
     val openAIModel by viewModel.openAIModel.collectAsState()
@@ -1847,6 +1848,18 @@ fun SettingsScreen(
                         )
 
                         SwitchSettingItem(
+                            title = stringResource(R.string.settings_virtual_telephoto_special_video),
+                            description = stringResource(R.string.settings_virtual_telephoto_special_video_description),
+                            checked = spatialVideoVirtualTelephotoEnabled,
+                            onCheckedChange = viewModel::setSpatialVideoVirtualTelephotoEnabled
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
                             title = stringResource(R.string.settings_video_lock_white_balance),
                             description = stringResource(R.string.settings_video_lock_white_balance_description),
                             checked = videoWhiteBalanceLockEnabled,
@@ -2616,6 +2629,7 @@ private fun SettingsCategoryOverview(
                 stringResource(R.string.settings_edge_level),
                 stringResource(R.string.settings_separate_video_lut),
                 stringResource(R.string.settings_video_lock_lens),
+                stringResource(R.string.settings_virtual_telephoto_special_video),
                 stringResource(R.string.settings_video_lock_white_balance)
             ).joinToString(" · "),
             onClick = { onPageSelected(SettingsPage.VIDEO) }
