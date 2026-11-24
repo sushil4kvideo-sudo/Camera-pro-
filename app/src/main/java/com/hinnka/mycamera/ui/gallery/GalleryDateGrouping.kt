@@ -4,6 +4,7 @@ import android.content.Context
 import android.text.format.DateUtils
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.MediaData
+import com.hinnka.mycamera.viewmodel.GalleryTab
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -19,16 +20,22 @@ internal sealed interface GalleryGridEntry {
 
     data class Photo(
         val photo: MediaData,
-        val index: Int
+        val index: Int,
+        val sourceTab: GalleryTab = GalleryTab.PHOTON,
+        val sourceIndex: Int = index
     ) : GalleryGridEntry
 }
 
 internal fun buildGalleryGridEntries(
     context: Context,
-    photos: List<MediaData>
+    photos: List<MediaData>,
+    photonPhotos: List<MediaData> = emptyList(),
+    systemPhotos: List<MediaData> = emptyList()
 ): List<GalleryGridEntry> {
     if (photos.isEmpty()) return emptyList()
 
+    val photonIndexById = photonPhotos.withIndex().associate { it.value.id to it.index }
+    val systemIndexById = systemPhotos.withIndex().associate { it.value.id to it.index }
     val zoneId = ZoneId.systemDefault()
     val today = LocalDate.now(zoneId)
 
@@ -47,9 +54,13 @@ internal fun buildGalleryGridEntries(
                 )
                 groupedPhotos.forEach { indexedPhoto ->
                     add(
+                        val photoId = indexedPhoto.value.id
+                        val systemIndex = systemIndexById[photoId]
                         GalleryGridEntry.Photo(
                             photo = indexedPhoto.value,
-                            index = indexedPhoto.index
+                            index = indexedPhoto.index,
+                            sourceTab = if (systemIndex != null) GalleryTab.SYSTEM else GalleryTab.PHOTON,
+                            sourceIndex = systemIndex ?: photonIndexById[photoId] ?: indexedPhoto.index
                         )
                     )
                 }
