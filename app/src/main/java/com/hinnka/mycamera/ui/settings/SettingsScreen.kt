@@ -1853,7 +1853,9 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_normal_video_instant_ultra_wide_switch),
                             description = stringResource(R.string.settings_normal_video_instant_ultra_wide_switch_description),
                             checked = normalVideoUltraWideInstantSwitchEnabled,
-                            onCheckedChange = viewModel::setNormalVideoUltraWideInstantSwitchEnabled
+                            onCheckedChange = viewModel::setNormalVideoUltraWideInstantSwitchEnabled,
+                            enabled = !state.videoRecordingState.isRecording &&
+                                !state.videoRecordingState.isProcessing,
                         )
 
                         HorizontalDivider(
