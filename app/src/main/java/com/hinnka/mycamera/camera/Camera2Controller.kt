@@ -352,6 +352,9 @@ class Camera2Controller(private val context: Context) {
     private var spatialVideoPrimarySessionAwaitingStandby = false
     private var spatialVideoStandbySessionGeneration = 0L
     private val specialVideoRecordingTimeline = SpecialVideoRecordingTimeline()
+    @Volatile private var spatialVideoWideFinishReceived = false
+    @Volatile private var spatialVideoTelephotoFinishReceived = false
+    @Volatile private var spatialVideoSavedCallback: (() -> Unit)? = null
     @Volatile private var specialVideoDrainDurationMs: Long = 0L
     private var spatialVideoStandbyPreviewSurfaceTexture: SurfaceTexture? = null
     private var spatialVideoStandbyPreviewSurface: Surface? = null
@@ -9832,30 +9835,34 @@ class Camera2Controller(private val context: Context) {
     @Synchronized
     private fun finalizeSpatialVideoCompanionIfReady() {
         val primary = spatialPrimaryFinishedUri ?: return
-        val ultraWide = spatialUltraWideFinishedFile ?: return
-        val telephoto = if (spatialVideoVirtualTelephotoEnabled) {
-            spatialTelephotoFinishedFile ?: return
-        } else {
-            null
+        if (!spatialVideoWideFinishReceived ||
+            (spatialVideoVirtualTelephotoEnabled && !spatialVideoTelephotoFinishReceived)
+        ) {
+            return
         }
+
+        val ultraWide = spatialUltraWideFinishedFile
+        val telephoto = spatialTelephotoFinishedFile
         spatialPrimaryFinishedUri = null
         spatialUltraWideFinishedFile = null
         spatialTelephotoFinishedFile = null
-        // The optional 3.5x callback is required only when that output was part of the take.
+        spatialVideoWideFinishReceived = false
+        spatialVideoTelephotoFinishReceived = false
+        val savedCallback = spatialVideoSavedCallback
+        spatialVideoSavedCallback = null
         specialVideoRecordingTimeline.reset()
-        if (!ultraWide.isFile || ultraWide.length() <= 0L ||
-            (telephoto != null && (!telephoto.isFile || telephoto.length() <= 0L))
-        ) {
+
+        val companionsReady = ultraWide?.let { it.isFile && it.length() > 0L } == true &&
+            (telephoto == null || (telephoto.isFile && telephoto.length() > 0L))
+        if (!companionsReady) {
             PLog.e(
                 TAG,
-                "Special Video companion missing or empty; retaining the main recording only: " +
-                    "0.5x=${ultraWide.absolutePath} 3.5x=${telephoto?.absolutePath ?: "disabled"}"
+                "Special Video companion missing or empty; retaining the main recording. " +
+                    "0.5x=" + (ultraWide?.absolutePath ?: "missing") +
+                    " 3.5x=" + (telephoto?.absolutePath ?: "disabled/missing"),
             )
-            ultraWide.delete()
-            telephoto?.delete()
             spatialVideoCompanionFile = null
             spatialVideoTelephotoCompanionFile = null
-            _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
             cameraHandler?.post {
                 if (cameraDevice != null && previewSurface != null) {
                     createPreviewSession(openGeneration = cameraOpenGeneration)
@@ -9867,51 +9874,70 @@ class Camera2Controller(private val context: Context) {
                     createSpatialVideoStandbySession("Special Video sidecar finalization failed")
                 }
             }
+            completeSpatialVideoSave(savedCallback)
             return
         }
-        // The required companions are finalized; release their unpublished-file guards and
-        // restore the preview session after recorder surfaces have been released.
+
+        // Release the in-progress file guards, then restore camera preview while the final MP4
+        // is muxed off-thread. Gallery notification is deliberately deferred until mux completion.
         spatialVideoCompanionFile = null
         spatialVideoTelephotoCompanionFile = null
-        _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
         cameraHandler?.post {
             if (cameraDevice != null && previewSurface != null) {
                 createPreviewSession(openGeneration = cameraOpenGeneration)
             }
-        }
-        if (spatialVideoEnabled &&
-            spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
-        ) {
-            cameraHandler?.post {
-                if (spatialVideoEnabled && spatialVideoStandbyCameraDevice != null) {
-                    createSpatialVideoStandbySession("all Special Video encoders finished")
-                }
+            if (spatialVideoEnabled &&
+                spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                spatialVideoStandbyCameraDevice != null
+            ) {
+                createSpatialVideoStandbySession("all Special Video encoders finished")
             }
         }
+
         Thread({
             try {
-                val wideAudioAttached = SpatialVideoStore.attachPrimaryAudioTrack(
-                    context, primary, ultraWide, lensLabel = "0.5x"
+                val muxed = SpatialVideoStore.muxSpecialVideoIntoPrimary(
+                    context = context,
+                    primaryVideoUri = primary,
+                    ultraWideFile = ultraWide!!,
+                    telephotoFile = telephoto,
                 )
-                val telephotoAudioAttached = telephoto?.let {
-                    SpatialVideoStore.attachPrimaryAudioTrack(context, primary, it, lensLabel = "3.5x")
-                } ?: false
-                PLog.i(
-                    TAG,
-                    "Special Video companions finalized: wide=${ultraWide.name} audio=$wideAudioAttached, " +
-                        "telephoto=${telephoto?.name ?: "disabled"} audio=$telephotoAudioAttached"
-                )
+                if (muxed) {
+                    ultraWide.delete()
+                    telephoto?.delete()
+                    PLog.i(
+                        TAG,
+                        "Special Video saved as one MP4 with multiple video tracks: " +
+                            "main=1x, ultraWide=0.5x, telephoto=" + (telephoto != null),
+                    )
+                } else {
+                    // Preserve legacy companion clips as a same-install fallback. The main 1x
+                    // MP4 is left untouched when multi-track muxing fails.
+                    PLog.e(
+                        TAG,
+                        "Special Video multi-track mux failed; keeping legacy companions at " +
+                            ultraWide.absolutePath,
+                    )
+                }
             } catch (error: Exception) {
-                PLog.e(TAG, "Special Video audio mirror finalization failed: ${ultraWide.absolutePath}", error)
+                PLog.e(TAG, "Special Video final multi-track mux failed", error)
             } finally {
                 if (spatialVideoCompanionFile == ultraWide) spatialVideoCompanionFile = null
                 if (telephoto != null && spatialVideoTelephotoCompanionFile == telephoto) {
                     spatialVideoTelephotoCompanionFile = null
                 }
+                completeSpatialVideoSave(savedCallback)
             }
         }, "SpatialVideoFinalize").start()
     }
 
+    private fun completeSpatialVideoSave(savedCallback: (() -> Unit)?) {
+        val complete = Runnable {
+            _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+            savedCallback?.invoke()
+        }
+        cameraHandler?.post(complete) ?: complete.run()
+    }
 
     @SuppressLint("MissingPermission")
     private fun startSpatialVideoStandbyCamera(cameraId: String): Boolean {
@@ -11230,8 +11256,10 @@ class Camera2Controller(private val context: Context) {
                     dualAspectPrimaryFinishedUri = uri
                     dualAspectPrimaryFinishReceived = true
                 }
-                if (spatialVideoEnabled) {
+                val deferSpatialSaveNotification = spatialVideoEnabled && uri != null
+                if (deferSpatialSaveNotification) {
                     spatialPrimaryFinishedUri = uri
+                    spatialVideoSavedCallback = { onVideoSaved?.invoke(uri) }
                 }
                 if (dualCaptureRecordSurface != null) {
                     dualCaptureRecordSurface = null
@@ -11243,7 +11271,7 @@ class Camera2Controller(private val context: Context) {
                         stopDualCaptureCamera()
                     }
                 }
-                if (dualAspectRecordingActive || (spatialVideoEnabled && uri != null)) {
+                if (dualAspectRecordingActive || deferSpatialSaveNotification) {
                     _state.value = _state.value.copy(
                         videoRecordingState = _state.value.videoRecordingState.copy(
                             isRecording = false,
@@ -11254,16 +11282,15 @@ class Camera2Controller(private val context: Context) {
                 } else {
                     _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
                 }
-                if (spatialVideoEnabled && uri != null) {
-                    // Run after the primary callback marks the UI as processing. The wide
-                    // recorder may have completed first; finalization must win regardless of
-                    // which asynchronous recorder callback arrives first.
+                if (deferSpatialSaveNotification) {
+                    // Wait until all lens encoders have finished and the combined MP4 is valid
+                    // before notifying the gallery that this recording is ready.
                     finalizeSpatialVideoCompanionIfReady()
                 }
                 if (cameraDevice != null && previewSurface != null) {
                     createPreviewSession(openGeneration = cameraOpenGeneration)
                 }
-                onVideoSaved?.invoke(uri)
+                if (!deferSpatialSaveNotification) onVideoSaved?.invoke(uri)
                 if (dualAspectRecordingActive) finalizeDualAspectCompanionIfReady()
             }
             cameraHandler?.post(completeRecording) ?: completeRecording.run()
@@ -11398,6 +11425,9 @@ class Camera2Controller(private val context: Context) {
             spatialPrimaryFinishedUri = null
             spatialUltraWideFinishedFile = null
             spatialTelephotoFinishedFile = null
+            spatialVideoWideFinishReceived = false
+            spatialVideoTelephotoFinishReceived = !spatialVideoVirtualTelephotoEnabled || telephotoInputSize == null || telephotoFile == null
+            spatialVideoSavedCallback = null
             val wideCharacteristics = runCatching {
                 cameraManager.getCameraCharacteristics(wideId)
             }.getOrNull()
@@ -11472,6 +11502,7 @@ class Camera2Controller(private val context: Context) {
                 }
             ) { wideUri ->
                 spatialUltraWideFinishedFile = wideUri?.path?.let(::File)
+                spatialVideoWideFinishReceived = true
                 finalizeSpatialVideoCompanionIfReady()
             }
             if (!wideStarted) {
@@ -11542,6 +11573,7 @@ class Camera2Controller(private val context: Context) {
                 ) { telephotoUri ->
                     spatialTelephotoFinishedFile =
                         telephotoUri?.path?.let(::File) ?: telephotoFile.takeIf { it.isFile }
+                    spatialVideoTelephotoFinishReceived = true
                     finalizeSpatialVideoCompanionIfReady()
                 }
                 if (!telephotoStarted) {

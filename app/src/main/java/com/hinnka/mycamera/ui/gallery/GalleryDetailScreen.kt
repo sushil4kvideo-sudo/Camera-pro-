@@ -2534,25 +2534,20 @@ private fun VideoDetailPlayer(
     val companionCallback by rememberUpdatedState(onSpatialCompanionAvailability)
     val telephotoCallback by rememberUpdatedState(onSpatialTelephotoAvailability)
 
-    LaunchedEffect(photo.id, mediaUri) {
-        hasSpatialUltraWide = ultraWideFile.isFile && ultraWideFile.length() > 0L
-        hasSpatialTelephoto = telephotoFile.isFile && telephotoFile.length() > 0L
+    LaunchedEffect(photo.id, mediaUri, isActive) {
+        if (!isActive) return@LaunchedEffect
+        val restored = withContext(Dispatchers.IO) {
+            SpatialVideoStore.restoreCompanionFiles(context, mediaUri)
+        }
+        hasSpatialUltraWide = restored.ultraWide?.isFile == true && restored.ultraWide.length() > 0L
+        hasSpatialTelephoto = restored.telephoto?.isFile == true && restored.telephoto.length() > 0L
         companionCallback(hasSpatialUltraWide)
         telephotoCallback(hasSpatialTelephoto)
-        repeat(20) {
-            if (!hasSpatialUltraWide && ultraWideFile.isFile && ultraWideFile.length() > 0L) {
-                hasSpatialUltraWide = true
-                companionCallback(true)
-            }
-            if (!hasSpatialTelephoto && telephotoFile.isFile && telephotoFile.length() > 0L) {
-                hasSpatialTelephoto = true
-                telephotoCallback(true)
-            }
-            if (hasSpatialUltraWide && hasSpatialTelephoto) return@LaunchedEffect
-            delay(500)
-        }
+        PLog.i(
+            "VideoDetailPlayer",
+            "Special Video companion restore complete: 0.5x=$hasSpatialUltraWide, telephoto=$hasSpatialTelephoto"
+        )
     }
-
     PLog.d("VideoDetailPlayer", "Initializing gallery video. photoId=${photo.id}, active=$isActive, spatialWide=$hasSpatialUltraWide, telephoto=$hasSpatialTelephoto")
 
     val contentRepository = remember {
