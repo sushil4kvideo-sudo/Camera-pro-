@@ -3055,7 +3055,7 @@ object GalleryManager {
         val internal = getOriginalImageFile(context, photoId)
         if (internal != null && RefocusPhotoBundle.copyArchive(internal, archive)) return archive
         archive.delete()
-        null
+        return null
     }
 
     private fun appendRefocusArchiveToUri(

@@ -146,7 +146,7 @@ object SpatialVideoStore {
         }
 
         return CompanionFiles(
-            ultraWideDestination.takeIf { wideReady && isUsableFile(wideDestination) },
+            wideDestination.takeIf { wideReady && isUsableFile(wideDestination) },
             telephotoDestination.takeIf { telephotoReady && isUsableFile(telephotoDestination) },
         )
     }
