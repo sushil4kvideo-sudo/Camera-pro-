@@ -10484,6 +10484,10 @@ class Camera2Controller(private val context: Context) {
                             spatialVideoStandbyRepeatingRequest = null
                             if (encoderSurface != null) {
                                 failSpatialVideoStandby("Ultra-wide recording request failed: ${error.localizedMessage}")
+                            } else if (normalVideoUltraWideInstantSwitchActive) {
+                                handleUltraWideStandbyPreviewFailure(
+                                    "Normal Video ultra-wide preview repeating request failed: ${error.localizedMessage}"
+                                )
                             }
                         }
                     }
