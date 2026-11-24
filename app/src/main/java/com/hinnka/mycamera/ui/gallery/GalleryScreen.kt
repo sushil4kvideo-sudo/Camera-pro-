@@ -794,14 +794,14 @@ private fun GalleryRecyclerGrid(
                     isLoadingMore = isLoadingMore,
                     isLandscape = OrientationObserver.isLandscape,
                     rotationDegrees = OrientationObserver.rotationDegrees,
-                    onPhotoClick = { tab, index ->
+                    onPhotoClick = { tab, index, photoId ->
                         val state = recyclerView.layoutManager?.onSaveInstanceState()
                         if (tab == GalleryTab.PHOTON) {
                             photonScrollState = state
                         } else {
                             systemScrollState = state
                         }
-                        onPhotoClick(tab, index)
+                        onPhotoClick(tab, index, photoId)
                     },
                     onLoadMore = onLoadMore
                 )
@@ -1029,7 +1029,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
     private var isLoadingMore: Boolean = false
     private var isLandscape: Boolean = false
     private var rotationDegrees: Float = 0f
-    private var onPhotoClick: (GalleryTab, Int, String) -> Unit = { _, _ -> }
+    private var onPhotoClick: (GalleryTab, Int, String) -> Unit = { _, _, _ -> }
     private var onLoadMore: () -> Unit = {}
 
     init {
@@ -1167,7 +1167,9 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
 
         when (val entry = entries[position]) {
             is GalleryGridEntry.Header -> {
-                val selectable = entry.photos.filterNot { it.id in processingPhotos }
+                val selectable = entry.photos.filterNot {
+                    it.id in processingPhotos || it.id.startsWith("image_") || it.id.startsWith("video_")
+                }
                 (holder as HeaderHolder).bind(
                     title = entry.title,
                     isSelectionMode = isSelectionMode,
