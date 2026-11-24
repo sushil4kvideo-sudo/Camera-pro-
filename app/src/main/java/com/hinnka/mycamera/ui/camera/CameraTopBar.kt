@@ -57,8 +57,6 @@ fun CameraTopBar(
     onRawToggle: () -> Unit,
     videoConfig: VideoConfig,
     videoCapabilities: VideoCapabilities,
-    videoPortraitEnabled: Boolean,
-    onVideoPortraitToggle: () -> Unit,
     onVideoTorchToggle: () -> Unit,
     onVideoResolutionClick: () -> Unit,
     onVideoFpsClick: () -> Unit,
@@ -73,8 +71,6 @@ fun CameraTopBar(
             recordingElapsedMs = recordingElapsedMs,
             videoConfig = videoConfig,
             videoCapabilities = videoCapabilities,
-            videoPortraitEnabled = videoPortraitEnabled,
-            onVideoPortraitToggle = onVideoPortraitToggle,
             onVideoTorchToggle = onVideoTorchToggle,
             onVideoResolutionClick = onVideoResolutionClick,
             onVideoFpsClick = onVideoFpsClick,
@@ -261,8 +257,6 @@ private fun VideoTopBar(
     recordingElapsedMs: Long,
     videoConfig: VideoConfig,
     videoCapabilities: VideoCapabilities,
-    videoPortraitEnabled: Boolean,
-    onVideoPortraitToggle: () -> Unit,
     onVideoTorchToggle: () -> Unit,
     onVideoResolutionClick: () -> Unit,
     onVideoFpsClick: () -> Unit,
@@ -289,8 +283,6 @@ private fun VideoTopBar(
             } else {
                 VideoParameterCluster(
                     videoConfig = videoConfig,
-                    portraitEnabled = videoPortraitEnabled,
-                    onPortraitToggle = onVideoPortraitToggle,
                     onResolutionClick = onVideoResolutionClick,
                     onFpsClick = onVideoFpsClick
                 )
@@ -367,8 +359,6 @@ private fun VideoTopBar(
 @Composable
 private fun VideoParameterCluster(
     videoConfig: VideoConfig,
-    portraitEnabled: Boolean,
-    onPortraitToggle: () -> Unit,
     onResolutionClick: () -> Unit,
     onFpsClick: () -> Unit
 ) {
@@ -396,7 +386,6 @@ private fun VideoParameterCluster(
             }
             ParameterText(resLabel, onResolutionClick, enabled = !isOpenGate)
             ParameterText(videoConfig.fps.fps.toString(), onFpsClick)
-            ParameterText("Portrait", onPortraitToggle, tint = if (portraitEnabled) AccentColor else Color.White)
         }
     }
 }

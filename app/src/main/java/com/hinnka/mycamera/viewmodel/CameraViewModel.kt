@@ -59,8 +59,6 @@ import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelManager
-import com.hinnka.mycamera.ml.PortraitSubjectMask
-import com.hinnka.mycamera.ml.PortraitVideoSegmenter
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.preview.PortraitMaskSnapshot
@@ -135,7 +133,6 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
-import java.util.concurrent.Executors
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -609,12 +606,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val oppoPhotoSettingsRepository = OppoPhotoSettingsRepository(application)
     val oppoPhotoSettings: StateFlow<OppoPhotoSettings> = oppoPhotoSettingsRepository.settings
     private val previewEyeFocusProcessor = PreviewEyeFocusProcessor(application)
-    private val portraitVideoSegmenter = PortraitVideoSegmenter(application)
-    // MediaPipe's GPU delegate must be created and used on the same thread.
-    private val portraitSegmentationDispatcher = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "PortraitVideoSegmentation").apply { isDaemon = true }
-    }.asCoroutineDispatcher()
-
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
     val isPurchased = billingManager.isPurchased
@@ -910,79 +901,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun attachCameraGLSurfaceView(view: CameraGLSurfaceView?) {
         glSurfaceView = view
-        if (view == null) return
-        view.setPortraitVideoEnabled(_videoPortraitEnabled.value)
-        latestVideoPortraitMask?.let { mask ->
-            view.setPortraitMask(mask.width, mask.height, mask.data)
-        }
-    }
-
-    fun setVideoPortraitEnabled(enabled: Boolean) {
-        if (enabled && state.value.captureMode != CaptureMode.VIDEO) return
-        if (_videoPortraitEnabled.value == enabled) return
-        _videoPortraitEnabled.value = enabled
-        glSurfaceView?.setPortraitVideoEnabled(enabled)
-        cameraController.setVideoPortraitEnabled(enabled)
-
-        if (enabled) {
-            startPortraitVideoSegmentation()
-        } else {
-            portraitVideoSegmentationJob?.cancel()
-            portraitVideoSegmentationJob = null
-            latestVideoPortraitMask = null
-            glSurfaceView?.setPortraitMask(0, 0, null)
-        }
-    }
-
-    private fun startPortraitVideoSegmentation() {
-        if (portraitVideoSegmentationJob?.isActive == true) return
-
-        // Keep model creation, GPU delegate calls and model teardown on one stable thread.
-        portraitVideoSegmentationJob = viewModelScope.launch(portraitSegmentationDispatcher) {
-            while (
-                isActive &&
-                _videoPortraitEnabled.value &&
-                state.value.captureMode == CaptureMode.VIDEO
-            ) {
-                val preview = glSurfaceView
-                if (preview == null) {
-                    delay(50L)
-                    continue
-                }
-
-                val captured = CompletableDeferred<Bitmap?>()
-                preview.captureOriginalPreviewFrame(256) { bitmap ->
-                    // complete() returns false if the capture timed out; recycle late frames.
-                    if (!captured.complete(bitmap)) bitmap?.recycle()
-                }
-                val bitmap = withTimeoutOrNull(1_500L) { captured.await() }
-                if (bitmap == null) {
-                    captured.cancel()
-                    delay(24L)
-                    continue
-                }
-
-                val mask = try {
-                    portraitVideoSegmenter.segment(bitmap)
-                } finally {
-                    if (!bitmap.isRecycled) bitmap.recycle()
-                }
-
-                if (
-                    mask != null &&
-                    _videoPortraitEnabled.value &&
-                    state.value.captureMode == CaptureMode.VIDEO
-                ) {
-                    latestVideoPortraitMask = mask
-                    preview.setPortraitMask(mask.width, mask.height, mask.data)
-                    cameraController.updateVideoPortraitMask(mask.width, mask.height, mask.data)
-                }
-
-                // The next preview sample is captured immediately after inference completes;
-                // no stale frame queue is built up behind a slow model.
-                delay(8L)
-            }
-        }
     }
 
     fun getMergedRecipeParams(
@@ -2097,11 +2015,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var isShutterSoundEnabled = true
     private var isVibrationEnabled = true
 
-    private val _videoPortraitEnabled = MutableStateFlow(false)
-    val videoPortraitEnabled = _videoPortraitEnabled.asStateFlow()
-    private var portraitVideoSegmentationJob: Job? = null
-    @Volatile private var latestVideoPortraitMask: PortraitSubjectMask? = null
-
     var glSurfaceView by mutableStateOf<CameraGLSurfaceView?>(null)
     var isEyeFocusBusy by mutableStateOf(false)
         private set
@@ -2221,13 +2134,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         cameraController.initialize()
-        viewModelScope.launch {
-            cameraController.state.map { it.captureMode }.distinctUntilChanged().collect { mode ->
-                if (mode != CaptureMode.VIDEO && _videoPortraitEnabled.value) {
-                    setVideoPortraitEnabled(false)
-                }
-            }
-        }
         viewModelScope.launch {
             cameraController.state.collect { cameraState ->
                 if (cameraState.isPreviewActive) {
@@ -7601,18 +7507,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
-
-        // MediaPipe's GPU delegate is thread-affine: wait for any in-flight inference,
-        // then close the segmenter on the same dedicated thread that created it.
-        portraitVideoSegmentationJob?.cancel()
-        runCatching {
-            runBlocking(portraitSegmentationDispatcher) {
-                portraitVideoSegmenter.close()
-            }
-        }.onFailure {
-            PLog.e(TAG, "Failed to close portrait video segmenter", it)
-        }
-        portraitSegmentationDispatcher.close()
 
         cameraController.onEnhancedStabilizationUnavailable = null
         cameraReopenJob?.cancel()

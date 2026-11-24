@@ -8991,14 +8991,6 @@ class Camera2Controller(private val context: Context) {
         videoRecorder.updateCreativeRecipeParams(params)
     }
 
-    fun setVideoPortraitEnabled(enabled: Boolean) {
-        videoRecorder.setPortraitVideoEnabled(enabled)
-    }
-
-    fun updateVideoPortraitMask(width: Int, height: Int, data: ByteArray?) {
-        videoRecorder.updatePortraitMask(width, height, data)
-    }
-
     fun setVideoTorchEnabled(enabled: Boolean) {
         _state.value = _state.value.copy(
             videoConfig = _state.value.videoConfig.copy(
