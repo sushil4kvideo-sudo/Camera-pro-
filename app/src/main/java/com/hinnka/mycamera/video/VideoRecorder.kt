@@ -127,6 +127,9 @@ class VideoRecorder(
     private var audioRecord: AudioRecord? = null
     private var inputSurface: Surface? = null
     private var renderer: RealtimeVideoRenderer? = null
+    private data class RequestedPortraitMask(val width: Int, val height: Int, val data: ByteArray)
+    @Volatile private var requestedPortraitVideoEnabled = false
+    @Volatile private var requestedPortraitMask: RequestedPortraitMask? = null
     private var requestedBitrateMbps: Int = 30
     private var requestedCodecMime: String = MediaFormat.MIMETYPE_VIDEO_AVC
     private var requestedFallbackCodecMimes: List<String> = emptyList()
@@ -666,6 +669,24 @@ class VideoRecorder(
         }
     }
 
+    fun setPortraitVideoEnabled(enabled: Boolean) {
+        requestedPortraitVideoEnabled = enabled
+        if (!enabled) requestedPortraitMask = null
+        scope.launch(renderDispatcher) {
+            renderer?.setPortraitVideoEnabled(enabled)
+            if (!enabled) renderer?.setPortraitMask(0, 0, null)
+        }
+    }
+
+    fun updatePortraitMask(width: Int, height: Int, data: ByteArray?) {
+        if (!requestedPortraitVideoEnabled || width <= 0 || height <= 0 || data == null || data.size != width * height) return
+        val update = RequestedPortraitMask(width, height, data.copyOf())
+        requestedPortraitMask = update
+        scope.launch(renderDispatcher) {
+            if (requestedPortraitVideoEnabled) renderer?.setPortraitMask(update.width, update.height, update.data)
+        }
+    }
+
     fun updateCreativeRecipeParams(params: com.hinnka.mycamera.model.ColorRecipeParams) {
         if (!isRecording || stopRequested) return
         scope.launch(renderDispatcher) {
@@ -712,12 +733,17 @@ class VideoRecorder(
             dualCapturePositionY = requestedDualCapturePositionY,
             dualCapturePipWidthFraction = requestedDualCapturePipWidthFraction,
             encoderOrientationHintDegrees = requestedOrientationHintDegrees,
+            portraitVideoInitiallyEnabled = requestedPortraitVideoEnabled,
         )
         renderer = realtimeRenderer
         realtimeRenderer.initialize(
             encoderSurface = encoderSurface,
             onFrameAvailable = ::onRealtimeFrameAvailable,
         )
+        realtimeRenderer.setPortraitVideoEnabled(requestedPortraitVideoEnabled)
+        requestedPortraitMask?.let { mask ->
+            realtimeRenderer.setPortraitMask(mask.width, mask.height, mask.data)
+        }
         PLog.d(
             TAG,
             "Realtime video renderer initialized: ${requestedSize.width}x${requestedSize.height} @ ${requestedFps}fps"
