@@ -76,6 +76,7 @@ import com.hinnka.mycamera.processor.OppoHdrFrameRole
 import com.hinnka.mycamera.processor.OppoHdrInputFrame
 import com.hinnka.mycamera.processor.OppoPhotoHdrEngine
 import com.hinnka.mycamera.processor.OppoRefocusDepthEngine
+import com.hinnka.mycamera.utils.MediaWatermark
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
@@ -6951,6 +6952,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val selectedFocusFile = frameFiles[selectedFocusIndex]
             val bitmap = android.graphics.BitmapFactory.decodeFile(selectedFocusFile.absolutePath)
                 ?: throw IllegalStateException("Unable to decode the subject-focused reference plane")
+            val watermarkedBitmap = MediaWatermark.stampBitmap(bitmap, MediaWatermark.MULTIFOCUS)
             try {
                 val baseMetadata = buildPhotoMetadata(
                     width = bitmap.width,
@@ -6980,7 +6982,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     GalleryManager.saveBitmapPhoto(
                         context,
                         photoId,
-                        bitmap,
+                        watermarkedBitmap,
                         settings.preferences.autoSaveAfterCapture,
                         contentRepository.photoProcessor,
                         0f,
@@ -7000,6 +7002,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 markCapturedThumbnailSaved(settings, photoId)
                 _imageSavedEvent.emit(photoId)
             } finally {
+                if (watermarkedBitmap !== bitmap && !watermarkedBitmap.isRecycled) {
+                    watermarkedBitmap.recycle()
+                }
                 if (!bitmap.isRecycled) bitmap.recycle()
             }
         } catch (e: Exception) {

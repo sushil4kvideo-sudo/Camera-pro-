@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -61,6 +63,8 @@ fun FloatingVideoSettingsPanel(
     videoCapabilities: VideoCapabilities,
     onResolutionSelected: (VideoResolutionPreset) -> Unit,
     onFpsSelected: (VideoFpsPreset) -> Unit,
+    virtualTelephotoEnabled: Boolean,
+    onVirtualTelephotoEnabledChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     glassTransparency: Float,
     glassBlurStrength: Float,
@@ -249,6 +253,43 @@ fun FloatingVideoSettingsPanel(
                                 .fillMaxWidth()
                                 .testTag("video_resolution_description"),
                         )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("special_video_virtual_telephoto_row"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    text = "Virtual telephoto",
+                                    color = VideoSelectorText,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = "Include the 3.5× lens in Special Video",
+                                    color = VideoSelectorDescription,
+                                    fontSize = 11.5.sp,
+                                )
+                            }
+                            Switch(
+                                checked = virtualTelephotoEnabled,
+                                onCheckedChange = onVirtualTelephotoEnabledChange,
+                                modifier = Modifier.testTag("special_video_virtual_telephoto_toggle"),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = VideoSelectorGold,
+                                    checkedTrackColor = VideoSelectorGold.copy(alpha = 0.34f),
+                                    uncheckedThumbColor = Color.White.copy(alpha = 0.78f),
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.18f),
+                                ),
+                            )
+                        }
                     }
                 }
             }

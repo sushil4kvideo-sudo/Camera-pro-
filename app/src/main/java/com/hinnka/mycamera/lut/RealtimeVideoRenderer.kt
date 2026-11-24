@@ -10,6 +10,7 @@ import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
+import android.opengl.GLUtils
 import android.opengl.Matrix
 import android.util.Size
 import android.view.Surface
@@ -17,6 +18,7 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
+import com.hinnka.mycamera.utils.MediaWatermark
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.video.VideoEncoderColorConfig
@@ -60,11 +62,33 @@ class RealtimeVideoRenderer(
     dualCapturePipWidthFraction: Float = 0.33f,
     private val encoderOrientationHintDegrees: Int = 0,
     private val cameraInputZoomRatio: Float = 1f,
+    private val watermarkLabel: String? = null,
 ) {
     companion object {
         private const val TAG = "RealtimeVideoRenderer"
         private const val EGL_RECORDABLE_ANDROID = 0x3142
         private const val EGL_OPENGL_ES3_BIT_KHR = 0x0040
+        private val WATERMARK_VERTEX_SHADER = """
+            #version 300 es
+            in vec4 aPosition;
+            in vec2 aTexCoord;
+            uniform mat4 uMVPMatrix;
+            out vec2 vTexCoord;
+            void main() {
+                gl_Position = uMVPMatrix * aPosition;
+                vTexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
+            }
+        """.trimIndent()
+        private val WATERMARK_FRAGMENT_SHADER = """
+            #version 300 es
+            precision mediump float;
+            in vec2 vTexCoord;
+            uniform sampler2D uTexture;
+            out vec4 fragColor;
+            void main() {
+                fragColor = texture(uTexture, vTexCoord);
+            }
+        """.trimIndent()
     }
 
     private data class LayerResources(
@@ -152,6 +176,8 @@ class RealtimeVideoRenderer(
     private var intermediateFboId = 0
     private var finalColorTextureId = 0
     private var finalColorFboId = 0
+    private var watermarkProgramId = 0
+    private var watermarkTextureId = 0
     private var vertexBuffer: FloatBuffer? = null
     private var textureCoordinateBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
@@ -264,6 +290,7 @@ class RealtimeVideoRenderer(
         check(makeCurrent()) { "Cannot make realtime video EGL context current" }
         initializeGeometry()
         initializeLayerTextures()
+        initializeWatermarkOverlay()
         if (layers.size > 1 || finalFilmGrainEnabled) {
             initializeIntermediateFramebuffer()
         }
@@ -449,6 +476,7 @@ class RealtimeVideoRenderer(
             }
         }
         drawDualCaptureOverlay()
+        drawWatermarkOverlay()
         GLES30.glViewport(0, 0, encoderOutputSize.width, encoderOutputSize.height)
 
         EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, presentationTimeNs)
@@ -644,6 +672,92 @@ class RealtimeVideoRenderer(
         )
         drawSimpleQuad(dualCaptureProgramId)
         GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
+    }
+
+    private fun initializeWatermarkOverlay() {
+        val label = watermarkLabel?.takeIf { it.isNotBlank() } ?: return
+        var vertexShader = 0
+        var fragmentShader = 0
+        var badge: android.graphics.Bitmap? = null
+        try {
+            vertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, WATERMARK_VERTEX_SHADER)
+            fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, WATERMARK_FRAGMENT_SHADER)
+            if (vertexShader == 0 || fragmentShader == 0) return
+            watermarkProgramId = GlUtils.linkProgram(vertexShader, fragmentShader)
+            if (watermarkProgramId == 0) return
+
+            badge = MediaWatermark.createOverlayBitmap(label)
+            val textures = IntArray(1)
+            GLES30.glGenTextures(1, textures, 0)
+            watermarkTextureId = textures[0]
+            if (watermarkTextureId == 0) return
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, watermarkTextureId)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+            GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, badge, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        } catch (_: Exception) {
+            PLog.w(TAG, "Watermark overlay unavailable; continuing video without watermark")
+            if (watermarkTextureId != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(watermarkTextureId), 0)
+                watermarkTextureId = 0
+            }
+            if (watermarkProgramId != 0) {
+                GLES30.glDeleteProgram(watermarkProgramId)
+                watermarkProgramId = 0
+            }
+        } finally {
+            if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)
+            if (fragmentShader != 0) GLES30.glDeleteShader(fragmentShader)
+            badge?.takeIf { !it.isRecycled }?.recycle()
+        }
+    }
+
+    private fun drawWatermarkOverlay() {
+        if (watermarkProgramId == 0 || watermarkTextureId == 0) return
+        val outputWidth = encoderOutputSize.width
+        val outputHeight = encoderOutputSize.height
+        val rotation = ((encoderOrientationHintDegrees % 360) + 360) % 360
+        val swapsAxes = rotation == 90 || rotation == 270
+        val displayWidth = if (swapsAxes) outputHeight else outputWidth
+        val displayHeight = if (swapsAxes) outputWidth else outputHeight
+        val badgeWidthPx = (displayWidth * 0.22f).coerceAtLeast(1f)
+        val badgeHeightPx = badgeWidthPx * (MediaWatermark.BADGE_HEIGHT.toFloat() / MediaWatermark.BADGE_WIDTH)
+        val marginX = displayWidth * 0.028f
+        val marginY = displayHeight * 0.028f
+        val displayCenterX = 1f - 2f * (marginX + badgeWidthPx * 0.5f) / displayWidth
+        val displayCenterY = -1f + 2f * (marginY + badgeHeightPx * 0.5f) / displayHeight
+        val radians = Math.toRadians(rotation.toDouble())
+        val cos = kotlin.math.cos(radians).toFloat()
+        val sin = kotlin.math.sin(radians).toFloat()
+        val centerX = cos * displayCenterX - sin * displayCenterY
+        val centerY = sin * displayCenterX + cos * displayCenterY
+        val mvp = FloatArray(16).also {
+            Matrix.setIdentityM(it, 0)
+            Matrix.translateM(it, 0, centerX, centerY, 0f)
+            Matrix.rotateM(it, 0, rotation.toFloat(), 0f, 0f, 1f)
+            Matrix.scaleM(it, 0, badgeWidthPx / displayWidth, badgeHeightPx / displayHeight, 1f)
+        }
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(0, 0, outputWidth, outputHeight)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glUseProgram(watermarkProgramId)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(watermarkProgramId, "uMVPMatrix"),
+            1, false, mvp, 0,
+        )
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, watermarkTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(watermarkProgramId, "uTexture"), 0)
+        drawSimpleQuad(watermarkProgramId)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        GLES30.glUseProgram(0)
+        GLES30.glDisable(GLES30.GL_BLEND)
     }
 
     private fun acquireLatestCameraFrame(surfaceTexture: SurfaceTexture): Boolean {
@@ -1338,6 +1452,14 @@ class RealtimeVideoRenderer(
                 GLES30.glDeleteTextures(1, intArrayOf(layer.curveTextureId), 0)
                 layer.curveTextureId = 0
             }
+        }
+        if (watermarkTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(watermarkTextureId), 0)
+            watermarkTextureId = 0
+        }
+        if (watermarkProgramId != 0) {
+            GLES30.glDeleteProgram(watermarkProgramId)
+            watermarkProgramId = 0
         }
         if (cameraTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(cameraTextureId), 0)

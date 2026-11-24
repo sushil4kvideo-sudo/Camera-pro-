@@ -248,6 +248,7 @@ fun CameraScreen(
     }
     var dualCaptureEnabled by remember { mutableStateOf(false) }
     val spatialVideoEnabled by viewModel.spatialVideoEnabled.collectAsState()
+    val spatialVideoVirtualTelephotoEnabled by viewModel.spatialVideoVirtualTelephotoEnabled.collectAsState()
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
     val spatialVideoPreviewSensorOrientation by
@@ -2376,6 +2377,8 @@ fun CameraScreen(
                 videoCapabilities = state.videoCapabilities,
                 onResolutionSelected = viewModel::setVideoResolution,
                 onFpsSelected = viewModel::setVideoFps,
+                virtualTelephotoEnabled = spatialVideoVirtualTelephotoEnabled,
+                onVirtualTelephotoEnabledChange = viewModel::setSpatialVideoVirtualTelephotoEnabled,
                 onDismiss = { videoSettingsPanelOpen = false },
                 glassTransparency = cameraMenuTransparency,
                 glassBlurStrength = cameraMenuBlurRadius,

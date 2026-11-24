@@ -28,6 +28,7 @@ import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
+import com.hinnka.mycamera.utils.MediaWatermark
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -716,6 +717,7 @@ class VideoRecorder(
             dualCapturePipWidthFraction = requestedDualCapturePipWidthFraction,
             encoderOrientationHintDegrees = requestedOrientationHintDegrees,
             cameraInputZoomRatio = requestedCameraInputZoomRatio,
+            watermarkLabel = if (sharedTimelineStreamName != null) MediaWatermark.SPECIAL_VIDEO else null,
         )
         renderer = realtimeRenderer
         realtimeRenderer.initialize(
