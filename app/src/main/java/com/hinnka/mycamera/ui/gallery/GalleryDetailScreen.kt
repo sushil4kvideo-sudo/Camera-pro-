@@ -2579,6 +2579,10 @@ private fun VideoDetailPlayer(
     var isTelephotoFeedSynced by remember(photo.id, mediaUri, isActive) { mutableStateOf(false) }
     val companionCallback by rememberUpdatedState(onSpatialCompanionAvailability)
     val telephotoCallback by rememberUpdatedState(onSpatialTelephotoAvailability)
+    val isSelectedCompanionSynced by rememberUpdatedState(
+        (isUltraWideFeedRequested && isWideFeedSynced) ||
+            (isTelephotoFeedRequested && isTelephotoFeedSynced)
+    )
     // Only the lens currently visible in the gallery should decode continuously.
     // Playing both hidden companion streams wastes decoder/GPU resources and can
     // make the third lens stutter on devices with limited video-decoder capacity.
@@ -2650,8 +2654,8 @@ private fun VideoDetailPlayer(
         }
     }
 
-    // The secondary player is created once for this active page, but is prepared only when
-    // the paired ultra-wide file exists. Its timeline is synchronized to the primary stream.
+    // Alternate players are created for this active page but their media/decoder resources
+    // are prepared only when the corresponding lens is requested.
     val wideExoPlayer = remember(photo.id, mediaUri, isActive) {
         if (!isActive) return@remember null
         ExoPlayer.Builder(context).build().apply {
@@ -2883,7 +2887,9 @@ private fun VideoDetailPlayer(
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 selected?.let { companion ->
-                    if (isPlaying) {
+                    if (!isSelectedCompanionSynced) {
+                        companion.pause()
+                    } else if (isPlaying) {
                         if (companion.playbackState == Player.STATE_ENDED ||
                             abs(companion.currentPosition - primary.currentPosition) > 250L
                         ) {
@@ -2916,7 +2922,8 @@ private fun VideoDetailPlayer(
                 reason: Int
             ) {
                 selected?.let { companion ->
-                    if (companion.mediaItemCount > 0 &&
+                    if (isSelectedCompanionSynced &&
+                        companion.mediaItemCount > 0 &&
                         abs(companion.currentPosition - primary.currentPosition) > 100L
                     ) {
                         companion.seekTo(primary.currentPosition.coerceAtLeast(0L))
