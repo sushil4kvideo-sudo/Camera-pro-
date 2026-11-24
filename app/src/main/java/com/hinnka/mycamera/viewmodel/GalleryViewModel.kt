@@ -168,6 +168,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val processingPhotos = _processingPhotos.asStateFlow()
     private val _systemPhotos = MutableStateFlow<List<MediaData>>(emptyList())
     val systemPhotos = _systemPhotos.asStateFlow()
+    // Shared-storage media is kept separate from explicitly opened external media so the main
+    // gallery can expose only DCIM/PhotonCamera while external intents still work.
+    private val _photonCameraPhotos = MutableStateFlow<List<MediaData>>(emptyList())
+    val photonCameraPhotos = _photonCameraPhotos.asStateFlow()
+    val galleryPhotos = combine(photos, photonCameraPhotos) { photon, shared ->
+        val knownPhotonUris = buildSet {
+            photon.forEach { item ->
+                item.sourceUri?.toString()?.let { add(it) }
+                item.metadata?.sourceUri?.takeIf { it.isNotBlank() }?.let { add(it) }
+                item.metadata?.exportedUris?.forEach { add(it) }
+            }
+        }
+        val sharedOnly = shared.filterNot { item ->
+            item.uri.toString() in knownPhotonUris ||
+                item.sourceUri?.toString()?.let(knownPhotonUris::contains) == true
+        }
+        (photon + sharedOnly).sortedByDescending { it.dateAdded }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val currentPhotos = combine(photos, systemPhotos, snapshotFlow { selectedTab }) { p, s, tab ->
         if (tab == GalleryTab.PHOTON) {
             p
@@ -941,7 +960,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     suspend fun loadCurrentTabData() {
         when (selectedTab) {
             GalleryTab.SYSTEM -> loadSystemPhotos(reset = true)
-            GalleryTab.PHOTON -> loadPhotos(reset = true)
+            GalleryTab.PHOTON -> {
+                loadPhotos(reset = true)
+                if (hasGalleryPermission) {
+                    loadSystemPhotos(reset = true)
+                } else {
+                    _systemPhotos.value = emptyList()
+                    _photonCameraPhotos.value = emptyList()
+                }
+            }
         }
     }
 
@@ -958,6 +985,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (selectedTab != tab) {
             galleryScrollTarget = null
             selectedTab = tab
+            // External gallery intents may have inserted a single URI before navigation.
+            // Keep it available for detail viewing instead of replacing it with a folder scan.
+            if (tab == GalleryTab.SYSTEM && _systemPhotos.value.isNotEmpty()) return
             loadCurrentTabData()
         }
     }
@@ -967,16 +997,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun checkGalleryPermission() {
         val context = getApplication<Application>()
+        val granted = android.content.pm.PackageManager.PERMISSION_GRANTED
         hasGalleryPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED &&
-                context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_VIDEO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val images = context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == granted
+            val videos = context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_VIDEO) == granted
+            val selectedVisualMedia = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == granted
+            images || videos || selectedVisualMedia
         } else {
-            context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == granted
         }
-        if (hasGalleryPermission && selectedTab == GalleryTab.SYSTEM && _systemPhotos.value.isEmpty()) {
+        if (hasGalleryPermission && _systemPhotos.value.isEmpty()) {
             viewModelScope.launch {
                 loadSystemPhotos(reset = true)
             }
+        } else if (!hasGalleryPermission) {
+            _systemPhotos.value = emptyList()
+            _photonCameraPhotos.value = emptyList()
         }
     }
 
@@ -996,8 +1033,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             systemOffset = 0
             hasMoreSystemPhotos = false
 
-            val newPhotos = repository.getAllSystemPhotos()
+            val newPhotos = repository.getPhotonCameraPhotos()
             _systemPhotos.value = newPhotos
+            _photonCameraPhotos.value = newPhotos
             systemOffset = newPhotos.size
             hasMoreSystemPhotos = false
         } catch (e: Exception) {
@@ -1094,6 +1132,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private fun removeSystemPhotosFromState(photoIds: Set<String>) {
         if (photoIds.isEmpty()) return
         _systemPhotos.update { current -> current.filterNot { it.id in photoIds } }
+        _photonCameraPhotos.update { current -> current.filterNot { it.id in photoIds } }
         selectedPhotos.removeAll { it.id in photoIds }
         if (currentPhotoIndex >= currentPhotos.value.size) {
             currentPhotoIndex = (currentPhotos.value.size - 1).coerceAtLeast(0)
@@ -1264,10 +1303,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 setCurrentSystemPhotoById(systemMedia.id)
                 onSuccess(GalleryTab.SYSTEM, systemMedia.id)
 
-                if (hasGalleryPermission && _systemPhotos.value.size <= 1) {
-                    loadSystemPhotos(reset = true)
-                    setCurrentSystemPhotoById(systemMedia.id)
-                }
                 return@launch
             }
 
@@ -1587,6 +1622,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 切换照片选中状态
      */
     fun togglePhotoSelection(photo: MediaData) {
+        // Shared Photon-folder items use MediaStore deletion/detail handling, not Photon DB batch actions.
+        if (isPhotonFolderMedia(photo)) return
         if (selectedPhotos.contains(photo)) {
             selectedPhotos.remove(photo)
         } else {
@@ -1604,7 +1641,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun togglePhotoGroupSelection(photos: List<MediaData>) {
         if (!isSelectionMode || _isExporting.value || _isPastingSettings.value) return
-        val selectable = photos.filterNot { it.id in processingPhotos.value }
+        val selectable = photos.filterNot {
+            it.id in processingPhotos.value || isPhotonFolderMedia(it)
+        }
         if (selectable.isEmpty()) return
 
         val selectedIds = selectedPhotos.mapTo(mutableSetOf()) { it.id }
@@ -1640,6 +1679,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         currentPhotoIndex = index.coerceIn(0, (count - 1).coerceAtLeast(0))
         loadCurrentPhotoMetadata()
     }
+
+    /** Sets the index for a system-backed detail route before that route changes tabs. */
+    fun prepareSystemPhotoDetail(index: Int) {
+        currentPhotoIndex = index.coerceAtLeast(0)
+    }
+
+    private fun isPhotonFolderMedia(photo: MediaData): Boolean =
+        photo.id.startsWith("image_") || photo.id.startsWith("video_")
 
     /**
      * 根据 ID 设置当前查看的照片
