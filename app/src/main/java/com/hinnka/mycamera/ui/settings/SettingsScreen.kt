@@ -380,6 +380,8 @@ fun SettingsScreen(
     val videoLensLockEnabled by viewModel.videoLensLockEnabled.collectAsState()
     val videoWhiteBalanceLockEnabled by viewModel.videoWhiteBalanceLockEnabled.collectAsState()
     val keepUltraWideAeReady by viewModel.keepUltraWideAeReady.collectAsState()
+    val normalVideoUltraWideInstantSwitchEnabled by
+        viewModel.normalVideoUltraWideInstantSwitchEnabled.collectAsState()
     val spatialVideoVirtualTelephotoEnabled by viewModel.spatialVideoVirtualTelephotoEnabled.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
     val openAIUrl by viewModel.openAIUrl.collectAsState()
@@ -1840,6 +1842,18 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_video_lock_lens_description),
                             checked = videoLensLockEnabled,
                             onCheckedChange = viewModel::setVideoLensLockEnabled
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_normal_video_instant_ultra_wide_switch),
+                            description = stringResource(R.string.settings_normal_video_instant_ultra_wide_switch_description),
+                            checked = normalVideoUltraWideInstantSwitchEnabled,
+                            onCheckedChange = viewModel::setNormalVideoUltraWideInstantSwitchEnabled
                         )
 
                         HorizontalDivider(
