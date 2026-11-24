@@ -1335,15 +1335,15 @@ class RealtimeVideoRenderer(
     fun release() {
         stabilizationSession?.stop()
         stabilizationSession = null
-        if (eglDisplay != EGL14.EGL_NO_DISPLAY && eglContext != EGL14.EGL_NO_CONTEXT) {
-            portraitBokehGl.release()
-        }
         stabilizationSessionStarted = false
         if (eglDisplay != EGL14.EGL_NO_DISPLAY &&
             eglContext != EGL14.EGL_NO_CONTEXT &&
             encoderEglSurface != EGL14.EGL_NO_SURFACE
         ) {
             makeCurrent()
+        }
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY && eglContext != EGL14.EGL_NO_CONTEXT) {
+            portraitBokehGl.release()
         }
         cameraSurfaceTexture?.setOnFrameAvailableListener(null)
         cameraSurface?.release()
