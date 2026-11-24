@@ -3021,6 +3021,10 @@ private fun VideoDetailPlayer(
     if (exoPlayer != null) {
         val showWideFeed = hasSpatialUltraWide && isWidePlayerReady && wideExoPlayer != null
         val showTelephotoFeed = hasSpatialTelephoto && isTelephotoPlayerReady && telephotoExoPlayer != null
+        // Keep each available companion's TextureView attached even while its player is
+        // idle/preparing. This guarantees a real output surface exists before READY/seek.
+        val keepWideSurfaceAttached = hasSpatialUltraWide && wideExoPlayer != null
+        val keepTelephotoSurfaceAttached = hasSpatialTelephoto && telephotoExoPlayer != null
         val wideHandoffAlpha by animateFloatAsState(
             targetValue = if (isUltraWideFeedRequested && isWideFeedSynced) 1f else 0f,
             animationSpec = tween(durationMillis = 100, easing = LinearEasing),
@@ -3050,7 +3054,7 @@ private fun VideoDetailPlayer(
         val telephotoScale = 1f
 
         Box(modifier = modifier.autoRotate(matchParentSize = true)) {
-            if (showWideFeed) {
+            if (keepWideSurfaceAttached) {
                 AndroidView(
                     factory = { ultraWidePlayerView },
                     update = { view ->
@@ -3076,7 +3080,7 @@ private fun VideoDetailPlayer(
                 )
             }
 
-            if (showTelephotoFeed) {
+            if (keepTelephotoSurfaceAttached) {
                 AndroidView(
                     factory = { telephotoPlayerView },
                     update = { view ->
