@@ -6968,7 +6968,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val photoId = GalleryManager.preparePhoto(
                     context,
                     metadata,
-                    middleFrame.captureResult,
+                    selectedFocusFrame.captureResult,
                     settings.displayThumbnail,
                     false,
                     1.0f,

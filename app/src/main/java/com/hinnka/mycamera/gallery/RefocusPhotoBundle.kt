@@ -44,13 +44,13 @@ internal object RefocusPhotoBundle {
                 // JPEG and PNG are already compressed, so avoid wasting CPU recompressing them.
                 zip.setLevel(Deflater.NO_COMPRESSION)
                 val selectedCover = coverIndex.coerceIn(0, validFrames.lastIndex)
-                val manifest = "version=1\nframe_count=\${validFrames.size}\ncover_index=\${selectedCover}\n"
+                val manifest = "version=1\nframe_count=${validFrames.size}\ncover_index=${selectedCover}\n"
                 zip.putNextEntry(ZipEntry("refocus/manifest.txt"))
                 zip.write(manifest.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
 
                 validFrames.forEachIndexed { index, file ->
-                    zip.putNextEntry(ZipEntry("refocus/frame_\${index.toString().padStart(2, '0')}.jpg"))
+                    zip.putNextEntry(ZipEntry("refocus/frame_${index.toString().padStart(2, '0')}.jpg"))
                     FileInputStream(file).use { it.copyTo(zip) }
                     zip.closeEntry()
                 }
@@ -247,7 +247,7 @@ internal object RefocusPhotoBundle {
     }
 
     private fun replaceFile(target: File, temp: File): Boolean {
-        val backup = File(target.parentFile, "\${target.name}.refocus_backup")
+        val backup = File(target.parentFile, "${target.name}.refocus_backup")
         if (backup.exists() && !backup.delete()) {
             temp.delete()
             return false

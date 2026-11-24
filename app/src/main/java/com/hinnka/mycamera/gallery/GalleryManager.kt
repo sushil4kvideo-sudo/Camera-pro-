@@ -2945,7 +2945,7 @@ object GalleryManager {
                 ),
             )
             if (exportsReady) clearMultipleExposureSession(context, sessionId)
-            PLog.i(TAG, "Refocus bundle embedded: photo=$photoId, planes=\${frames.size}, exports=\${latest.exportedUris.size}")
+            PLog.i(TAG, "Refocus bundle embedded: photo=$photoId, planes=${frames.size}, exports=${latest.exportedUris.size}")
             true
         } catch (error: Exception) {
             PLog.e(TAG, "Failed to embed refocus bundle: $photoId", error)
@@ -3015,7 +3015,7 @@ object GalleryManager {
                 val key = (photoId ?: sourceUri?.toString() ?: sourceFile.name).hashCode()
                 val outputDir = File(
                     context.cacheDir,
-                    "photon_refocus_\${key}_\${sourceFile.length()}_\${sourceFile.lastModified()}",
+                    "photon_refocus_${key}_${sourceFile.length()}_${sourceFile.lastModified()}",
                 )
                 val extracted = RefocusPhotoBundle.extract(sourceFile, outputDir) ?: continue
                 return@withContext RefocusPhotoAssets(
