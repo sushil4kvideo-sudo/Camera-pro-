@@ -360,7 +360,9 @@ class RealtimeVideoRenderer(
 
         val session = stabilizationSession
         val stabilizationOperational = enhancedStabilizationEnabled &&
-            stabilizationSessionStarted && session?.isOperational == true
+            stabilizationCoordinator?.isCurrentCameraSupported == true &&
+            stabilizationSessionStarted &&
+            session?.isOperational == true
         if (stabilizationSessionStarted && !stabilizationOperational) {
             session?.stop()
             stabilizationSessionStarted = false
