@@ -39,22 +39,26 @@ class PortraitVideoSegmenter(context: Context) : AutoCloseable {
             image = BitmapImageBuilder(inputBitmap).build()
             val result = active.segment(image)
             val masks = result.confidenceMasks().orElse(null) ?: return null
-            if (masks.isEmpty()) return null
+            try {
+                if (masks.isEmpty()) return null
 
-            // The first confidence channel is background for this MediaPipe selfie model.
-            val background = masks[0]
-            val width = background.width
-            val height = background.height
-            if (width <= 0 || height <= 0) return null
-            val values = ByteBufferExtractor.extract(background)
-                .order(ByteOrder.nativeOrder())
-                .asFloatBuffer()
-            val subject = ByteArray(width * height)
-            for (index in subject.indices) {
-                val backgroundConfidence = values.get(index).coerceIn(0f, 1f)
-                subject[index] = ((1f - backgroundConfidence) * 255f + 0.5f).toInt().toByte()
+                // The first confidence channel is background for this MediaPipe selfie model.
+                val background = masks[0]
+                val width = background.width
+                val height = background.height
+                if (width <= 0 || height <= 0) return null
+                val values = ByteBufferExtractor.extract(background)
+                    .order(ByteOrder.nativeOrder())
+                    .asFloatBuffer()
+                val subject = ByteArray(width * height)
+                for (index in subject.indices) {
+                    val backgroundConfidence = values.get(index).coerceIn(0f, 1f)
+                    subject[index] = ((1f - backgroundConfidence) * 255f + 0.5f).toInt().toByte()
+                }
+                return PortraitSubjectMask(width, height, subject)
+            } finally {
+                masks.forEach { it.close() }
             }
-            return PortraitSubjectMask(width, height, subject)
         } catch (_: Exception) {
             return null
         } finally {
