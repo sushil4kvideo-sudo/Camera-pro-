@@ -1372,6 +1372,7 @@ object GalleryManager {
                 val exportInputBitmap = bitmap
 
                 if (
+                    !isRefocusPhoto &&
                     !shouldPreferHeic &&
                     !shouldPreferJpeg444 &&
                     exportInputBitmap == null &&
