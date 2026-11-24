@@ -53,9 +53,9 @@ internal fun buildGalleryGridEntries(
                     )
                 )
                 groupedPhotos.forEach { indexedPhoto ->
+                    val photoId = indexedPhoto.value.id
+                    val systemIndex = systemIndexById[photoId]
                     add(
-                        val photoId = indexedPhoto.value.id
-                        val systemIndex = systemIndexById[photoId]
                         GalleryGridEntry.Photo(
                             photo = indexedPhoto.value,
                             index = indexedPhoto.index,
