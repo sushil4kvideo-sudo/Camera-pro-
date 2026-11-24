@@ -263,6 +263,7 @@ data class UserPreferences(
     val videoWhiteBalanceLockEnabled: Boolean = false,
     val keepUltraWideAeReady: Boolean = true,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
+    val videoApvQuality: com.hinnka.mycamera.video.ApvQuality = com.hinnka.mycamera.video.ApvQuality.HQ,
     val ultraHdrGainMapEnabled: Boolean = false,
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
@@ -552,6 +553,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_WHITE_BALANCE_LOCK_ENABLED = booleanPreferencesKey("video_white_balance_lock_enabled")
         private val KEEP_ULTRA_WIDE_AE_READY = booleanPreferencesKey("keep_ultra_wide_ae_ready")
         private val VIDEO_CODEC = stringPreferencesKey("video_codec")
+        private val VIDEO_APV_QUALITY = stringPreferencesKey("video_apv_quality")
         // Keep the persisted key for compatibility with existing installations.
         private val ULTRA_HDR_GAIN_MAP_ENABLED = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
         private val PHANTOM_MODE = booleanPreferencesKey("phantom_mode")
@@ -931,6 +933,11 @@ class UserPreferencesRepository(private val context: Context) {
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
                 ),
+                videoApvQuality = runCatching {
+                    com.hinnka.mycamera.video.ApvQuality.valueOf(
+                        preferences[VIDEO_APV_QUALITY] ?: com.hinnka.mycamera.video.ApvQuality.HQ.name
+                    )
+                }.getOrDefault(com.hinnka.mycamera.video.ApvQuality.HQ),
                 ultraHdrGainMapEnabled = preferences[ULTRA_HDR_GAIN_MAP_ENABLED] ?: false,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
@@ -2475,6 +2482,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveVideoCodec(codec: com.hinnka.mycamera.video.VideoCodec) {
         context.dataStore.edit { preferences ->
             preferences[VIDEO_CODEC] = codec.name
+        }
+    }
+
+    suspend fun saveVideoApvQuality(quality: com.hinnka.mycamera.video.ApvQuality) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_APV_QUALITY] = quality.name
         }
     }
 

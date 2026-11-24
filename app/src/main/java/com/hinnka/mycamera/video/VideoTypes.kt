@@ -127,7 +127,21 @@ enum class VideoBitratePreset(val bitrateMbps: Int) {
 
 enum class VideoCodec(val displayName: String, val mimeType: String) {
     H264("H.264", "video/avc"),
-    H265("H.265", "video/hevc");
+    H265("H.265", "video/hevc"),
+    APV("APV", "video/apv");
+}
+
+/** APV 4:2:2 quality presets, using the same bits-per-pixel targets as Luma. */
+enum class ApvQuality(val displayName: String, val bitsPerPixel: Float) {
+    HQ("422 HQ", 2.4f),
+    LQ("422 LQ", 1.2f);
+
+    fun resolveBitrate(width: Int, height: Int, fps: Int, encoderMax: Int): Int {
+        val pixelsPerSecond = width.toDouble() * height.toDouble() * fps.coerceAtLeast(1)
+        val target = (pixelsPerSecond * bitsPerPixel).toLong()
+        val maximum = if (encoderMax > 0) encoderMax.toLong() else 400_000_000L
+        return target.coerceIn(2_000_000L, maximum).toInt()
+    }
 }
 
 enum class VideoRecordingPath(val relativePath: String?) {
@@ -195,7 +209,8 @@ data class VideoConfig(
     val torchEnabled: Boolean = false,
     val lensLockEnabled: Boolean = false,
     val whiteBalanceLockEnabled: Boolean = false,
-    val dualAspectRatio: DualVideoAspectRatio? = null
+    val dualAspectRatio: DualVideoAspectRatio? = null,
+    val apvQuality: ApvQuality = ApvQuality.HQ
 ) {
     fun resolveOutputSize(openGatePortraitAspectRatio: Float, cameraInputSize: Size): Size {
         if (aspectRatio == VideoAspectRatio.OPEN_GATE) {
@@ -232,7 +247,9 @@ data class VideoCapabilities(
     val availableStabilizationModes: List<VideoStabilizationMode> = emptyList(),
     val supportsTorch: Boolean = false,
     val linearTonemapSupported: Boolean = false,
-    val availableFpsByResolution: Map<VideoResolutionPreset, List<VideoFpsPreset>> = emptyMap()
+    val availableFpsByResolution: Map<VideoResolutionPreset, List<VideoFpsPreset>> = emptyMap(),
+    /** Only codecs that expose a usable surface encoder on this device. */
+    val availableCodecs: List<VideoCodec> = emptyList()
 )
 
 data class VideoRecordingState(

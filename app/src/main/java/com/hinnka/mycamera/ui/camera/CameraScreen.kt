@@ -295,7 +295,7 @@ fun CameraScreen(
     val developAnimationStyle by viewModel.developAnimationStyle.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
     val topSheetAspectRatios by viewModel.topSheetAspectRatios.collectAsState()
-    val videoCodec by viewModel.videoCodec.collectAsState()
+    val videoCodec = state.videoConfig.codec
     val videoAudioInputOptions by viewModel.videoAudioInputOptions.collectAsState()
     val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     var dualCaptureLayout by remember { mutableStateOf(DualCaptureLayout.PICTURE_IN_PICTURE) }
@@ -2515,7 +2515,10 @@ fun CameraScreen(
                 videoEditOpenedFromModePill = false
                 activePanel = ActivePanel.EDIT
             },
-            videoCodec = videoCodec,
+            videoCodec = state.videoConfig.codec,
+            availableVideoCodecs = state.videoCapabilities.availableCodecs,
+            apvQuality = state.videoConfig.apvQuality,
+            onApvQualityChange = viewModel::setVideoApvQuality,
             onVideoCodecChange = { viewModel.setVideoCodec(it) },
             videoAudioInputId = state.videoConfig.audioInputId,
             videoAudioInputOptions = videoAudioInputOptions,

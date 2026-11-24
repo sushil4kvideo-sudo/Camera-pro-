@@ -8932,6 +8932,12 @@ class Camera2Controller(private val context: Context) {
         refreshVideoCapabilities()
     }
 
+    fun setVideoApvQuality(quality: com.hinnka.mycamera.video.ApvQuality) {
+        _state.value = _state.value.copy(
+            videoConfig = _state.value.videoConfig.copy(apvQuality = quality)
+        )
+    }
+
     fun setVideoAudioInputId(audioInputId: String) {
         val normalizedAudioInputId = audioInputId.ifBlank { VIDEO_AUDIO_INPUT_AUTO }
         _state.value = _state.value.copy(
@@ -11070,10 +11076,13 @@ class Camera2Controller(private val context: Context) {
         } else {
             emptyList()
         }
-        val fallbackCodecMimes = if (isOpenGateRecording) {
-            com.hinnka.mycamera.video.VideoCodec.entries
+        val selectedVideoCodec = _state.value.videoConfig.codec
+        val fallbackCodecMimes = if (
+            isOpenGateRecording && selectedVideoCodec != com.hinnka.mycamera.video.VideoCodec.APV
+        ) {
+            _state.value.videoCapabilities.availableCodecs
+                .filter { it != selectedVideoCodec && it != com.hinnka.mycamera.video.VideoCodec.APV }
                 .map { it.mimeType }
-                .filterNot { it == _state.value.videoConfig.codec.mimeType }
         } else {
             emptyList()
         }
@@ -11164,6 +11173,7 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.bitrate.bitrateMbps
             },
             codecMime = _state.value.videoConfig.codec.mimeType,
+            apvQuality = _state.value.videoConfig.apvQuality,
             fallbackCodecMimes = fallbackCodecMimes,
             fallbackOutputSizes = fallbackOutputSizes,
             colorConfig = VideoEncoderColorRequest(
@@ -11314,9 +11324,17 @@ class Camera2Controller(private val context: Context) {
                 fps = _state.value.videoConfig.fps.fps,
                 bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
                 codecMime = _state.value.videoConfig.codec.mimeType,
-                fallbackCodecMimes = com.hinnka.mycamera.video.VideoCodec.entries
-                    .map { it.mimeType }
-                    .filterNot { it == _state.value.videoConfig.codec.mimeType },
+                apvQuality = _state.value.videoConfig.apvQuality,
+                fallbackCodecMimes = if (_state.value.videoConfig.codec == com.hinnka.mycamera.video.VideoCodec.APV) {
+                    emptyList()
+                } else {
+                    _state.value.videoCapabilities.availableCodecs
+                        .filter {
+                            it != _state.value.videoConfig.codec &&
+                                it != com.hinnka.mycamera.video.VideoCodec.APV
+                        }
+                        .map { it.mimeType }
+                },
                 colorConfig = VideoEncoderColorRequest(
                     logProfile = logProfile,
                     hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f
@@ -11438,6 +11456,7 @@ class Camera2Controller(private val context: Context) {
                 fps = _state.value.videoConfig.fps.fps,
                 bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
                 codecMime = _state.value.videoConfig.codec.mimeType,
+                apvQuality = _state.value.videoConfig.apvQuality,
                 colorConfig = VideoEncoderColorRequest(
                     logProfile = logProfile,
                     hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f
@@ -11522,6 +11541,7 @@ class Camera2Controller(private val context: Context) {
                     fps = _state.value.videoConfig.fps.fps,
                     bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
                     codecMime = _state.value.videoConfig.codec.mimeType,
+                    apvQuality = _state.value.videoConfig.apvQuality,
                     fallbackCodecMimes = fallbackCodecMimes,
                     fallbackOutputSizes = fallbackOutputSizes,
                     colorConfig = VideoEncoderColorRequest(

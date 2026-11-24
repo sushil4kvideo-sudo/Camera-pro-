@@ -58,8 +58,13 @@ fun resolveVideoEncoderColorConfig(
     // HLG is an HDR output transfer, not a camera Log curve. Keep the transfer
     // function and Rec.2020 primaries even when a compatible creative LUT is active.
     if (request.logProfile == VideoLogProfile.HLG10) {
-        val codecProfile = if (request.force8BitHlg) null else resolve10BitProfile(codecInfo, codecMime)
-        val is10Bit = codecProfile != null
+        val isApvCodec = codecMime.equals(VideoCodec.APV.mimeType, ignoreCase = true)
+        val codecProfile = if (request.force8BitHlg || isApvCodec) {
+            null
+        } else {
+            resolve10BitProfile(codecInfo, codecMime)
+        }
+        val is10Bit = !request.force8BitHlg && (isApvCodec || codecProfile != null)
         return VideoEncoderColorConfig(
             pipeline = VideoEncodedColorPipeline.HLG10,
             colorStandard = MediaFormat.COLOR_STANDARD_BT2020,
@@ -93,7 +98,8 @@ fun resolveVideoEncoderColorConfig(
         colorTransfer = MediaFormat.COLOR_TRANSFER_SDR_VIDEO,
         colorRange = MediaFormat.COLOR_RANGE_LIMITED,
         codecProfile = codecProfile,
-        prefer10BitInputSurface = codecProfile != null,
+        prefer10BitInputSurface =
+            codecMime.equals(VideoCodec.APV.mimeType, ignoreCase = true) || codecProfile != null,
         debugName = "custom-log-${request.logProfile.name.lowercase()}"
     )
 }

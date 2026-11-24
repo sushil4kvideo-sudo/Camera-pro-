@@ -129,6 +129,7 @@ class VideoRecorder(
     private var inputSurface: Surface? = null
     private var renderer: RealtimeVideoRenderer? = null
     private var requestedBitrateMbps: Int = 30
+    private var requestedApvQuality: ApvQuality = ApvQuality.HQ
     private var requestedCodecMime: String = MediaFormat.MIMETYPE_VIDEO_AVC
     private var requestedFallbackCodecMimes: List<String> = emptyList()
     private var preferredEncoderCodecName: String? = null
@@ -249,6 +250,7 @@ class VideoRecorder(
         fps: Int,
         bitrateMbps: Int,
         codecMime: String,
+        apvQuality: ApvQuality = ApvQuality.HQ,
         fallbackCodecMimes: List<String> = emptyList(),
         fallbackOutputSizes: List<Size> = emptyList(),
         colorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest(),
@@ -309,8 +311,11 @@ class VideoRecorder(
             .map { Size(it.width.align16(), it.height.align16()) }
             .distinct()
         requestedBitrateMbps = bitrateMbps
+        requestedApvQuality = apvQuality
         val hlg10Encoder = if (
-            colorConfig.logProfile == VideoLogProfile.HLG10 && !colorConfig.force8BitHlg
+            colorConfig.logProfile == VideoLogProfile.HLG10 &&
+            !colorConfig.force8BitHlg &&
+            codecMime != VideoCodec.APV.mimeType
         ) findHlg10Encoder() else null
         preferredEncoderCodecName = hlg10Encoder?.first?.name
         requestedCodecMime = hlg10Encoder?.second ?: codecMime
@@ -794,7 +799,6 @@ class VideoRecorder(
 
     private fun prepareVideoEncoder() {
         if (videoEncoder != null && inputSurface != null) return
-        val requestedVideoBitrate = (requestedBitrateMbps * 1_000_000).coerceIn(2_000_000, 300_000_000)
         val preferredMime = requestedCodecMime
         val sizeCandidates = (listOf(requestedOutputSize) + requestedFallbackOutputSizes)
             .filter { it.width > 0 && it.height > 0 }
@@ -856,7 +860,18 @@ class VideoRecorder(
                 try {
                     codec = MediaCodec.createByCodecName(candidate.codecInfo.name)
                     val capabilities = candidate.codecInfo.getCapabilitiesForType(candidate.mimeType)
-                    val videoBitrate = capabilities.videoCapabilities.bitrateRange.clamp(requestedVideoBitrate)
+                    val requestedVideoBitrate = if (candidate.mimeType == VideoCodec.APV.mimeType) {
+                        requestedApvQuality.resolveBitrate(
+                            candidateSize.width,
+                            candidateSize.height,
+                            requestedFps,
+                            capabilities.videoCapabilities.bitrateRange.upper
+                        )
+                    } else {
+                        (requestedBitrateMbps * 1_000_000).coerceIn(2_000_000, 300_000_000)
+                    }
+                    val videoBitrate =
+                        capabilities.videoCapabilities.bitrateRange.clamp(requestedVideoBitrate)
                     val isCbrSupported = capabilities.encoderCapabilities?.isBitrateModeSupported(
                         MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
                     ) == true

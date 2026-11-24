@@ -5,6 +5,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.media.MediaRecorder
+import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.os.Build
 import android.util.Range
@@ -24,6 +25,11 @@ object VideoCapabilitiesResolver {
         requestedConfig: VideoConfig,
         algorithmicStabilizationSupported: Boolean = false,
     ): VideoCapabilitySnapshot {
+        val availableCodecs = resolveAvailableCodecs()
+        val resolvedCodec = requestedConfig.codec.takeIf { it in availableCodecs }
+            ?: availableCodecs.firstOrNull()
+            ?: VideoCodec.H264
+
         // Resolve from one metadata snapshot. Session caches are cleared while reopening,
         // which must not turn a supported user selection into an unsupported capability.
         val availableTonemapModes = characteristics.get(
@@ -58,7 +64,7 @@ object VideoCapabilitiesResolver {
             previewOutputSizes.filter { canProduceOutputWithoutUpscaling(it, targetSize) }
         }.orEmpty()
         val supportsThreeKEncoder = threeKOutputSize?.let { targetSize ->
-            supportsEncoderOutputSize(requestedConfig.codec.mimeType, targetSize)
+            supportsEncoderOutputSize(resolvedCodec.mimeType, targetSize)
         } ?: false
         val qhdOutputSize = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
             null
@@ -69,7 +75,7 @@ object VideoCapabilitiesResolver {
             previewOutputSizes.filter { canProduceOutputWithoutUpscaling(it, targetSize) }
         }.orEmpty()
         val supportsQhdEncoder = qhdOutputSize?.let { targetSize ->
-            supportsEncoderOutputSize(requestedConfig.codec.mimeType, targetSize)
+            supportsEncoderOutputSize(resolvedCodec.mimeType, targetSize)
         } ?: false
 
         // Some front/ultra-wide sensors expose an ~8 MP 4:3 SurfaceTexture stream
@@ -85,7 +91,14 @@ object VideoCapabilitiesResolver {
         // selected codec may expose a smaller maximum size even when the other hardware
         // encoder can encode the full sensor stream. VideoRecorder selects the matching
         // codec explicitly and falls back only if configuration fails on this device.
-        val openGateEncoderMimeTypes = VideoCodec.entries.map { it.mimeType }
+        // An explicitly selected APV encoder must never be replaced by H.264/HEVC.
+        // For the legacy codecs retain the existing compatible-codec fallback behavior.
+        val openGateEncoderMimeTypes = if (resolvedCodec == VideoCodec.APV) {
+            listOf(resolvedCodec.mimeType)
+        } else {
+            availableCodecs.filterNot { it == VideoCodec.APV }.map { it.mimeType }
+                .ifEmpty { listOf(resolvedCodec.mimeType) }
+        }
         val openGateEncoderOutputSizes = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
             previewOutputSizes
                 .map { Size(minOf(it.width, it.height), maxOf(it.width, it.height)) }
@@ -231,6 +244,7 @@ object VideoCapabilitiesResolver {
 
         return VideoCapabilitySnapshot(
             config = requestedConfig.copy(
+                codec = resolvedCodec,
                 resolution = resolvedResolution,
                 fps = resolvedFps,
                 logProfile = resolvedLogProfile,
@@ -256,7 +270,8 @@ object VideoCapabilitiesResolver {
                 availableStabilizationModes = availableStabilizationModes,
                 supportsTorch = isFlashSupported,
                 linearTonemapSupported = linearTonemapSupported,
-                availableFpsByResolution = availableFpsByResolution
+                availableFpsByResolution = availableFpsByResolution,
+                availableCodecs = availableCodecs
             ),
             previewSize = previewSize,
             recordingSize = recordingSize
@@ -363,19 +378,41 @@ object VideoCapabilitiesResolver {
             croppedLong + 0.5f >= outputLong
     }
 
+    private fun resolveAvailableCodecs(): List<VideoCodec> {
+        val codecInfos = runCatching {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+        }.getOrDefault(emptyArray())
+
+        return VideoCodec.entries.filter { codec ->
+            codecInfos.any { codecInfo ->
+                if (!codecInfo.isEncoder || codecInfo.isAlias) return@any false
+                val encoderType = codecInfo.supportedTypes.firstOrNull {
+                    it.equals(codec.mimeType, ignoreCase = true)
+                } ?: return@any false
+                runCatching {
+                    codecInfo.getCapabilitiesForType(encoderType).colorFormats.contains(
+                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                    )
+                }.getOrDefault(false)
+            }
+        }
+    }
+
     private fun supportsEncoderOutputSize(codecMime: String, size: Size): Boolean {
         val codecInfos = runCatching {
             MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
         }.getOrDefault(emptyArray())
 
         return codecInfos.any { codecInfo ->
-            codecInfo.isEncoder &&
-                codecInfo.supportedTypes.any { it.equals(codecMime, ignoreCase = true) } &&
-                runCatching {
-                    codecInfo.getCapabilitiesForType(codecMime)
-                        .videoCapabilities
-                        .isSizeSupported(size.width, size.height)
-                }.getOrDefault(false)
+            if (!codecInfo.isEncoder || codecInfo.isAlias) return@any false
+            val encoderType = codecInfo.supportedTypes.firstOrNull {
+                it.equals(codecMime, ignoreCase = true)
+            } ?: return@any false
+            runCatching {
+                val capabilities = codecInfo.getCapabilitiesForType(encoderType)
+                capabilities.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface) &&
+                    capabilities.videoCapabilities.isSizeSupported(size.width, size.height)
+            }.getOrDefault(false)
         }
     }
 

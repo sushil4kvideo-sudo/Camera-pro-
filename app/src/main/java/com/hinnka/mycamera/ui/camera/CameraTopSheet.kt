@@ -115,6 +115,9 @@ fun CameraTopSheet(
     onVideoSpatialVideoClick: () -> Unit,
     onVideoEditClick: () -> Unit,
     videoCodec: VideoCodec,
+    availableVideoCodecs: List<VideoCodec>,
+    apvQuality: ApvQuality,
+    onApvQualityChange: (ApvQuality) -> Unit,
     onVideoCodecChange: (VideoCodec) -> Unit,
     videoAudioInputId: String,
     videoAudioInputOptions: List<VideoAudioInputOption>,
@@ -562,8 +565,8 @@ fun CameraTopSheet(
                             leadingIcon = { tint ->
                                 Icon(AppIcons.Layers, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
                             },
-                            title = stringResource(R.string.video_bitrate_chip),
-                            summary = "${videoBitrate.bitrateMbps}M",
+                            title = if (videoCodec == VideoCodec.APV) "APV quality" else stringResource(R.string.video_bitrate_chip),
+                            summary = if (videoCodec == VideoCodec.APV) apvQuality.displayName else "${videoBitrate.bitrateMbps}M",
                             expanded = expandedVideoPanel == VideoSettingPanel.BITRATE,
                             onClick = {
                                 expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.BITRATE) {
@@ -730,12 +733,22 @@ fun CameraTopSheet(
                                             verticalArrangement = Arrangement.spacedBy(8.dp),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            VideoBitratePreset.entries.forEach { bitrate ->
-                                                VideoOptionChip(
-                                                    title = "${bitrate.bitrateMbps}M",
-                                                    selected = videoBitrate == bitrate,
-                                                    onClick = { onVideoBitrateChange(bitrate) }
-                                                )
+                                            if (videoCodec == VideoCodec.APV) {
+                                                ApvQuality.entries.forEach { quality ->
+                                                    VideoOptionChip(
+                                                        title = quality.displayName,
+                                                        selected = apvQuality == quality,
+                                                        onClick = { onApvQualityChange(quality) }
+                                                    )
+                                                }
+                                            } else {
+                                                VideoBitratePreset.entries.forEach { bitrate ->
+                                                    VideoOptionChip(
+                                                        title = "${bitrate.bitrateMbps}M",
+                                                        selected = videoBitrate == bitrate,
+                                                        onClick = { onVideoBitrateChange(bitrate) }
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -746,7 +759,7 @@ fun CameraTopSheet(
                                             verticalArrangement = Arrangement.spacedBy(8.dp),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            VideoCodec.entries.forEach { codec ->
+                                            availableVideoCodecs.ifEmpty { listOf(videoCodec) }.forEach { codec ->
                                                 VideoOptionChip(
                                                     title = codec.displayName,
                                                     selected = videoCodec == codec,

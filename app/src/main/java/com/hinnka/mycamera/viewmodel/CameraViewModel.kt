@@ -2490,6 +2490,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoWhiteBalanceLockEnabled(it.videoWhiteBalanceLockEnabled)
                 cameraController.setKeepUltraWideAeReady(it.keepUltraWideAeReady)
                 cameraController.setVideoCodec(it.videoCodec)
+                cameraController.setVideoApvQuality(it.videoApvQuality)
                 cameraController.setMirrorFrontCameraEnabled(it.mirrorFrontCamera)
                 multipleExposureState = multipleExposureState.copy(
                     enabled = it.useMultipleExposure,
@@ -2672,6 +2673,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoWhiteBalanceLockEnabled(prefs.videoWhiteBalanceLockEnabled)
                 cameraController.setKeepUltraWideAeReady(prefs.keepUltraWideAeReady)
                 cameraController.setVideoCodec(prefs.videoCodec)
+                cameraController.setVideoApvQuality(prefs.videoApvQuality)
                 cameraController.setMeteringMode(prefs.meteringMode)
 
                 // 应用保存的边框配置
@@ -3550,6 +3552,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setVideoCodec(codec: com.hinnka.mycamera.video.VideoCodec) {
         viewModelScope.launch {
             userPreferencesRepository.saveVideoCodec(codec)
+        }
+    }
+
+    fun setVideoApvQuality(quality: com.hinnka.mycamera.video.ApvQuality) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoApvQuality(quality)
         }
     }
 
