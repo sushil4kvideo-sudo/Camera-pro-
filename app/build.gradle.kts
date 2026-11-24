@@ -1,3 +1,7 @@
+import java.io.File
+import java.net.URL
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -120,15 +124,15 @@ val downloadPortraitSegmentationModel by tasks.registering {
         val modelFile = portraitSegmentationModel.asFile
         val expectedSha256 = "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0"
         fun sha256(file: java.io.File): String =
-            java.security.MessageDigest.getInstance("SHA-256")
+            MessageDigest.getInstance("SHA-256")
                 .digest(file.readBytes())
-                .joinToString("") { byte -> "%02x".format(byte) }
+                .joinToString("") { byte: Byte -> "%02x".format(byte) }
 
         if (!modelFile.exists() || sha256(modelFile) != expectedSha256) {
             modelFile.parentFile.mkdirs()
-            val temporaryFile = java.io.File(modelFile.parentFile, modelFile.name + ".download")
+            val temporaryFile = File(modelFile.parentFile, modelFile.name + ".download")
             try {
-                val connection = java.net.URL(
+                val connection = URL(
                     "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite"
                 ).openConnection().apply {
                     connectTimeout = 20_000
