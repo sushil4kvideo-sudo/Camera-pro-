@@ -195,6 +195,20 @@ class MainActivity : AppCompatActivity() {
     private val permissions =
         arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
+    private val storagePermissions: Array<String>
+        get() = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            )
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO
+            )
+            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
     private var hasPermissions by mutableStateOf(false)
     private var pendingRoute by mutableStateOf<String?>(null)
     private var pendingLutImportUris by mutableStateOf<List<Uri>>(emptyList())
@@ -202,8 +216,11 @@ class MainActivity : AppCompatActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        hasPermissions = result.values.all { it }
+    ) { _ ->
+        hasPermissions = permissions.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+        galleryViewModel.checkGalleryPermission()
     }
 
     private fun applyPreferredWindowColorMode(useHdrScreenMode: Boolean, useP3ColorSpace: Boolean) {
@@ -278,6 +295,19 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
         StartupTrace.mark("MainActivity.permissions checked", "hasPermissions=$hasPermissions")
+        galleryViewModel.checkGalleryPermission()
+
+        // Existing installs may already have camera access but not the new media access.
+        // Ask once on upgrade; a denial must not block camera functionality.
+        if (hasPermissions && !galleryViewModel.hasGalleryPermission) {
+            val permissionPrefs = getSharedPreferences("photon_gallery_permissions", MODE_PRIVATE)
+            if (!permissionPrefs.getBoolean("initial_media_request_shown", false)) {
+                permissionPrefs.edit().putBoolean("initial_media_request_shown", true).apply()
+                window.decorView.post {
+                    permissionLauncher.launch(permissions + storagePermissions)
+                }
+            }
+        }
 
         handleIntent(intent)
         StartupTrace.mark("MainActivity.intent handled", "pendingRoute=$pendingRoute")
@@ -330,7 +360,7 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             PermissionScreen(
                                 onRequestPermission = {
-                                    permissionLauncher.launch(permissions)
+                                    permissionLauncher.launch(permissions + storagePermissions)
                                 }
                             )
                         }
@@ -350,6 +380,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        galleryViewModel.checkGalleryPermission()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
