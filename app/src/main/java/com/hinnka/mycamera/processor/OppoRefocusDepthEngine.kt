@@ -8,6 +8,7 @@ import java.io.FileOutputStream
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Builds a compact focus-energy depth map from a set of focus-bracket JPEGs.
@@ -109,6 +110,47 @@ object OppoRefocusDepthEngine {
             }
         } catch (_: Exception) {
             return false
+        }
+    }
+
+    /**
+     * Picks the focus plane with the strongest local focus-energy vote at the selected subject
+     * point. If no explicit point was selected, the image centre is used.
+     */
+    fun selectFocusPlane(
+        depthMapFile: File,
+        frameCount: Int,
+        focusPointX: Float? = null,
+        focusPointY: Float? = null,
+    ): Int {
+        val fallback = (frameCount / 2).coerceIn(0, (frameCount - 1).coerceAtLeast(0))
+        if (frameCount < 2 || !depthMapFile.isFile) return fallback
+        val bitmap = BitmapFactory.decodeFile(depthMapFile.absolutePath) ?: return fallback
+        try {
+            if (bitmap.width <= 0 || bitmap.height <= 0) return fallback
+            val cx = ((focusPointX ?: 0.5f).coerceIn(0f, 1f) * (bitmap.width - 1)).roundToInt()
+            val cy = ((focusPointY ?: 0.5f).coerceIn(0f, 1f) * (bitmap.height - 1)).roundToInt()
+            val votes = IntArray(frameCount)
+            val left = (cx - 2).coerceAtLeast(0)
+            val right = (cx + 2).coerceAtMost(bitmap.width - 1)
+            val top = (cy - 2).coerceAtLeast(0)
+            val bottom = (cy + 2).coerceAtMost(bitmap.height - 1)
+            for (y in top..bottom) {
+                for (x in left..right) {
+                    val plane = (((bitmap.getPixel(x, y) and 0xFF) / 255f) * (frameCount - 1))
+                        .roundToInt().coerceIn(0, frameCount - 1)
+                    votes[plane]++
+                }
+            }
+            var selected = fallback
+            for (index in votes.indices) {
+                if (votes[index] > votes[selected] ||
+                    (votes[index] == votes[selected] && abs(index - fallback) < abs(selected - fallback))
+                ) selected = index
+            }
+            return selected
+        } finally {
+            bitmap.recycle()
         }
     }
 

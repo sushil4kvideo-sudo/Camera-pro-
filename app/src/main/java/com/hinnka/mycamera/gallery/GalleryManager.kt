@@ -95,6 +95,7 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -121,6 +122,12 @@ import kotlin.use
  * 统一管理照片文件、元数据、缩略图等
  * 存储路径: context.filesDir/photos/<photoId>/
  */
+data class RefocusPhotoAssets(
+    val frameFiles: List<File>,
+    val depthMapFile: File?,
+    val coverIndex: Int,
+)
+
 object GalleryManager {
     private const val TAG = "PhotoManager"
     private val metadataMutex = Mutex()
@@ -1345,12 +1352,18 @@ object GalleryManager {
                 } else {
                     null
                 }
-                val shouldPreferHeic = if (hasEncodingOverride) {
+                val isRefocusPhoto = metadata.captureMode == "oppo_refocus"
+                // Preserve the JPEG container for Photon-only refocus data after its EOI marker.
+                val shouldPreferHeic = if (isRefocusPhoto) {
+                    false
+                } else if (hasEncodingOverride) {
                     preferHeicExport == true
                 } else {
                     exportPreferences?.useHeicExport ?: false
                 }
-                val shouldPreferJpeg444 = if (hasEncodingOverride) {
+                val shouldPreferJpeg444 = if (isRefocusPhoto) {
+                    false
+                } else if (hasEncodingOverride) {
                     preferHeicExport != true && preferJpeg444Export == true
                 } else {
                     (exportPreferences?.useJpeg444Export ?: false) && !shouldPreferHeic
@@ -1645,6 +1658,9 @@ object GalleryManager {
                 }
 
                 uri?.let {
+                    if (isRefocusPhoto && !appendRefocusBundleToExport(context, id, it)) {
+                        PLog.w(TAG, "Refocus export has no attached focus bundle yet: $id")
+                    }
                     // Save exported URI to metadata
                     updateMetadata(context, id) { current ->
                         current.copy(
@@ -2878,6 +2894,216 @@ object GalleryManager {
         }
             ?.sortedBy { it.name }
             ?: emptyList()
+    }
+
+    /**
+     * Embed focus planes and the depth map inside the visible JPEG, and copy the payload to
+     * any already-exported public JPEG. Focus data therefore travels with the one photo file.
+     */
+    suspend fun embedRefocusDataInPhoto(
+        context: Context,
+        photoId: String,
+        sessionId: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val metadata = loadMetadata(context, photoId) ?: return@withContext false
+        val frames = getMultipleExposureFrameFiles(context, sessionId)
+        if (frames.size < 3) return@withContext false
+        val depth = getMultipleExposureRefocusDepthMapFile(context, sessionId)
+            .takeIf { it.isFile && it.length() > 0L }
+        val cover = metadata.customProperties["oppo.refocusCoverIndex"]
+            ?.toIntOrNull()?.coerceIn(0, frames.lastIndex) ?: frames.size / 2
+        val archive = runCatching {
+            File.createTempFile("photon_refocus_", ".zip", context.cacheDir)
+        }.getOrNull() ?: return@withContext false
+
+        try {
+            if (!RefocusPhotoBundle.createArchive(frames, depth, cover, archive)) {
+                return@withContext false
+            }
+            val internalPhoto = getOriginalImageFile(context, photoId)
+                ?: return@withContext false
+            if (!RefocusPhotoBundle.appendArchive(internalPhoto, archive)) {
+                PLog.e(TAG, "Failed to embed refocus bundle in internal photo: $photoId")
+                return@withContext false
+            }
+
+            val latest = loadMetadata(context, photoId) ?: metadata
+            var exportsReady = true
+            latest.exportedUris.distinct().forEach { value ->
+                val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return@forEach
+                if (!appendRefocusArchiveToUri(context, uri, archive)) {
+                    exportsReady = false
+                    PLog.w(TAG, "Refocus bundle could not be copied to exported image: $uri")
+                }
+            }
+            saveMetadata(
+                context,
+                photoId,
+                latest.copy(
+                    customProperties = latest.customProperties +
+                        ("oppo.refocusEmbedded" to "true")
+                ),
+            )
+            if (exportsReady) clearMultipleExposureSession(context, sessionId)
+            PLog.i(TAG, "Refocus bundle embedded: photo=$photoId, planes=\${frames.size}, exports=\${latest.exportedUris.size}")
+            true
+        } catch (error: Exception) {
+            PLog.e(TAG, "Failed to embed refocus bundle: $photoId", error)
+            false
+        } finally {
+            archive.delete()
+        }
+    }
+
+    /**
+     * Use the legacy cache session when available. Otherwise extract the hidden payload from
+     * the internal Photon image or the System Gallery/MediaStore URI.
+     */
+    suspend fun loadRefocusPhotoAssets(
+        context: Context,
+        photoId: String?,
+        sessionId: String?,
+        sourceUri: Uri?,
+        storedCoverIndex: Int? = null,
+    ): RefocusPhotoAssets? = withContext(Dispatchers.IO) {
+        val legacyFrames = sessionId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { getMultipleExposureFrameFiles(context, it) }
+            .orEmpty()
+        if (legacyFrames.size >= 3) {
+            val legacyDepth = sessionId
+                ?.let { getMultipleExposureRefocusDepthMapFile(context, it) }
+                ?.takeIf { it.isFile && it.length() > 0L }
+            return@withContext RefocusPhotoAssets(
+                legacyFrames,
+                legacyDepth,
+                storedCoverIndex?.coerceIn(0, legacyFrames.lastIndex) ?: legacyFrames.size / 2,
+            )
+        }
+
+        val sources = mutableListOf<File>()
+        photoId?.let { id ->
+            getOriginalImageFile(context, id)
+                ?.takeIf { it.isFile && it.length() > 0L }
+                ?.let(sources::add)
+        }
+        var tempSource: File? = null
+        try {
+            if (sourceUri != null && sourceUri.scheme == "file") {
+                sourceUri.path?.let(::File)
+                    ?.takeIf { it.isFile && it.length() > 0L }
+                    ?.let { candidate ->
+                        if (sources.none { it.absolutePath == candidate.absolutePath }) sources.add(candidate)
+                    }
+            } else if (sourceUri != null) {
+                val temp = runCatching {
+                    File.createTempFile("photon_refocus_source_", ".jpg", context.cacheDir)
+                }.getOrNull()
+                if (temp != null) {
+                    tempSource = temp
+                    val copied = runCatching {
+                        context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                            FileOutputStream(temp).use { output -> input.copyTo(output) }
+                        } ?: return@runCatching false
+                        true
+                    }.getOrDefault(false)
+                    if (copied && temp.length() > 0L) sources.add(temp)
+                }
+            }
+
+            for (sourceFile in sources) {
+                val key = (photoId ?: sourceUri?.toString() ?: sourceFile.name).hashCode()
+                val outputDir = File(
+                    context.cacheDir,
+                    "photon_refocus_\${key}_\${sourceFile.length()}_\${sourceFile.lastModified()}",
+                )
+                val extracted = RefocusPhotoBundle.extract(sourceFile, outputDir) ?: continue
+                return@withContext RefocusPhotoAssets(
+                    extracted.frames,
+                    extracted.depthMap,
+                    storedCoverIndex?.coerceIn(0, extracted.frames.lastIndex) ?: extracted.coverIndex,
+                )
+            }
+            null
+        } finally {
+            tempSource?.delete()
+        }
+    }
+
+    private fun createRefocusArchiveForPhoto(
+        context: Context,
+        photoId: String,
+        metadata: MediaMetadata,
+    ): File? {
+        val archive = runCatching {
+            File.createTempFile("photon_refocus_export_", ".zip", context.cacheDir)
+        }.getOrNull() ?: return null
+        val sessionId = metadata.customProperties["oppo.refocusSessionId"]
+        val frames = sessionId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { getMultipleExposureFrameFiles(context, it) }
+            .orEmpty()
+        if (frames.size >= 3) {
+            val depth = sessionId
+                ?.let { getMultipleExposureRefocusDepthMapFile(context, it) }
+                ?.takeIf { it.isFile && it.length() > 0L }
+            val cover = metadata.customProperties["oppo.refocusCoverIndex"]
+                ?.toIntOrNull()?.coerceIn(0, frames.lastIndex) ?: frames.size / 2
+            if (RefocusPhotoBundle.createArchive(frames, depth, cover, archive)) return archive
+        }
+        val internal = getOriginalImageFile(context, photoId)
+        if (internal != null && RefocusPhotoBundle.copyArchive(internal, archive)) return archive
+        archive.delete()
+        null
+    }
+
+    private fun appendRefocusArchiveToUri(
+        context: Context,
+        uri: Uri,
+        archive: File,
+    ): Boolean {
+        if (uri.scheme == "file") {
+            val target = uri.path?.let(::File) ?: return false
+            return RefocusPhotoBundle.appendArchive(target, archive)
+        }
+        val temp = runCatching {
+            File.createTempFile("photon_refocus_export_", ".jpg", context.cacheDir)
+        }.getOrNull() ?: return false
+        return try {
+            val read = context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(temp).use { output -> input.copyTo(output) }
+                true
+            } ?: false
+            if (!read || temp.length() <= 0L) return false
+            if (!RefocusPhotoBundle.appendArchive(temp, archive)) return false
+            val output = context.contentResolver.openOutputStream(uri, "wt") ?: return false
+            output.use { stream ->
+                FileInputStream(temp).use { input -> input.copyTo(stream) }
+                stream.flush()
+            }
+            true
+        } catch (error: Exception) {
+            PLog.w(TAG, "Unable to append hidden refocus frames to $uri", error)
+            false
+        } finally {
+            temp.delete()
+        }
+    }
+
+    private suspend fun appendRefocusBundleToExport(
+        context: Context,
+        photoId: String,
+        uri: Uri,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val metadata = loadMetadata(context, photoId) ?: return@withContext false
+        if (metadata.captureMode != "oppo_refocus") return@withContext true
+        val archive = createRefocusArchiveForPhoto(context, photoId, metadata)
+            ?: return@withContext false
+        try {
+            appendRefocusArchiveToUri(context, uri, archive)
+        } finally {
+            archive.delete()
+        }
     }
 
     suspend fun composeMultipleExposurePreview(

@@ -442,17 +442,30 @@ fun GalleryDetailScreen(
     var refocusPlaneFiles by remember(currentPhoto?.id) { mutableStateOf<List<File>>(emptyList()) }
     var refocusDepthBitmap by remember(currentPhoto?.id) { mutableStateOf<Bitmap?>(null) }
     var selectedRefocusPlane by remember(currentPhoto?.id) { mutableIntStateOf(0) }
-    LaunchedEffect(refocusSessionId) {
+    LaunchedEffect(currentPhoto?.id, refocusSessionId, currentPhoto?.sourceUri, currentPhoto?.uri) {
         refocusPlaneFiles = emptyList()
         refocusDepthBitmap?.recycle()
         refocusDepthBitmap = null
-        if (!refocusSessionId.isNullOrBlank()) {
-            refocusPlaneFiles = GalleryManager.getMultipleExposureFrameFiles(context, refocusSessionId)
-            val depthFile = GalleryManager.getMultipleExposureRefocusDepthMapFile(context, refocusSessionId)
-            refocusDepthBitmap = withContext(Dispatchers.IO) {
-                BitmapFactory.decodeFile(depthFile.absolutePath)
+        val photo = currentPhoto
+        if (photo != null && photo.isImage) {
+            val assets = GalleryManager.loadRefocusPhotoAssets(
+                context = context,
+                photoId = photo.id,
+                sessionId = refocusSessionId,
+                sourceUri = photo.sourceUri ?: photo.uri,
+                storedCoverIndex = photo.metadata?.customProperties
+                    ?.get("oppo.refocusCoverIndex")
+                    ?.toIntOrNull(),
+            )
+            refocusPlaneFiles = assets?.frameFiles.orEmpty()
+            refocusDepthBitmap = assets?.depthMapFile?.let { depthFile ->
+                withContext(Dispatchers.IO) {
+                    BitmapFactory.decodeFile(depthFile.absolutePath)
+                }
             }
-            selectedRefocusPlane = (refocusPlaneFiles.size / 2).coerceAtLeast(0)
+            selectedRefocusPlane = assets?.coverIndex
+                ?.takeIf { index -> refocusPlaneFiles.isNotEmpty() && index in refocusPlaneFiles.indices }
+                ?: (refocusPlaneFiles.size / 2).coerceAtLeast(0)
         }
     }
     val isCurrentPhotoProcessing = currentPhoto?.id?.let(processingPhotos::containsKey) == true
@@ -644,7 +657,7 @@ fun GalleryDetailScreen(
                     }
                     if (
                         !isCurrentPhotoProcessing &&
-                        !refocusSessionId.isNullOrBlank() &&
+                        currentPhoto?.isImage == true &&
                         refocusPlaneFiles.isNotEmpty()
                     ) {
                         IconButton(

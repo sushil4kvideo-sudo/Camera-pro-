@@ -6941,20 +6941,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 PLog.w(TAG, "Refocus depth map could not be generated; plane selector remains available")
             }
 
-            val middleFile = frameFiles[frameFiles.size / 2]
-            val bitmap = android.graphics.BitmapFactory.decodeFile(middleFile.absolutePath)
-                ?: throw IllegalStateException("Unable to decode the reference focus plane")
+            val selectedFocusIndex = OppoRefocusDepthEngine.selectFocusPlane(
+                depthMapFile = depthMapFile,
+                frameCount = frameFiles.size,
+                focusPointX = settings.state.focusPoint?.first,
+                focusPointY = settings.state.focusPoint?.second,
+            ).coerceIn(0, frameFiles.lastIndex)
+            val selectedFocusFrame = orderedFrames.getOrNull(selectedFocusIndex) ?: middleFrame
+            val selectedFocusFile = frameFiles[selectedFocusIndex]
+            val bitmap = android.graphics.BitmapFactory.decodeFile(selectedFocusFile.absolutePath)
+                ?: throw IllegalStateException("Unable to decode the subject-focused reference plane")
             try {
                 val baseMetadata = buildPhotoMetadata(
                     width = bitmap.width,
                     height = bitmap.height,
-                    captureInfo = middleFrame.captureInfo,
+                    captureInfo = selectedFocusFrame.captureInfo,
                     captureMode = "oppo_refocus",
                     settings = settings,
                 )
                 val metadata = baseMetadata.copy(
                     customProperties = baseMetadata.customProperties + mapOf(
                         "oppo.refocusSessionId" to sessionId,
+                        "oppo.refocusCoverIndex" to selectedFocusIndex.toString(),
                     ),
                 )
                 val photoId = GalleryManager.preparePhoto(
@@ -6980,6 +6988,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         0f,
                         settings.preferences.photoQuality,
                     )
+                }
+                val embedded = GalleryManager.embedRefocusDataInPhoto(context, photoId, sessionId)
+                if (!embedded) {
+                    PLog.e(TAG, "Refocus planes could not be embedded into photo $photoId")
                 }
                 PLog.i(
                     TAG,
