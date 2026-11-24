@@ -212,6 +212,8 @@
     <string name="settings_virtual_telephoto_special_video_description">When enabled, Special Video also records a 3.5x virtual telephoto track. Turn off to record only 0.5x ultra-wide and 1x main footage.</string>
     <string name="settings_keep_ultra_wide_ae_ready">Keep Ultra-Wide AE Ready</string>
     <string name="settings_keep_ultra_wide_ae_ready_description">Keep a low-resolution ultra-wide stream metering exposure in the background so switching lenses needs less AE settling. Uses extra battery and is available only when the camera supports a shared logical-camera session.</string>
+    <string name="settings_normal_video_instant_ultra_wide_switch">Instant Ultra-Wide Switch (Normal Video)</string>
+    <string name="settings_normal_video_instant_ultra_wide_switch_description">Keep the 0.5x camera preview running in the background during normal video so switching between 1x and ultra-wide is immediate. Uses extra battery and requires a supported rear-camera pair. Off by default.</string>
     <string name="settings_video_stabilization_default">Default Video Stabilization</string>
     <string name="settings_video_stabilization_default_description">Choose the stabilization mode used when video mode starts. EIS+ uses gyro-driven rolling-shutter correction on rear cameras.</string>
     <string name="settings_video_stabilization_mode_off">Off</string>
