@@ -14,7 +14,7 @@ internal class SpecialVideoRecordingTimeline {
     enum class StreamId(val logName: String) {
         MAIN("1x-main"),
         ULTRA_WIDE("0.5x-ultraWide"),
-        TELEPHOTO("4x-virtual-telephoto"),
+        TELEPHOTO("3.5x-virtual-telephoto"),
         SECONDARY("secondary"),
     }
 
@@ -154,7 +154,7 @@ internal class SpecialVideoRecordingTimeline {
             PLog.e(
                 TAG,
                 "Cannot reconcile Special Video: missing video end PTS " +
-                    "(1x=$mainEnd, 0.5x=$ultraWideEnd, 4x=$telephotoEnd); keeping untrimmed outputs"
+                    "(1x=$mainEnd, 0.5x=$ultraWideEnd, 3.5x=$telephotoEnd); keeping untrimmed outputs"
             )
             commonVideoEnd.complete(null)
             return
@@ -166,7 +166,7 @@ internal class SpecialVideoRecordingTimeline {
         PLog.i(
             TAG,
             "Final Special Video encoded video-track ends: 1x=$mainEnd us, " +
-                "0.5x=$ultraWideEnd us, 4x=$telephotoEnd us, delta=${differenceUs}us"
+                "0.5x=$ultraWideEnd us, 3.5x=$telephotoEnd us, delta=${differenceUs}us"
         )
 
         if (mainTailOverflowed || ultraWideTailOverflowed || (includeTelephoto && telephotoTailOverflowed)) {
@@ -174,7 +174,7 @@ internal class SpecialVideoRecordingTimeline {
                 TAG,
                 "Special Video tail buffer limit reached; refusing automatic trim " +
                     "(1xOverflow=$mainTailOverflowed, 0.5xOverflow=$ultraWideTailOverflowed, " +
-                    "4xOverflow=$telephotoTailOverflowed)"
+                    "3.5xOverflow=$telephotoTailOverflowed)"
             )
             commonVideoEnd.complete(null)
             return
@@ -184,7 +184,7 @@ internal class SpecialVideoRecordingTimeline {
             PLog.e(
                 TAG,
                 "Special Video video-track mismatch exceeds safety limit; refusing trim. " +
-                    "1xEndPtsUs=$mainEnd, 0.5xEndPtsUs=$ultraWideEnd, 4xEndPtsUs=$telephotoEnd, " +
+                    "1xEndPtsUs=$mainEnd, 0.5xEndPtsUs=$ultraWideEnd, 3.5xEndPtsUs=$telephotoEnd, " +
                     "deltaUs=$differenceUs, limitUs=$MAX_SAFE_TRIM_DIFFERENCE_US"
             )
             commonVideoEnd.complete(null)

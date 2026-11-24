@@ -113,10 +113,6 @@ fun CameraTopSheet(
     spatialVideoEnabled: Boolean,
     spatialVideoSupported: Boolean,
     onVideoSpatialVideoClick: () -> Unit,
-    spatialVideoShowUltraWidePreview: Boolean,
-    onSpatialVideoPreviewToggle: () -> Unit,
-    spatialVideoVirtualTelephotoEnabled: Boolean,
-    onSpatialVideoVirtualTelephotoToggle: () -> Unit,
     onVideoEditClick: () -> Unit,
     videoCodec: VideoCodec,
     onVideoCodecChange: (VideoCodec) -> Unit,
@@ -663,25 +659,6 @@ fun CameraTopSheet(
                             checked = spatialVideoEnabled,
                             enabled = true,
                             onClick = onVideoSpatialVideoClick,
-                            modifier = itemModifier
-                        )
-                        VideoMenuToggleTile(
-                            title = stringResource(R.string.special_video_virtual_telephoto),
-                            leadingIcon = { tint ->
-                                Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
-                            },
-                            checked = spatialVideoVirtualTelephotoEnabled,
-                            enabled = spatialVideoEnabled,
-                            onClick = onSpatialVideoVirtualTelephotoToggle,
-                            modifier = itemModifier
-                        )
-                        VideoMenuToggleTile(
-                            title = "0.5X PREVIEW",
-                            leadingIcon = { tint ->
-                                Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
-                            },
-                            checked = spatialVideoShowUltraWidePreview,
-                            onClick = onSpatialVideoPreviewToggle,
                             modifier = itemModifier
                         )
                         VideoMenuActionTile(

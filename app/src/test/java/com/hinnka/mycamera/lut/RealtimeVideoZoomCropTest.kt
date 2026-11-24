@@ -43,6 +43,20 @@ class RealtimeVideoZoomCropTest {
     }
 
     @Test
+    fun threePointFiveXUsesCenteredOneOverThreePointFiveOfTheLiveFrame() {
+        val result = resolveRealtimeVideoZoomCropRect(
+            sourceCropRect = floatArrayOf(0f, 0f, 1f, 1f),
+            zoomRatio = 3.5f,
+        )
+
+        assertArrayEquals(
+            floatArrayOf(5f / 14f, 5f / 14f, 9f / 14f, 9f / 14f),
+            result,
+            0.0001f,
+        )
+    }
+
+    @Test
     fun invalidZoomFallsBackToOneX() {
         val source = floatArrayOf(0f, 0.1f, 1f, 0.9f)
 

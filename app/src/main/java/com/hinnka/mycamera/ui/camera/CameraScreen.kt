@@ -249,8 +249,6 @@ fun CameraScreen(
     var dualCaptureEnabled by remember { mutableStateOf(false) }
     val spatialVideoEnabled by viewModel.spatialVideoEnabled.collectAsState()
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
-    val spatialVideoVirtualTelephotoEnabled by
-        viewModel.spatialVideoVirtualTelephotoEnabled.collectAsState()
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
     val spatialVideoPreviewSensorOrientation by
         viewModel.spatialVideoPreviewSensorOrientationDegrees.collectAsState()
@@ -2483,30 +2481,6 @@ fun CameraScreen(
                     ).show()
                 } else {
                     viewModel.setSpatialVideoEnabled(!spatialVideoEnabled)
-                }
-            },
-            spatialVideoShowUltraWidePreview = spatialVideoShowUltraWidePreview,
-            onSpatialVideoPreviewToggle = {
-                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
-                    android.widget.Toast.makeText(
-                        context,
-                        "Stop recording before changing the 0.5x preview.",
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                } else {
-                    viewModel.setSpatialVideoShowUltraWidePreview(!spatialVideoShowUltraWidePreview)
-                }
-            },
-            spatialVideoVirtualTelephotoEnabled = spatialVideoVirtualTelephotoEnabled,
-            onSpatialVideoVirtualTelephotoToggle = {
-                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
-                    android.widget.Toast.makeText(
-                        context,
-                        context.getString(R.string.special_video_virtual_telephoto_stop_recording_to_change),
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                } else if (spatialVideoEnabled) {
-                    viewModel.setSpatialVideoVirtualTelephotoEnabled(!spatialVideoVirtualTelephotoEnabled)
                 }
             },
             onVideoDualCaptureClick = {

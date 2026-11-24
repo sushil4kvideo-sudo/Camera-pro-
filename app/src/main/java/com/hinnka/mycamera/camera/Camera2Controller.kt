@@ -3972,8 +3972,8 @@ class Camera2Controller(private val context: Context) {
         val spatialPreviewSurface = if (
             captureMode == CaptureMode.VIDEO && logicalSpatialOutput
         ) spatialVideoStandbyPreviewSurface?.takeIf { it.isValid } else null
-        // The optional virtual 4x track is another live output from the same main sensor.
-        // Its dedicated renderer applies 4x crop before encoding; the 1x request stays untouched.
+        // The optional virtual 3.5x track is another live output from the same main sensor.
+        // Its dedicated renderer applies 3.5x crop before encoding; the 1x request stays untouched.
         val spatialTelephotoSurface = if (
             captureMode == CaptureMode.VIDEO &&
             spatialVideoEnabled &&
@@ -4124,7 +4124,7 @@ class Camera2Controller(private val context: Context) {
                         }
                         spatialTelephotoSurface?.let { telephotoSurface ->
                             // Default physical routing keeps this output on the primary main sensor.
-                            // The 4x crop is applied by its realtime encoder renderer, not Camera2's
+                            // The 3.5x crop is applied by its realtime encoder renderer, not Camera2's
                             // request-wide zoom (which would also crop the existing 1x stream).
                             add(createOutputConfiguration(
                                 telephotoSurface,
@@ -9633,12 +9633,12 @@ class Camera2Controller(private val context: Context) {
             _state.value.videoRecordingState.isRecording ||
             _state.value.videoRecordingState.isProcessing
         ) {
-            onCameraError?.invoke(-1, "Stop recording before changing the 4x virtual lens.", false)
+            onCameraError?.invoke(-1, "Stop recording before changing the 3.5x virtual lens.", false)
             return
         }
         _spatialVideoVirtualTelephotoEnabled.value = enabled
         specialVideoPreferences.edit().putBoolean("virtual_telephoto_enabled", enabled).apply()
-        PLog.i(TAG, "Special Video 4x virtual telephoto ${if (enabled) "enabled" else "disabled"}")
+        PLog.i(TAG, "Special Video 3.5x virtual telephoto ${if (enabled) "enabled" else "disabled"}")
     }
 
     fun setSpatialVideoPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) {
@@ -9841,7 +9841,7 @@ class Camera2Controller(private val context: Context) {
         spatialPrimaryFinishedUri = null
         spatialUltraWideFinishedFile = null
         spatialTelephotoFinishedFile = null
-        // The optional 4x callback is required only when that output was part of the take.
+        // The optional 3.5x callback is required only when that output was part of the take.
         specialVideoRecordingTimeline.reset()
         if (!ultraWide.isFile || ultraWide.length() <= 0L ||
             (telephoto != null && (!telephoto.isFile || telephoto.length() <= 0L))
@@ -9849,7 +9849,7 @@ class Camera2Controller(private val context: Context) {
             PLog.e(
                 TAG,
                 "Special Video companion missing or empty; retaining the main recording only: " +
-                    "0.5x=${ultraWide.absolutePath} 4x=${telephoto?.absolutePath ?: "disabled"}"
+                    "0.5x=${ultraWide.absolutePath} 3.5x=${telephoto?.absolutePath ?: "disabled"}"
             )
             ultraWide.delete()
             telephoto?.delete()
@@ -9894,7 +9894,7 @@ class Camera2Controller(private val context: Context) {
                     context, primary, ultraWide, lensLabel = "0.5x"
                 )
                 val telephotoAudioAttached = telephoto?.let {
-                    SpatialVideoStore.attachPrimaryAudioTrack(context, primary, it, lensLabel = "4x")
+                    SpatialVideoStore.attachPrimaryAudioTrack(context, primary, it, lensLabel = "3.5x")
                 } ?: false
                 PLog.i(
                     TAG,
@@ -10250,10 +10250,10 @@ class Camera2Controller(private val context: Context) {
         spatialVideoTelephotoCompanionFile?.let { file ->
             runCatching {
                 if (file.exists() && !file.delete()) {
-                    PLog.w(TAG, "Could not delete failed 4x Special Video companion: ${file.absolutePath}")
+                    PLog.w(TAG, "Could not delete failed 3.5x Special Video companion: ${file.absolutePath}")
                 }
             }.onFailure {
-                PLog.w(TAG, "Could not delete failed 4x Special Video companion: ${file.absolutePath}", it)
+                PLog.w(TAG, "Could not delete failed 3.5x Special Video companion: ${file.absolutePath}", it)
             }
         }
         spatialVideoTelephotoCompanionFile = null
@@ -11363,8 +11363,8 @@ class Camera2Controller(private val context: Context) {
                 return
             }
             val telephotoInputSize = if (spatialVideoVirtualTelephotoEnabled) {
-                // Prefer a 4K-class main-sensor input for the 4x stream even when the selected
-                // recording preset is 1080p. This preserves more detail before the live 4x crop.
+                // Prefer a 4K-class main-sensor input for the 3.5x stream even when the selected
+                // recording preset is 1080p. This preserves more detail before the live 3.5x crop.
                 val videoAspectRatio = cameraInputSize.width.toFloat() /
                     cameraInputSize.height.coerceAtLeast(1)
                 val telephotoInputLimit = if (videoAspectRatio >= 1f) {
@@ -11378,7 +11378,7 @@ class Camera2Controller(private val context: Context) {
                 } ?: cameraInputSize
                 PLog.i(
                     TAG,
-                    "Special Video 4x sensor input selected: camera=$telephotoCameraId " +
+                    "Special Video 3.5x sensor input selected: camera=$telephotoCameraId " +
                         "size=${inputSize.width}x${inputSize.height}, " +
                         "recordingInput=${cameraInputSize.width}x${cameraInputSize.height}"
                 )
@@ -11392,7 +11392,7 @@ class Camera2Controller(private val context: Context) {
                 null
             }
             if (telephotoFile != null && telephotoFile.exists() && !telephotoFile.delete()) {
-                failSpatialVideoStandby("The previous 4x telephoto companion file could not be cleared.")
+                failSpatialVideoStandby("The previous 3.5x telephoto companion file could not be cleared.")
                 return
             }
             spatialPrimaryFinishedUri = null
@@ -11487,7 +11487,7 @@ class Camera2Controller(private val context: Context) {
                 val telephotoStarted = spatialVideoTelephotoRecorder.startRecording(
                     size = outputSize,
                     cameraInputSize = telephotoInputSize,
-                    cameraInputZoomRatio = 4f,
+                    cameraInputZoomRatio = 3.5f,
                     fps = _state.value.videoConfig.fps.fps,
                     bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
                     codecMime = _state.value.videoConfig.codec.mimeType,
@@ -11528,12 +11528,12 @@ class Camera2Controller(private val context: Context) {
                     sharedTimelineDrainAwaiter = specialVideoRecordingTimeline::awaitCameraDrain,
                     sharedTimelineDrainCompleter = specialVideoRecordingTimeline::completeCameraDrain,
                     sharedCameraTimestampOffsetResolver = specialVideoRecordingTimeline::resolveCameraTimestampOffsetNs,
-                    sharedTimelineStreamName = "4x-virtual-telephoto",
+                    sharedTimelineStreamName = "3.5x-virtual-telephoto",
                     onError = { message ->
-                        PLog.e(TAG, "Special Video 4x telephoto recorder error: $message")
+                        PLog.e(TAG, "Special Video 3.5x telephoto recorder error: $message")
                         cameraHandler?.post {
                             if (spatialVideoEnabled && videoRecorder.isRecording()) {
-                                failSpatialVideoStandby("4x telephoto encoder failed: $message")
+                                failSpatialVideoStandby("3.5x telephoto encoder failed: $message")
                             } else {
                                 onCameraError?.invoke(-1, message, false)
                             }
@@ -11549,7 +11549,7 @@ class Camera2Controller(private val context: Context) {
                     spatialVideoTelephotoCompanionFile = null
                     spatialVideoRecorder.forceStop()
                     videoRecorder.forceStop()
-                    failSpatialVideoStandby("Special Video could not start its 4x virtual telephoto encoder.")
+                    failSpatialVideoStandby("Special Video could not start its 3.5x virtual telephoto encoder.")
                     return
                 }
             }
