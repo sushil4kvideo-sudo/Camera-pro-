@@ -7601,12 +7601,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+
+        // MediaPipe's GPU delegate is thread-affine: wait for any in-flight inference,
+        // then close the segmenter on the same dedicated thread that created it.
+        portraitVideoSegmentationJob?.cancel()
+        runCatching {
+            runBlocking(portraitSegmentationDispatcher) {
+                portraitVideoSegmenter.close()
+            }
+        }.onFailure {
+            PLog.e(TAG, "Failed to close portrait video segmenter", it)
+        }
+        portraitSegmentationDispatcher.close()
+
         cameraController.onEnhancedStabilizationUnavailable = null
         cameraReopenJob?.cancel()
         cameraErrorRecoveryJob?.cancel()
         previewEyeFocusProcessor.close()
-        portraitVideoSegmentationJob?.cancel()
-        portraitVideoSegmenter.close()
         cameraController.release()
         contentRepository.lutManager.clearCache()
         contentRepository.frameManager.clearCache()
@@ -7616,7 +7627,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // Accepted photo jobs retain their own images until the process-wide queue finishes.
         burstImageCount = 0
         multipleExposureState.previewBitmap?.recycle()
-        multipleExposureState.sessionId?.let { GalleryManager.clearMultipleExposureSession(getApplication(), it) }
+        multipleExposureState.sessionId?.let {
+            GalleryManager.clearMultipleExposureSession(getApplication(), it)
+        }
     }
 
     /**
@@ -7809,17 +7822,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    override fun onCleared() {
-        portraitVideoSegmentationJob?.cancel()
-        // Model/GL delegate teardown must use the same thread that initialized it.
-        runCatching {
-            runBlocking(portraitSegmentationDispatcher) {
-                portraitVideoSegmenter.close()
-            }
-        }
-        portraitSegmentationDispatcher.close()
-        super.onCleared()
-    }
+
 }
 
 private fun shouldIncludeCropRegionInOutputSize(imageFormat: Int): Boolean {
