@@ -23,7 +23,7 @@ object SpatialVideoStore {
     private const val SPECIAL_TIMELINE_TAG = "SpecialVideoTimeline"
     private const val DIRECTORY_NAME = "spatial_video"
     private const val SUFFIX = "_0_5x.mp4"
-    private const val TELEPHOTO_SUFFIX = "_3x.mp4"
+    private const val TELEPHOTO_SUFFIX = "_4x.mp4"
     private const val FALLBACK_BUFFER_SIZE = 4 * 1024 * 1024
 
     fun ultraWideFile(context: Context, primaryVideoUri: Uri): File {

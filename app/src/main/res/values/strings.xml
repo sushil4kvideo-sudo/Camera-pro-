@@ -1442,6 +1442,8 @@
     <string name="dual_capture_front_resolution">Front camera · %1$d × %2$d</string>
     <string name="special_video_not_supported">Special Video needs a compatible rear 1x and 0.5x camera pair exposed by one logical camera.</string>
     <string name="special_video_stop_recording_to_change">Stop recording before changing Special Video.</string>
+    <string name="special_video_virtual_telephoto">4X VIRTUAL</string>
+    <string name="special_video_virtual_telephoto_stop_recording_to_change">Stop recording before changing the 4x virtual lens.</string>
 
     <string name="done">Done</string>
 </resources>

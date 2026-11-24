@@ -3558,6 +3558,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val dualCaptureSensorOrientationDegrees = cameraController.dualCaptureSensorOrientationDegrees
     val spatialVideoEnabled = cameraController.spatialVideoEnabledFlow
     val spatialVideoShowUltraWidePreview = cameraController.spatialVideoShowUltraWidePreview
+    val spatialVideoVirtualTelephotoEnabled = cameraController.spatialVideoVirtualTelephotoEnabledFlow
     val spatialVideoPreviewStreamSize = cameraController.spatialVideoPreviewStreamSize
     val spatialVideoPreviewSensorOrientationDegrees =
         cameraController.spatialVideoPreviewSensorOrientationDegrees
@@ -3570,6 +3571,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) =
         cameraController.setSpatialVideoShowUltraWidePreview(enabled)
+
+    fun setSpatialVideoVirtualTelephotoEnabled(enabled: Boolean) =
+        cameraController.setSpatialVideoVirtualTelephotoEnabled(enabled)
 
     fun setSpatialVideoPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) =
         cameraController.setSpatialVideoPreviewSurfaceTexture(surfaceTexture)
