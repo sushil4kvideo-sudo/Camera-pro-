@@ -59,6 +59,8 @@ import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelManager
+import com.hinnka.mycamera.ml.PortraitSubjectMask
+import com.hinnka.mycamera.ml.PortraitVideoSegmenter
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.preview.PortraitMaskSnapshot
@@ -606,6 +608,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val oppoPhotoSettingsRepository = OppoPhotoSettingsRepository(application)
     val oppoPhotoSettings: StateFlow<OppoPhotoSettings> = oppoPhotoSettingsRepository.settings
     private val previewEyeFocusProcessor = PreviewEyeFocusProcessor(application)
+    private val portraitVideoSegmenter = PortraitVideoSegmenter(application)
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -897,6 +900,71 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             cameraController.updateVideoRecordingColorRecipeParams(
                 getMergedRecipeParams(forVideo = true)
             )
+        }
+    }
+
+    fun attachCameraGLSurfaceView(view: CameraGLSurfaceView?) {
+        glSurfaceView = view
+        if (view == null) return
+        view.setPortraitVideoEnabled(_videoPortraitEnabled.value)
+        latestVideoPortraitMask?.let { mask ->
+            view.setPortraitMask(mask.width, mask.height, mask.data)
+        }
+    }
+
+    fun setVideoPortraitEnabled(enabled: Boolean) {
+        if (enabled && state.value.captureMode != CaptureMode.VIDEO) return
+        if (_videoPortraitEnabled.value == enabled) return
+        _videoPortraitEnabled.value = enabled
+        glSurfaceView?.setPortraitVideoEnabled(enabled)
+        cameraController.setVideoPortraitEnabled(enabled)
+
+        if (enabled) {
+            startPortraitVideoSegmentation()
+        } else {
+            portraitVideoSegmentationJob?.cancel()
+            portraitVideoSegmentationJob = null
+            latestVideoPortraitMask = null
+            glSurfaceView?.setPortraitMask(0, 0, null)
+        }
+    }
+
+    private fun startPortraitVideoSegmentation() {
+        if (portraitVideoSegmentationJob?.isActive == true) return
+        portraitVideoSegmentationJob = viewModelScope.launch(Dispatchers.Default) {
+            while (isActive && _videoPortraitEnabled.value && state.value.captureMode == CaptureMode.VIDEO) {
+                val preview = glSurfaceView
+                if (preview == null) {
+                    delay(100L)
+                    continue
+                }
+
+                val captured = CompletableDeferred<Bitmap?>()
+                preview.captureOriginalPreviewFrame(320) { bitmap ->
+                    // complete() returns false if the capture timed out; recycle late frames.
+                    if (!captured.complete(bitmap)) bitmap?.recycle()
+                }
+                val bitmap = withTimeoutOrNull(1_500L) { captured.await() }
+                if (bitmap == null) {
+                    captured.cancel()
+                    delay(40L)
+                    continue
+                }
+
+                val mask = try {
+                    portraitVideoSegmenter.segment(bitmap)
+                } finally {
+                    if (!bitmap.isRecycled) bitmap.recycle()
+                }
+
+                if (mask != null && _videoPortraitEnabled.value) {
+                    latestVideoPortraitMask = mask
+                    preview.setPortraitMask(mask.width, mask.height, mask.data)
+                    cameraController.updateVideoPortraitMask(mask.width, mask.height, mask.data)
+                }
+                // Single in-flight inference: never queue stale frames behind a slower model.
+                delay(12L)
+            }
         }
     }
 
@@ -2012,6 +2080,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var isShutterSoundEnabled = true
     private var isVibrationEnabled = true
 
+    private val _videoPortraitEnabled = MutableStateFlow(false)
+    val videoPortraitEnabled = _videoPortraitEnabled.asStateFlow()
+    private var portraitVideoSegmentationJob: Job? = null
+    @Volatile private var latestVideoPortraitMask: PortraitSubjectMask? = null
+
     var glSurfaceView by mutableStateOf<CameraGLSurfaceView?>(null)
     var isEyeFocusBusy by mutableStateOf(false)
         private set
@@ -2131,6 +2204,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         cameraController.initialize()
+        viewModelScope.launch {
+            cameraController.state.map { it.captureMode }.distinctUntilChanged().collect { mode ->
+                if (mode != CaptureMode.VIDEO && _videoPortraitEnabled.value) {
+                    setVideoPortraitEnabled(false)
+                }
+            }
+        }
         viewModelScope.launch {
             cameraController.state.collect { cameraState ->
                 if (cameraState.isPreviewActive) {
@@ -7508,6 +7588,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraReopenJob?.cancel()
         cameraErrorRecoveryJob?.cancel()
         previewEyeFocusProcessor.close()
+        portraitVideoSegmentationJob?.cancel()
+        portraitVideoSegmenter.close()
         cameraController.release()
         contentRepository.lutManager.clearCache()
         contentRepository.frameManager.clearCache()

@@ -1,3 +1,7 @@
+import java.io.File
+import java.net.URL
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -110,6 +114,50 @@ android {
     androidResources {
         noCompress += "tflite"
     }
+
+val portraitSegmentationModel = layout.projectDirectory.file(
+    "src/main/assets/models/selfie_multiclass_256x256.tflite"
+)
+val downloadPortraitSegmentationModel by tasks.registering {
+    outputs.file(portraitSegmentationModel)
+    doLast {
+        val modelFile = portraitSegmentationModel.asFile
+        val expectedSha256 = "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0"
+        fun sha256(file: File): String =
+            MessageDigest.getInstance("SHA-256")
+                .digest(file.readBytes())
+                .joinToString("") { byte: Byte -> "%02x".format(byte) }
+
+        if (!modelFile.exists() || sha256(modelFile) != expectedSha256) {
+            modelFile.parentFile.mkdirs()
+            val temporaryFile = File(modelFile.parentFile, modelFile.name + ".download")
+            try {
+                val connection = URL(
+                    "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite"
+                ).openConnection().apply {
+                    connectTimeout = 20_000
+                    readTimeout = 90_000
+                }
+                connection.getInputStream().use { input ->
+                    temporaryFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                check(sha256(temporaryFile) == expectedSha256) {
+                    "Portrait segmentation model checksum mismatch; refusing to package an unverified model"
+                }
+                temporaryFile.copyTo(modelFile, overwrite = true)
+            } finally {
+                temporaryFile.delete()
+            }
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "preBuild") {
+        dependsOn(downloadPortraitSegmentationModel)
+    }
+}
+
 
     sourceSets {
         getByName("main") {

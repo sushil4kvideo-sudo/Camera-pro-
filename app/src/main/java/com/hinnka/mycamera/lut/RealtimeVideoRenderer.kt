@@ -59,6 +59,7 @@ class RealtimeVideoRenderer(
     dualCapturePositionY: Float = 0.05f,
     dualCapturePipWidthFraction: Float = 0.33f,
     private val encoderOrientationHintDegrees: Int = 0,
+    portraitVideoInitiallyEnabled: Boolean = false,
 ) {
     companion object {
         private const val TAG = "RealtimeVideoRenderer"
@@ -93,6 +94,7 @@ class RealtimeVideoRenderer(
     private val colorProgramCache = PreviewColorProgramCache()
     private val basicToneTextures = BasicToneGlTextures()
     private val filmGrainGl = FilmGrainGl(TAG)
+    private val portraitBokehGl = PortraitBokehGl(TAG + ".Portrait")
     private val mgcEisHardwareBufferRenderer = MgcEisHardwareBufferRenderer(TAG)
     private val mgcEisYuvRenderer = MgcEisYuvRenderer(TAG)
     private val filmGrainAmount: Float
@@ -155,6 +157,7 @@ class RealtimeVideoRenderer(
     private var textureCoordinateBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
     private var initialized = false
+    @Volatile private var portraitVideoEnabled = portraitVideoInitiallyEnabled
     private val cameraFramePending = AtomicBoolean(false)
     @Volatile
     private var stabilizationSession: RealtimeStabilizationCoordinator.Session? = null
@@ -166,6 +169,14 @@ class RealtimeVideoRenderer(
 
     val dualCaptureInputSurface: Surface?
         get() = dualCaptureSurface
+
+    fun setPortraitVideoEnabled(enabled: Boolean) {
+        portraitVideoEnabled = enabled
+    }
+
+    fun setPortraitMask(width: Int, height: Int, data: ByteArray?) {
+        portraitBokehGl.setMask(width, height, data)
+    }
 
     fun updateDualCaptureLayout(layout: DualCaptureLayout) {
         currentDualCaptureLayout = layout
@@ -263,10 +274,10 @@ class RealtimeVideoRenderer(
         check(makeCurrent()) { "Cannot make realtime video EGL context current" }
         initializeGeometry()
         initializeLayerTextures()
-        if (layers.size > 1 || finalFilmGrainEnabled) {
+        if (layers.size > 1 || finalFilmGrainEnabled || portraitVideoEnabled) {
             initializeIntermediateFramebuffer()
         }
-        if (layers.size > 1 && finalFilmGrainEnabled) {
+        if (portraitVideoEnabled || (layers.size > 1 && finalFilmGrainEnabled)) {
             val finalTarget = createColorFramebuffer("final color")
             finalColorTextureId = finalTarget.first
             finalColorFboId = finalTarget.second
@@ -340,6 +351,7 @@ class RealtimeVideoRenderer(
         mapPresentationTimeNs: (cameraTimestampNs: Long) -> Long,
     ): Long? {
         if (!initialized || !makeCurrent()) return null
+        portraitBokehGl.applyPendingUpdates()
         val surfaceTexture = cameraSurfaceTexture ?: return null
         if (dualCaptureSurfaceTexture != null) {
             acquireLatestDualCaptureFrame()
@@ -391,7 +403,8 @@ class RealtimeVideoRenderer(
 
         val firstLayer = layers.first()
         val grainEnabled = finalFilmGrainEnabled
-        val firstTargetFbo = if (layers.size > 1 || grainEnabled) intermediateFboId else 0
+        val portraitActive = portraitVideoEnabled && portraitBokehGl.hasMask
+        val firstTargetFbo = if (layers.size > 1 || grainEnabled || portraitActive) intermediateFboId else 0
         drawLayer(
             layer = firstLayer,
             targetFboId = firstTargetFbo,
@@ -412,7 +425,7 @@ class RealtimeVideoRenderer(
                 drawLayer(
                     layer = layer,
                     targetFboId = if (isLast) {
-                        if (grainEnabled) finalColorFboId else 0
+                        if (grainEnabled || portraitActive) finalColorFboId else 0
                     } else {
                         intermediateFboId
                     },
@@ -429,11 +442,16 @@ class RealtimeVideoRenderer(
         }
 
         if (grainEnabled) {
-            val sourceTextureId = if (layers.size > 1) finalColorTextureId else intermediateTextureId
+            val grainSourceTextureId = if (layers.size > 1) finalColorTextureId else intermediateTextureId
+            val grainTargetFramebufferId = if (portraitActive) {
+                if (layers.size > 1) intermediateFboId else finalColorFboId
+            } else {
+                0
+            }
             check(
                 filmGrainGl.drawToFramebuffer(
-                    targetFramebufferId = 0,
-                    sourceTextureId = sourceTextureId,
+                    targetFramebufferId = grainTargetFramebufferId,
+                    sourceTextureId = grainSourceTextureId,
                     width = encoderOutputSize.width,
                     height = encoderOutputSize.height,
                     amount = filmGrainAmount,
@@ -442,6 +460,24 @@ class RealtimeVideoRenderer(
                 )
             ) {
                 "Realtime video film grain pass failed"
+            }
+        }
+        if (portraitActive) {
+            val portraitSourceTextureId = when {
+                grainEnabled && layers.size > 1 -> intermediateTextureId
+                grainEnabled -> finalColorTextureId
+                layers.size > 1 -> finalColorTextureId
+                else -> intermediateTextureId
+            }
+            check(
+                portraitBokehGl.drawToFramebuffer(
+                    sourceTextureId = portraitSourceTextureId,
+                    targetFramebufferId = 0,
+                    width = encoderOutputSize.width,
+                    height = encoderOutputSize.height,
+                )
+            ) {
+                "Realtime video portrait bokeh pass failed"
             }
         }
         drawDualCaptureOverlay()
@@ -1305,6 +1341,9 @@ class RealtimeVideoRenderer(
             encoderEglSurface != EGL14.EGL_NO_SURFACE
         ) {
             makeCurrent()
+        }
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY && eglContext != EGL14.EGL_NO_CONTEXT) {
+            portraitBokehGl.release()
         }
         cameraSurfaceTexture?.setOnFrameAvailableListener(null)
         cameraSurface?.release()
