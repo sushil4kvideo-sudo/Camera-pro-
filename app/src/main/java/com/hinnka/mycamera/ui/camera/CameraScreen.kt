@@ -277,6 +277,7 @@ fun CameraScreen(
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
     val currentVideoRecipeParams by viewModel.currentVideoRecipeParams.collectAsState()
     val videoHdrEnabled by viewModel.videoHdrEnabled.collectAsState()
+    val videoPortraitEnabled by viewModel.videoPortraitEnabled.collectAsState()
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
     val activePresetId by viewModel.activePresetId.collectAsState()
     val activePresetModified by viewModel.isActivePresetModified.collectAsState()
@@ -1121,6 +1122,8 @@ fun CameraScreen(
                 onRawToggle = { viewModel.toggleRaw() },
                 videoConfig = state.videoConfig,
                 videoCapabilities = state.videoCapabilities,
+                videoPortraitEnabled = videoPortraitEnabled,
+                onVideoPortraitToggle = { viewModel.setVideoPortraitEnabled(!videoPortraitEnabled) },
                 onVideoTorchToggle = { viewModel.setVideoTorchEnabled(!state.videoConfig.torchEnabled) },
                 onVideoResolutionClick = {
                     if (state.videoConfig.aspectRatio != VideoAspectRatio.OPEN_GATE) {
