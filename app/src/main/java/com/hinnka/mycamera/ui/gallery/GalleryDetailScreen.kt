@@ -284,9 +284,13 @@ fun GalleryDetailScreen(
             // 初始页只在首次组合时计算，后续通过 LaunchedEffect 跳转
             if (photoId != null) {
                 val index = photos.indexOfFirst { it.id == photoId }
-                if (index != -1) index else initialIndex
+                when {
+                    index != -1 -> index
+                    selectedTab == GalleryTab.SYSTEM -> 0
+                    else -> initialIndex
+                }
             } else {
-                initialIndex
+                if (selectedTab == GalleryTab.SYSTEM) 0 else initialIndex
             }
         },
         pageCount = { photos.size }
