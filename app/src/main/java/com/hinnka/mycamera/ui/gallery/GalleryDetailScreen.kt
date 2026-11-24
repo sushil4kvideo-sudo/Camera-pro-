@@ -2579,6 +2579,8 @@ private fun VideoDetailPlayer(
     var isTelephotoFeedSynced by remember(photo.id, mediaUri, isActive) { mutableStateOf(false) }
     val companionCallback by rememberUpdatedState(onSpatialCompanionAvailability)
     val telephotoCallback by rememberUpdatedState(onSpatialTelephotoAvailability)
+    val isUltraWideFeedRequested = spatialZoomRatio < 1f && hasSpatialUltraWide
+    val isTelephotoFeedRequested = spatialZoomRatio >= 3.35f && hasSpatialTelephoto
     val isSelectedCompanionSynced by rememberUpdatedState(
         (isUltraWideFeedRequested && isWideFeedSynced) ||
             (isTelephotoFeedRequested && isTelephotoFeedSynced)
@@ -2586,8 +2588,6 @@ private fun VideoDetailPlayer(
     // Only the lens currently visible in the gallery should decode continuously.
     // Playing both hidden companion streams wastes decoder/GPU resources and can
     // make the third lens stutter on devices with limited video-decoder capacity.
-    val isUltraWideFeedRequested = spatialZoomRatio < 1f && hasSpatialUltraWide
-    val isTelephotoFeedRequested = spatialZoomRatio >= 3.35f && hasSpatialTelephoto
 
     LaunchedEffect(photo.id, mediaUri, isActive) {
         if (!isActive) return@LaunchedEffect
