@@ -2546,6 +2546,11 @@ private fun VideoDetailPlayer(
     var isTelephotoPlayerReady by remember(photo.id, mediaUri) { mutableStateOf(false) }
     val companionCallback by rememberUpdatedState(onSpatialCompanionAvailability)
     val telephotoCallback by rememberUpdatedState(onSpatialTelephotoAvailability)
+    // Only the lens currently visible in the gallery should decode continuously.
+    // Playing both hidden companion streams wastes decoder/GPU resources and can
+    // make the third lens stutter on devices with limited video-decoder capacity.
+    val isUltraWideFeedRequested = spatialZoomRatio < 1f && hasSpatialUltraWide
+    val isTelephotoFeedRequested = spatialZoomRatio >= 3.35f && hasSpatialTelephoto
 
     LaunchedEffect(photo.id, mediaUri, isActive) {
         if (!isActive) return@LaunchedEffect
@@ -2684,10 +2689,11 @@ private fun VideoDetailPlayer(
             }
             if (secondary.playbackState == Player.STATE_READY) {
                 secondary.seekTo(primary.currentPosition.coerceAtLeast(0L))
-                secondary.playWhenReady = primary.playWhenReady
+                secondary.playWhenReady = false
+                secondary.pause()
                 isWidePlayerReady = true
                 companionCallback(true)
-                PLog.i("VideoDetailPlayer", "Ultra-wide companion synchronized at ${primary.currentPosition}ms.")
+                PLog.i("VideoDetailPlayer", "Ultra-wide companion prepared and held for lens selection.")
             } else {
                 PLog.w("VideoDetailPlayer", "Ultra-wide companion did not become ready in time.")
             }
@@ -2712,10 +2718,11 @@ private fun VideoDetailPlayer(
             }
             if (telephoto.playbackState == Player.STATE_READY) {
                 telephoto.seekTo(primary.currentPosition.coerceAtLeast(0L))
-                telephoto.playWhenReady = primary.playWhenReady
+                telephoto.playWhenReady = false
+                telephoto.pause()
                 isTelephotoPlayerReady = true
                 telephotoCallback(true)
-                PLog.i("VideoDetailPlayer", "3.5x telephoto companion synchronized at ${primary.currentPosition}ms.")
+                PLog.i("VideoDetailPlayer", "3.5x telephoto companion prepared and held for lens selection.")
             } else {
                 PLog.w("VideoDetailPlayer", "3.5x telephoto companion did not become ready in time.")
             }
@@ -2724,27 +2731,128 @@ private fun VideoDetailPlayer(
         }
     }
 
-    LaunchedEffect(exoPlayer, wideExoPlayer, telephotoExoPlayer, isActive, isWidePlayerReady, isTelephotoPlayerReady) {
+    // On every lens handoff, stop the hidden companion and align only the selected
+    // companion to the main player's current position. This also works while paused.
+    LaunchedEffect(
+        exoPlayer,
+        wideExoPlayer,
+        telephotoExoPlayer,
+        isUltraWideFeedRequested,
+        isTelephotoFeedRequested,
+        isWidePlayerReady,
+        isTelephotoPlayerReady,
+        isActive
+    ) {
         val primary = exoPlayer ?: return@LaunchedEffect
-        while (true) {
-            if (primary.playbackState == Player.STATE_READY) {
-                val secondaries = listOfNotNull(
-                    wideExoPlayer?.takeIf { isWidePlayerReady },
-                    telephotoExoPlayer?.takeIf { isTelephotoPlayerReady },
-                )
-                secondaries.forEach { secondary ->
-                    if (secondary.playbackState == Player.STATE_READY) {
-                        if (secondary.playWhenReady != primary.playWhenReady) {
-                            secondary.playWhenReady = primary.playWhenReady
-                        }
-                        val driftMs = primary.currentPosition - secondary.currentPosition
-                        if (abs(driftMs) > 220L) {
-                            secondary.seekTo(primary.currentPosition.coerceAtLeast(0L))
-                        }
-                    }
+        if (!isActive) return@LaunchedEffect
+
+        val wide = wideExoPlayer
+        val telephoto = telephotoExoPlayer
+        if (!isUltraWideFeedRequested) wide?.pause()
+        if (!isTelephotoFeedRequested) telephoto?.pause()
+
+        val selected = when {
+            isUltraWideFeedRequested && isWidePlayerReady -> wide
+            isTelephotoFeedRequested && isTelephotoPlayerReady -> telephoto
+            else -> null
+        } ?: return@LaunchedEffect
+
+        selected.seekTo(primary.currentPosition.coerceAtLeast(0L))
+        val shouldPlay = primary.isPlaying && primary.playbackState != Player.STATE_ENDED
+        selected.playWhenReady = shouldPlay
+        if (shouldPlay) selected.play() else selected.pause()
+        PLog.d(
+            "VideoDetailPlayer",
+            "Gallery lens handoff: feed=${if (isUltraWideFeedRequested) "0.5x" else "3.5x"}, " +
+                "position=${primary.currentPosition}ms, playing=$shouldPlay"
+        )
+    }
+
+    // Mirror main playback events to only the currently visible companion. The old
+    // 300ms loop sought both companions repeatedly, causing extra decoder work/judder.
+    DisposableEffect(
+        exoPlayer,
+        wideExoPlayer,
+        telephotoExoPlayer,
+        isUltraWideFeedRequested,
+        isTelephotoFeedRequested,
+        isWidePlayerReady,
+        isTelephotoPlayerReady
+    ) {
+        val primary = exoPlayer ?: return@DisposableEffect onDispose { }
+        val selected = when {
+            isUltraWideFeedRequested && isWidePlayerReady -> wideExoPlayer
+            isTelephotoFeedRequested && isTelephotoPlayerReady -> telephotoExoPlayer
+            else -> null
+        }
+        val listener = object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (playWhenReady && primary.playbackState == Player.STATE_ENDED) {
+                    // Explicitly restart the main and companion timelines after EOS.
+                    primary.seekTo(0L)
+                    wideExoPlayer?.seekTo(0L)
+                    telephotoExoPlayer?.seekTo(0L)
                 }
             }
-            delay(300)
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                selected?.let { companion ->
+                    if (isPlaying) companion.play() else companion.pause()
+                }
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) {
+                    primary.pause()
+                    wideExoPlayer?.pause()
+                    telephotoExoPlayer?.pause()
+                    // Keep the main clip at EOS, but reset the visible companion so it
+                    // cannot remain stuck on its last frame when playback is restarted.
+                    selected?.seekTo(0L)
+                }
+            }
+
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int
+            ) {
+                selected?.seekTo(primary.currentPosition.coerceAtLeast(0L))
+            }
+        }
+        primary.addListener(listener)
+        onDispose { primary.removeListener(listener) }
+    }
+
+    // Retain a low-frequency drift guard for long clips, but only for the selected
+    // companion. A 500ms threshold avoids the repeated seeks that were stuttering video.
+    LaunchedEffect(
+        exoPlayer,
+        isUltraWideFeedRequested,
+        isTelephotoFeedRequested,
+        isWidePlayerReady,
+        isTelephotoPlayerReady,
+        isActive
+    ) {
+        val primary = exoPlayer ?: return@LaunchedEffect
+        if (!isActive) return@LaunchedEffect
+        val companion = when {
+            isUltraWideFeedRequested && isWidePlayerReady -> wideExoPlayer
+            isTelephotoFeedRequested && isTelephotoPlayerReady -> telephotoExoPlayer
+            else -> null
+        } ?: return@LaunchedEffect
+
+        while (true) {
+            if (primary.isPlaying && companion.isPlaying &&
+                primary.playbackState == Player.STATE_READY &&
+                companion.playbackState == Player.STATE_READY
+            ) {
+                val driftMs = primary.currentPosition - companion.currentPosition
+                if (abs(driftMs) > 500L) {
+                    companion.seekTo(primary.currentPosition.coerceAtLeast(0L))
+                }
+            }
+            delay(1_200)
         }
     }
 
@@ -2758,8 +2866,7 @@ private fun VideoDetailPlayer(
                 }
                 Lifecycle.Event.ON_RESUME -> if (isActive) {
                     exoPlayer?.play()
-                    if (isWidePlayerReady) wideExoPlayer?.play()
-                    if (isTelephotoPlayerReady) telephotoExoPlayer?.play()
+                    // Only onIsPlayingChanged resumes the currently selected companion.
                 }
                 else -> Unit
             }
