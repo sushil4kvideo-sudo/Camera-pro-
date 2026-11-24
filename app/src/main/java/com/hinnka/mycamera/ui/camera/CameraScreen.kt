@@ -1533,7 +1533,7 @@ fun CameraScreen(
                             },
                             onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
                             onGLSurfaceViewReady = {
-                                viewModel.glSurfaceView = it
+                                viewModel.attachCameraGLSurfaceView(it)
                                 cameraGLSurfaceView = it
                             },
                             onPreviewBoundsChanged = { previewGlBounds = it },
