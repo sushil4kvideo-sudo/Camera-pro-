@@ -458,6 +458,9 @@ class Camera2Controller(private val context: Context) {
         normalVideoPrimaryCameraId = null
         normalVideoStreamingMode = null
         stopSpatialVideoStandbyCamera("normal video preview disabled: $reason")
+        spatialVideoStandbyInputSize = null
+        _spatialVideoPreviewStreamSize.value = null
+        _spatialVideoPreviewSensorOrientationDegrees.value = 0
         val selected = _state.value.getCurrentCameraInfo()
         activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(_state.value, selected)
         logicalMultiCameraAutoSwitchActive = shouldUseLogicalMultiCameraZoom(_state.value, selected)
@@ -9835,6 +9838,11 @@ class Camera2Controller(private val context: Context) {
             handler.post { setNormalVideoUltraWideInstantSwitchEnabled(enabled) }
             return
         }
+        if (_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isProcessing) {
+            PLog.i(TAG, "Normal Video instant-switch setting is locked while recording")
+            onCameraError?.invoke(-1, "Stop recording before changing the Normal Video instant-switch setting.", false)
+            return
+        }
         normalVideoUltraWideInstantSwitchEnabled = enabled
         if (!enabled) {
             clearNormalVideoUltraWideInstantSwitchRuntime("setting disabled", reopenSelectedCamera = true)
@@ -9918,9 +9926,6 @@ class Camera2Controller(private val context: Context) {
             onCameraError?.invoke(-1, "Stop recording before changing Special Video.", false)
             return
         }
-        if (enabled && normalVideoUltraWideInstantSwitchActive) {
-            clearNormalVideoUltraWideInstantSwitchRuntime("Special Video enabled", reopenSelectedCamera = false)
-        }
         if (enabled) {
             if (_state.value.captureMode != CaptureMode.VIDEO) {
                 onCameraError?.invoke(-1, "Special Video is only available in Video mode.", false)
@@ -9932,6 +9937,12 @@ class Camera2Controller(private val context: Context) {
                     ?: "rear main 1x + ultra-wide 0.5x Camera2 pair was not discovered"
                 onCameraError?.invoke(-1, "Special Video unsupported: $reason", false)
                 return
+            }
+            if (normalVideoUltraWideInstantSwitchActive) {
+                clearNormalVideoUltraWideInstantSwitchRuntime(
+                    "Special Video enabled",
+                    reopenSelectedCamera = false,
+                )
             }
             val activeId = activeOpenCameraId.takeIf { it.isNotBlank() }
                 ?: _state.value.getCurrentCameraInfo()?.let { runCatching { it.getOpenCameraId() }.getOrNull() }
@@ -10012,20 +10023,38 @@ class Camera2Controller(private val context: Context) {
                     selectedOpenId != null && selectedOpenId != activeOpenCameraId
             spatialVideoRecorder.forceStop()
             clearSpecialVideoRuntimeState("Special Video disabled")
-            previewSurfaceTexture?.let { texture ->
-                if (restoreLogicalParent) {
-                    PLog.i(
-                        TAG,
-                        "Special Video disabled: restoring selected CameraDevice $selectedOpenId " +
-                            "from physical primary $activeOpenCameraId"
-                    )
-                    openCamera(texture)
-                } else {
-                    createPreviewSession(openGeneration = cameraOpenGeneration)
+            val resumeNormalInstantSwitch =
+                normalVideoUltraWideInstantSwitchEnabled &&
+                    _state.value.captureMode == CaptureMode.VIDEO
+            if (resumeNormalInstantSwitch) {
+                activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = false)
+                previewSurfaceTexture?.let { texture ->
+                    if (normalVideoPrimaryCameraId != activeOpenCameraId) {
+                        openCamera(texture)
+                    } else {
+                        if (normalVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                            cameraDevice != null
+                        ) {
+                            normalVideoUltraWidePhysicalCameraId?.let {
+                                startSpatialVideoStandbyCamera(it)
+                            }
+                        }
+                        createPreviewSession(openGeneration = cameraOpenGeneration)
+                    }
                 }
-            }
-            if (normalVideoUltraWideInstantSwitchEnabled && _state.value.captureMode == CaptureMode.VIDEO) {
-                activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = true)
+            } else {
+                previewSurfaceTexture?.let { texture ->
+                    if (restoreLogicalParent) {
+                        PLog.i(
+                            TAG,
+                            "Special Video disabled: restoring selected CameraDevice $selectedOpenId " +
+                                "from physical primary $activeOpenCameraId"
+                        )
+                        openCamera(texture)
+                    } else {
+                        createPreviewSession(openGeneration = cameraOpenGeneration)
+                    }
+                }
             }
         }
     }
@@ -10194,7 +10223,10 @@ class Camera2Controller(private val context: Context) {
             ?: resolveSpatialVideoInputSize(cameraId, _state.value.currentPreviewSize)
         if (targetSize == null) {
             spatialVideoStandbyOpeningCameraId = null
-            PLog.e(TAG, "Special Video cannot resolve ultra-wide stream size: camera=$cameraId")
+            PLog.e(TAG, "Ultra-wide standby cannot resolve preview stream size: camera=$cameraId")
+            if (normalVideoUltraWideInstantSwitchActive) {
+                handleUltraWideStandbyPreviewFailure("Unable to resolve ultra-wide preview stream size")
+            }
             return false
         }
         spatialVideoStandbyInputSize = targetSize
