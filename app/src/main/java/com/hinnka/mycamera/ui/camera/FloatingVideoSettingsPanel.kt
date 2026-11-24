@@ -79,7 +79,7 @@ fun FloatingVideoSettingsPanel(
         VideoResolutionPreset.THREE_K -> "3K resolution"
         VideoResolutionPreset.QHD_1440P -> "2K QHD resolution"
         VideoResolutionPreset.FHD_1080P -> "Full HD resolution"
-        VideoResolutionPreset.HD_720P -> "HD resolution"
+        VideoResolutionPreset.HD_720P -> "720p HD resolution"
     }
 
     Box(
@@ -169,7 +169,7 @@ fun FloatingVideoSettingsPanel(
                                             VideoResolutionPreset.THREE_K -> "3K"
                                             VideoResolutionPreset.QHD_1440P -> "2K"
                                             VideoResolutionPreset.FHD_1080P -> "FHD"
-                                            VideoResolutionPreset.HD_720P -> "HD"
+                                            VideoResolutionPreset.HD_720P -> "720p"
                                         }
                                         Box(
                                             modifier = Modifier.weight(1f),
