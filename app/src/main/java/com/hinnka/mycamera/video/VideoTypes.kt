@@ -247,9 +247,7 @@ data class VideoCapabilities(
     val availableStabilizationModes: List<VideoStabilizationMode> = emptyList(),
     val supportsTorch: Boolean = false,
     val linearTonemapSupported: Boolean = false,
-    val availableFpsByResolution: Map<VideoResolutionPreset, List<VideoFpsPreset>> = emptyMap(),
-    /** Only codecs that expose a usable surface encoder on this device. */
-    val availableCodecs: List<VideoCodec> = emptyList()
+    val availableFpsByResolution: Map<VideoResolutionPreset, List<VideoFpsPreset>> = emptyMap()
 )
 
 data class VideoRecordingState(
