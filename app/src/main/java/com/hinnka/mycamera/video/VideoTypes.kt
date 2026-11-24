@@ -10,6 +10,7 @@ import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 enum class VideoStabilizationMode(val displayName: String) {
     OFF("OFF"),
@@ -132,13 +133,13 @@ enum class VideoCodec(val displayName: String, val mimeType: String) {
 }
 
 /** APV 4:2:2 quality presets, using the same bits-per-pixel targets as Luma. */
-enum class ApvQuality(val displayName: String, val bitsPerPixel: Float) {
-    HQ("422 HQ", 2.4f),
-    LQ("422 LQ", 1.2f);
+enum class ApvQuality(val displayName: String, val bitsPerPixel: Double) {
+    HQ("422 HQ", 2.4),
+    LQ("422 LQ", 1.2);
 
     fun resolveBitrate(width: Int, height: Int, fps: Int, encoderMax: Int): Int {
         val pixelsPerSecond = width.toDouble() * height.toDouble() * fps.coerceAtLeast(1)
-        val target = (pixelsPerSecond * bitsPerPixel).toLong()
+        val target = (pixelsPerSecond * bitsPerPixel).roundToLong()
         val maximum = if (encoderMax > 0) encoderMax.toLong() else 400_000_000L
         return target.coerceIn(2_000_000L, maximum).toInt()
     }
