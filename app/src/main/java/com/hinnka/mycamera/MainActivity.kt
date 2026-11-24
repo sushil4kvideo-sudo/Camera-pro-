@@ -220,6 +220,10 @@ class MainActivity : AppCompatActivity() {
         hasPermissions = permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
+        getSharedPreferences("photon_gallery_permissions", MODE_PRIVATE)
+            .edit()
+            .putBoolean("initial_media_request_shown", true)
+            .apply()
         galleryViewModel.checkGalleryPermission()
     }
 
