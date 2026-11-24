@@ -338,6 +338,16 @@ class Camera2Controller(private val context: Context) {
     private var spatialVideoUltraWidePhysicalCameraId: String? = null
     private var spatialVideoPrimaryCameraId: String? = null
     private var spatialVideoStreamingMode: SpatialVideoStreamingMode? = null
+    // Optional preview-only companion for normal video; it never starts a second encoder.
+    private var normalVideoUltraWideInstantSwitchEnabled = false
+    private var normalVideoUltraWideInstantSwitchActive = false
+    private var normalVideoMainPhysicalCameraId: String? = null
+    private var normalVideoUltraWidePhysicalCameraId: String? = null
+    private var normalVideoPrimaryCameraId: String? = null
+    private var normalVideoStreamingMode: SpatialVideoStreamingMode? = null
+    private val _normalVideoUltraWideInstantSwitchActive = MutableStateFlow(false)
+    val normalVideoUltraWideInstantSwitchActiveFlow: StateFlow<Boolean> =
+        _normalVideoUltraWideInstantSwitchActive.asStateFlow()
     @Volatile private var spatialVideoUnsupportedReason: String? = null
     @Volatile private var spatialVideoPrimaryReopenInProgress = false
     @Volatile private var spatialPrimaryFinishedUri: Uri? = null
@@ -378,6 +388,153 @@ class Camera2Controller(private val context: Context) {
     private val _spatialVideoPreviewSensorOrientationDegrees = MutableStateFlow(0)
     val spatialVideoPreviewSensorOrientationDegrees: StateFlow<Int> =
         _spatialVideoPreviewSensorOrientationDegrees.asStateFlow()
+    private fun isUltraWideStandbyPreviewActive(): Boolean =
+        spatialVideoEnabled || normalVideoUltraWideInstantSwitchActive
+
+    private fun currentUltraWideStandbyCameraId(): String? =
+        spatialVideoUltraWidePhysicalCameraId?.takeIf { spatialVideoEnabled }
+            ?: normalVideoUltraWidePhysicalCameraId?.takeIf { normalVideoUltraWideInstantSwitchActive }
+
+    private fun currentUltraWideStandbyStreamingMode(): SpatialVideoStreamingMode? =
+        spatialVideoStreamingMode.takeIf { spatialVideoEnabled }
+            ?: normalVideoStreamingMode.takeIf { normalVideoUltraWideInstantSwitchActive }
+
+    private fun cameraBelongsToSpatialPair(camera: CameraInfo?, pair: SpatialVideoCameraPair): Boolean {
+        camera ?: return false
+        if (camera.lensFacing != CameraCharacteristics.LENS_FACING_BACK) return false
+        val ids = buildSet {
+            add(camera.cameraId)
+            camera.outputPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+            runCatching { camera.getOpenCameraId() }.getOrNull()?.takeIf { it.isNotBlank() }?.let(::add)
+            camera.physicalCameras.mapTo(this) { it.cameraId }
+        }
+        val mainIds = buildSet {
+            add(pair.mainCameraInfo.cameraId)
+            pair.mainPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+            pair.mainCameraInfo.outputPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+            pair.mainCameraInfo.physicalCameras.mapTo(this) { it.cameraId }
+        }
+        val wideIds = buildSet {
+            add(pair.ultraWideCameraId)
+            _state.value.availableCameras.filter { info ->
+                info.cameraId == pair.ultraWideCameraId ||
+                    info.outputPhysicalCameraId == pair.ultraWideCameraId ||
+                    info.physicalCameras.any { it.cameraId == pair.ultraWideCameraId }
+            }.forEach { info ->
+                add(info.cameraId)
+                info.outputPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+                info.physicalCameras.mapTo(this) { it.cameraId }
+            }
+        }
+        return ids.any { it in mainIds || it in wideIds }
+    }
+
+    private fun isCurrentNormalVideoPairLens(camera: CameraInfo?): Boolean {
+        camera ?: return false
+        val mainId = normalVideoMainPhysicalCameraId ?: return false
+        val wideId = normalVideoUltraWidePhysicalCameraId ?: return false
+        val ids = buildSet {
+            add(camera.cameraId)
+            camera.outputPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+            runCatching { camera.getOpenCameraId() }.getOrNull()?.takeIf { it.isNotBlank() }?.let(::add)
+            camera.physicalCameras.mapTo(this) { it.cameraId }
+        }
+        val mainMatches = mainId in ids || camera.cameraId == normalVideoPrimaryCameraId ||
+            camera.cameraId == _state.value.availableCameras.firstOrNull {
+                it.outputPhysicalCameraId == mainId ||
+                    it.physicalCameras.any { physical -> physical.cameraId == mainId }
+            }?.cameraId
+        return camera.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+            (mainMatches || wideId in ids)
+    }
+
+    private fun clearNormalVideoUltraWideInstantSwitchRuntime(reason: String, reopenSelectedCamera: Boolean) {
+        if (!normalVideoUltraWideInstantSwitchActive) return
+        val oldPrimaryId = normalVideoPrimaryCameraId
+        normalVideoUltraWideInstantSwitchActive = false
+        _normalVideoUltraWideInstantSwitchActive.value = false
+        normalVideoMainPhysicalCameraId = null
+        normalVideoUltraWidePhysicalCameraId = null
+        normalVideoPrimaryCameraId = null
+        normalVideoStreamingMode = null
+        stopSpatialVideoStandbyCamera("normal video preview disabled: $reason")
+        val selected = _state.value.getCurrentCameraInfo()
+        activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(_state.value, selected)
+        logicalMultiCameraAutoSwitchActive = shouldUseLogicalMultiCameraZoom(_state.value, selected)
+        PLog.i(TAG, "Normal Video ultra-wide instant switch runtime cleared: reason=$reason")
+        if (!reopenSelectedCamera || spatialVideoEnabled) return
+        val texture = previewSurfaceTexture ?: return
+        val selectedOpenId = selected?.let { runCatching { it.getOpenCameraId() }.getOrNull() }
+        if (selectedOpenId != null && selectedOpenId != activeOpenCameraId &&
+            (oldPrimaryId == activeOpenCameraId || activeOpenCameraId.isNotBlank())
+        ) {
+            openCamera(texture, preserveVideoRecording = true)
+        } else if (cameraDevice != null) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+        }
+    }
+
+    private fun activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded: Boolean): Boolean {
+        if (!normalVideoUltraWideInstantSwitchEnabled || normalVideoUltraWideInstantSwitchActive ||
+            spatialVideoEnabled || _state.value.captureMode != CaptureMode.VIDEO ||
+            _state.value.videoRecordingState.isRecording ||
+            _state.value.videoRecordingState.isProcessing
+        ) return normalVideoUltraWideInstantSwitchActive
+        val selected = _state.value.getCurrentCameraInfo() ?: return false
+        if (selected.lensFacing != CameraCharacteristics.LENS_FACING_BACK) return false
+        val pair = resolveSpatialVideoConfiguration() ?: run {
+            PLog.w(TAG, "Normal Video instant switch unavailable: ${spatialVideoUnsupportedReason ?: "rear 1x/0.5x pair not found"}")
+            return false
+        }
+        if (!cameraBelongsToSpatialPair(selected, pair)) return false
+
+        normalVideoMainPhysicalCameraId = pair.mainPhysicalCameraId
+            ?: pair.mainCameraInfo.outputPhysicalCameraId ?: pair.mainCameraInfo.cameraId
+        normalVideoUltraWidePhysicalCameraId = pair.ultraWideCameraId
+        normalVideoPrimaryCameraId = pair.primaryCameraId
+        normalVideoStreamingMode = pair.mode
+        normalVideoUltraWideInstantSwitchActive = true
+        _normalVideoUltraWideInstantSwitchActive.value = true
+        if (dualCaptureEnabled) setDualCaptureEnabled(false)
+        // Keep the 1x physical camera as the primary GL/encoder path; the wide TextureView
+        // is already streaming in parallel and is only promoted by the UI on a lens tap.
+        _state.value = _state.value.copy(
+            currentCameraId = pair.mainCameraInfo.cameraId,
+            currentLensType = pair.mainCameraInfo.lensType,
+            zoomRatio = 1f,
+            zoomPanX = 0f,
+            zoomPanY = 0f,
+            zoomPanEnabled = false,
+        )
+        activeOutputPhysicalCameraId = when {
+            pair.mode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ->
+                normalVideoMainPhysicalCameraId
+            pair.logicalParentCameraId != null -> null
+            else -> pair.mainCameraInfo.outputPhysicalCameraId
+        }
+        logicalMultiCameraAutoSwitchActive = false
+        PLog.i(
+            TAG,
+            "Normal Video instant switch enabled: mode=${pair.mode}, primary=${pair.primaryCameraId}, " +
+                "main=${normalVideoMainPhysicalCameraId}, ultraWide=${pair.ultraWideCameraId}"
+        )
+        if (reopenPrimaryIfNeeded) {
+            val texture = previewSurfaceTexture
+            if (texture != null) {
+                val activeId = activeOpenCameraId.takeIf { it.isNotBlank() }
+                if (activeId != pair.primaryCameraId) {
+                    openCamera(texture, preserveVideoRecording = true)
+                } else {
+                    if (pair.mode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                        cameraDevice != null
+                    ) startSpatialVideoStandbyCamera(pair.ultraWideCameraId)
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
+        }
+        return true
+    }
+
     private var dualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
     private val _dualCaptureSource = MutableStateFlow(DualCaptureSource.ULTRA_WIDE)
     val dualCaptureSource: StateFlow<DualCaptureSource> = _dualCaptureSource.asStateFlow()
@@ -2885,19 +3042,28 @@ class Camera2Controller(private val context: Context) {
             }
         }
 
-        val cameraId = _state.value.currentCameraId
-        val selectedCamera = _state.value.getCurrentCameraInfo()
-        val selectedOpenCameraId = selectedCamera?.getOpenCameraId() ?: cameraId
-        val specialVideoPrimaryOverride = spatialVideoPrimaryCameraId?.takeIf {
-            spatialVideoEnabled
-        }
-        // Match VCamera's Special Video handoff: keep the resolved 1x stream as the
-        // primary CameraDevice, regardless of which rear lens was selected beforehand.
-        // For a logical-output pair this is the logical parent; for a persistent pair
-        // this is the independently openable 1x physical CameraDevice.
-        val openCameraId = specialVideoPrimaryOverride ?: selectedOpenCameraId
-        val targetZoomRatioByMain = getTargetZoomRatioByMain(_state.value, selectedCamera)
         val captureMode = _state.value.captureMode
+        var selectedCamera = _state.value.getCurrentCameraInfo()
+        if (normalVideoUltraWideInstantSwitchActive && !isCurrentNormalVideoPairLens(selectedCamera)) {
+            clearNormalVideoUltraWideInstantSwitchRuntime(
+                "selected camera is outside the 1x/0.5x pair",
+                reopenSelectedCamera = false,
+            )
+        }
+        if (!normalVideoUltraWideInstantSwitchActive && normalVideoUltraWideInstantSwitchEnabled &&
+            !spatialVideoEnabled && captureMode == CaptureMode.VIDEO
+        ) {
+            activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = false)
+        }
+        val cameraId = _state.value.currentCameraId
+        selectedCamera = _state.value.getCurrentCameraInfo()
+        val selectedOpenCameraId = selectedCamera?.getOpenCameraId() ?: cameraId
+        val specialVideoPrimaryOverride = spatialVideoPrimaryCameraId?.takeIf { spatialVideoEnabled }
+        val normalVideoPrimaryOverride = normalVideoPrimaryCameraId?.takeIf {
+            normalVideoUltraWideInstantSwitchActive
+        }
+        val openCameraId = specialVideoPrimaryOverride ?: normalVideoPrimaryOverride ?: selectedOpenCameraId
+        val targetZoomRatioByMain = getTargetZoomRatioByMain(_state.value, selectedCamera)
         if (captureMode != CaptureMode.VIDEO && dualCaptureCameraDevice != null) {
             stopDualCaptureCamera()
         }
@@ -2913,12 +3079,16 @@ class Camera2Controller(private val context: Context) {
 
         activeOpenCameraId = openCameraId
         logicalMultiCameraAutoSwitchActive = !spatialVideoEnabled &&
+            !normalVideoUltraWideInstantSwitchActive &&
             shouldUseLogicalMultiCameraZoom(_state.value, selectedCamera)
         val requestedPhysicalCameraId = when {
             spatialVideoEnabled &&
                 spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ->
                 spatialVideoMainPhysicalCameraId
-            specialVideoPrimaryOverride != null -> null
+            normalVideoUltraWideInstantSwitchActive &&
+                normalVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ->
+                normalVideoMainPhysicalCameraId
+            specialVideoPrimaryOverride != null || normalVideoPrimaryOverride != null -> null
             else -> resolveRequestedPhysicalCameraId(_state.value, selectedCamera)
         }
         var outputPhysicalCameraId = if (logicalMultiCameraAutoSwitchActive) null else requestedPhysicalCameraId
@@ -2976,6 +3146,11 @@ class Camera2Controller(private val context: Context) {
                     spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
                 ) {
                     spatialVideoUltraWidePhysicalCameraId?.let { startSpatialVideoStandbyCamera(it) }
+                } else if (
+                    normalVideoUltraWideInstantSwitchActive &&
+                    normalVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+                ) {
+                    normalVideoUltraWidePhysicalCameraId?.let { startSpatialVideoStandbyCamera(it) }
                 }
                 val pendingReconfigure = pendingCaptureModeReconfigureRequest
                 if (captureMode != _state.value.captureMode ||
@@ -3961,6 +4136,10 @@ class Camera2Controller(private val context: Context) {
         }
         val logicalSpatialOutput = spatialVideoEnabled &&
             spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+        val logicalNormalVideoUltraWideOutput = normalVideoUltraWideInstantSwitchActive &&
+            normalVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+        val logicalUltraWidePreviewOutput = logicalSpatialOutput || logicalNormalVideoUltraWideOutput
+        val ultraWidePreviewPhysicalCameraId = currentUltraWideStandbyCameraId()
         // Keep the secondary physical output even when the primary stream uses EIS+.
         // Photon EIS+ processes the main camera through its YUV pipeline; the 0.5x
         // companion remains an independent, un-stabilized native Camera2 stream.
@@ -3973,7 +4152,7 @@ class Camera2Controller(private val context: Context) {
         // Visibility is a UI-only choice; adding/removing this output on every lens tap would
         // force a CameraCaptureSession rebuild and defeat instant preview handoff.
         val spatialPreviewSurface = if (
-            captureMode == CaptureMode.VIDEO && logicalSpatialOutput
+            captureMode == CaptureMode.VIDEO && logicalUltraWidePreviewOutput
         ) spatialVideoStandbyPreviewSurface?.takeIf { it.isValid } else null
         // The optional virtual 3.5x track is another live output from the same main sensor.
         // Its dedicated renderer applies 3.5x crop before encoding; the 1x request stays untouched.
@@ -4135,8 +4314,8 @@ class Camera2Controller(private val context: Context) {
                             ))
                         }
                         spatialPreviewSurface?.let { previewOutput ->
-                            val wideId = spatialVideoUltraWidePhysicalCameraId
-                                ?: throw IllegalStateException("Special Video ultra-wide physical camera is unavailable")
+                            val wideId = ultraWidePreviewPhysicalCameraId
+                                ?: throw IllegalStateException("Ultra-wide preview physical camera is unavailable")
                             add(createOutputConfiguration(previewOutput, physicalCameraId = wideId))
                         }
                         if (ultraWidePreviewSurface != null || ultraWideRecordSurface != null) {
@@ -4748,6 +4927,23 @@ class Camera2Controller(private val context: Context) {
         // 1x and 0.5x lenses must only change which live preview is displayed; reopening
         // the primary CameraDevice here would stall the viewfinder and interrupt a paired
         // recording even though the standby ultra-wide stream is already running.
+        if (normalVideoUltraWideInstantSwitchActive) {
+            if (!isCurrentNormalVideoPairLens(targetCamera)) return false
+            val primaryReady = cameraDevice != null && captureSession != null &&
+                (normalVideoPrimaryCameraId == null || activeOpenCameraId == normalVideoPrimaryCameraId)
+            val wideDeviceReady = currentUltraWideStandbyCameraId() != null &&
+                (currentUltraWideStandbyStreamingMode() == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ||
+                    spatialVideoStandbyCameraDevice?.id == normalVideoUltraWidePhysicalCameraId)
+            val widePreviewReady = spatialVideoStandbyPreviewSurface?.isValid == true
+            PLog.i(
+                TAG,
+                "Normal Video lens preview handoff in-place: selected=${targetCamera.cameraId}, " +
+                    "primaryReady=$primaryReady, wideDeviceReady=$wideDeviceReady, " +
+                    "widePreviewReady=$widePreviewReady, mode=$normalVideoStreamingMode"
+            )
+            return true
+        }
+
         if (spatialVideoEnabled) {
             val targetOpenId = runCatching { targetCamera.getOpenCameraId() }.getOrNull()
             val mainPhysicalId = spatialVideoMainPhysicalCameraId
@@ -8741,6 +8937,9 @@ class Camera2Controller(private val context: Context) {
         ) {
             return
         }
+        if (mode != CaptureMode.VIDEO) {
+            clearNormalVideoUltraWideInstantSwitchRuntime("leaving Video mode", reopenSelectedCamera = false)
+        }
         val nextVideoConfig = if (mode == CaptureMode.VIDEO) {
             _state.value.videoConfig
         } else {
@@ -8762,6 +8961,9 @@ class Camera2Controller(private val context: Context) {
         if (mode == CaptureMode.VIDEO) {
             livePhotoRecorder.stopRecording()
             refreshVideoCapabilities()
+            if (normalVideoUltraWideInstantSwitchEnabled && !spatialVideoEnabled) {
+                activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = true)
+            }
         } else {
             stopVideoRecordingTicker()
             _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
@@ -9627,6 +9829,25 @@ class Camera2Controller(private val context: Context) {
         return pair != null
     }
 
+    fun setNormalVideoUltraWideInstantSwitchEnabled(enabled: Boolean) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setNormalVideoUltraWideInstantSwitchEnabled(enabled) }
+            return
+        }
+        normalVideoUltraWideInstantSwitchEnabled = enabled
+        if (!enabled) {
+            clearNormalVideoUltraWideInstantSwitchRuntime("setting disabled", reopenSelectedCamera = true)
+            return
+        }
+        if (spatialVideoEnabled || _state.value.captureMode != CaptureMode.VIDEO) return
+        if (_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isProcessing) {
+            PLog.i(TAG, "Normal Video instant-switch setting will apply after recording finishes")
+            return
+        }
+        activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = true)
+    }
+
     fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) {
         _spatialVideoShowUltraWidePreview.value = enabled
         specialVideoPreferences.edit().putBoolean("show_ultra_wide_preview", enabled).apply()
@@ -9660,33 +9881,27 @@ class Camera2Controller(private val context: Context) {
         spatialVideoStandbyPreviewSurface?.release()
         spatialVideoStandbyPreviewSurface = null
         spatialVideoStandbyPreviewSurfaceTexture = surfaceTexture
+        val wideId = currentUltraWideStandbyCameraId()
         if (surfaceTexture != null) {
-            val wideId = spatialVideoUltraWidePhysicalCameraId
             val targetSize = spatialVideoStandbyInputSize
                 ?: wideId?.let { resolveSpatialVideoInputSize(it, _state.value.currentPreviewSize) }
                 ?: _state.value.currentPreviewSize
             runCatching {
                 surfaceTexture.setDefaultBufferSize(targetSize.width, targetSize.height)
                 spatialVideoStandbyPreviewSurface = Surface(surfaceTexture)
-            }.onFailure { PLog.e(TAG, "Special Video preview surface creation failed", it) }
+            }.onFailure { PLog.e(TAG, "Ultra-wide standby preview surface creation failed", it) }
             _spatialVideoPreviewStreamSize.value = targetSize
         } else {
             _spatialVideoPreviewStreamSize.value = null
         }
-        if (spatialVideoEnabled) {
-            if (spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL) {
+        if (isUltraWideStandbyPreviewActive()) {
+            if (currentUltraWideStandbyStreamingMode() == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL) {
                 createPreviewSession(openGeneration = cameraOpenGeneration)
-            } else {
-                spatialVideoUltraWidePhysicalCameraId?.let { cameraId ->
-                    if (
-                        _spatialVideoShowUltraWidePreview.value &&
-                        spatialVideoStandbyCameraDevice == null &&
-                        surfaceTexture != null
-                    ) {
-                        startSpatialVideoStandbyCamera(cameraId)
-                    } else if (spatialVideoStandbyCameraDevice != null) {
-                        createSpatialVideoStandbySession("preview surface changed")
-                    }
+            } else if (wideId != null) {
+                if (spatialVideoStandbyCameraDevice == null && surfaceTexture != null) {
+                    startSpatialVideoStandbyCamera(wideId)
+                } else if (spatialVideoStandbyCameraDevice != null) {
+                    createSpatialVideoStandbySession("ultra-wide preview surface changed")
                 }
             }
         }
@@ -9702,6 +9917,9 @@ class Camera2Controller(private val context: Context) {
         if (videoRecorder.isRecording() || _state.value.videoRecordingState.isProcessing) {
             onCameraError?.invoke(-1, "Stop recording before changing Special Video.", false)
             return
+        }
+        if (enabled && normalVideoUltraWideInstantSwitchActive) {
+            clearNormalVideoUltraWideInstantSwitchRuntime("Special Video enabled", reopenSelectedCamera = false)
         }
         if (enabled) {
             if (_state.value.captureMode != CaptureMode.VIDEO) {
@@ -9805,6 +10023,9 @@ class Camera2Controller(private val context: Context) {
                 } else {
                     createPreviewSession(openGeneration = cameraOpenGeneration)
                 }
+            }
+            if (normalVideoUltraWideInstantSwitchEnabled && _state.value.captureMode == CaptureMode.VIDEO) {
+                activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = true)
             }
         }
     }
@@ -9952,7 +10173,9 @@ class Camera2Controller(private val context: Context) {
             handler.post { startSpatialVideoStandbyCamera(cameraId) }
             return true
         }
-        if (!spatialVideoEnabled || cameraId.isBlank()) return false
+        if (!isUltraWideStandbyPreviewActive() || cameraId.isBlank() ||
+            cameraId != currentUltraWideStandbyCameraId()
+        ) return false
         // Use the Camera2 ID that discovery resolved, including an OEM hidden ID.
         // The actual open callback remains the authority on whether this device permits it.
         val existing = spatialVideoStandbyCameraDevice
@@ -9990,8 +10213,8 @@ class Camera2Controller(private val context: Context) {
                 object : CameraDevice.StateCallback() {
                     override fun onOpened(camera: CameraDevice) {
                         if (generation != spatialVideoStandbySessionGeneration ||
-                            !spatialVideoEnabled ||
-                            spatialVideoUltraWidePhysicalCameraId != cameraId
+                            !isUltraWideStandbyPreviewActive() ||
+                            currentUltraWideStandbyCameraId() != cameraId
                         ) {
                             PLog.w(TAG, "Closing stale Special Video standby device: id=${camera.id}, generation=$generation")
                             camera.close()
@@ -10016,7 +10239,7 @@ class Camera2Controller(private val context: Context) {
                                 "main=$spatialVideoMainPhysicalCameraId ultraWide=${camera.id} reason=$reason"
                         )
                         runCatching { camera.close() }
-                        failSpatialVideoStandby(reason)
+                        handleUltraWideStandbyPreviewFailure(reason)
                     }
 
                     override fun onError(camera: CameraDevice, error: Int) {
@@ -10033,7 +10256,7 @@ class Camera2Controller(private val context: Context) {
                                 "error=$error reason=$reason"
                         )
                         runCatching { camera.close() }
-                        failSpatialVideoStandby(reason)
+                        handleUltraWideStandbyPreviewFailure(reason)
                     }
 
                     override fun onClosed(camera: CameraDevice) {
@@ -10054,7 +10277,9 @@ class Camera2Controller(private val context: Context) {
                     "main=$spatialVideoMainPhysicalCameraId ultraWide=$cameraId reason=${error.message}",
                 error
             )
-            failSpatialVideoStandby("Ultra-wide Camera2 open failed: ${error.message ?: error.javaClass.simpleName}")
+            handleUltraWideStandbyPreviewFailure(
+                "Ultra-wide Camera2 open failed: ${error.message ?: error.javaClass.simpleName}"
+            )
             false
         }
     }
@@ -10129,8 +10354,8 @@ class Camera2Controller(private val context: Context) {
             return
         }
         val device = spatialVideoStandbyCameraDevice ?: return
-        if (!spatialVideoEnabled) return
-        val encoderSurface = spatialVideoRecorder.cameraInputSurface
+        if (!isUltraWideStandbyPreviewActive()) return
+        val encoderSurface = spatialVideoRecorder.cameraInputSurface.takeIf { spatialVideoEnabled }
         // Keep this preview output streaming even when its inset is hidden. The same
         // live frames are promoted to the full viewfinder when the user selects 0.5x.
         val previewSurface = spatialVideoStandbyPreviewSurface?.takeIf { it.isValid }
@@ -10310,6 +10535,22 @@ class Camera2Controller(private val context: Context) {
         spatialVideoStandbyCameraDevice = null
         runCatching { device?.close() }
         PLog.i(TAG, "Special Video standby camera closed: id=${device?.id}, reason=$reason")
+    }
+
+    private fun handleUltraWideStandbyPreviewFailure(reason: String) {
+        if (spatialVideoEnabled) {
+            failSpatialVideoStandby(reason)
+        } else if (normalVideoUltraWideInstantSwitchActive) {
+            PLog.e(TAG, "Normal Video ultra-wide standby preview unavailable: $reason")
+            clearNormalVideoUltraWideInstantSwitchRuntime(reason, reopenSelectedCamera = false)
+            onCameraError?.invoke(
+                -1,
+                "Instant ultra-wide switching is unavailable on this camera session: $reason",
+                false,
+            )
+        } else {
+            stopSpatialVideoStandbyCamera(reason)
+        }
     }
 
     private fun failSpatialVideoStandby(reason: String) {
