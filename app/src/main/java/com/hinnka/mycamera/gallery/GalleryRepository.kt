@@ -112,6 +112,33 @@ class GalleryRepository(private val context: Context) {
         fallbackItems
     }
 
+    /**
+     * Returns only media saved by Photon Camera in its shared-storage album.
+     * This deliberately has no all-media fallback: unrelated device photos must never
+     * leak into Photon's in-app gallery.
+     */
+    suspend fun getPhotonCameraPhotos(): List<MediaData> = withContext(Dispatchers.IO) {
+        val relativePathSelection = "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+        val relativePathArgs = arrayOf("DCIM/PhotonCamera/%")
+        val imageItems = runCatching {
+            querySystemImages(selection = relativePathSelection, selectionArgs = relativePathArgs)
+        }.onFailure {
+            PLog.e(TAG, "Failed to query Photon Camera shared-storage images", it)
+        }.getOrDefault(emptyList())
+        val videoItems = runCatching {
+            querySystemVideos(selection = relativePathSelection, selectionArgs = relativePathArgs)
+        }.onFailure {
+            PLog.e(TAG, "Failed to query Photon Camera shared-storage videos", it)
+        }.getOrDefault(emptyList())
+
+        (imageItems + videoItems).sortedByDescending { it.dateAdded }.also { results ->
+            PLog.d(
+                TAG,
+                "Photon Camera shared album query: images=${imageItems.size}, videos=${videoItems.size}, total=${results.size}"
+            )
+        }
+    }
+
     suspend fun getSystemMediaByUri(uri: Uri): MediaData? = withContext(Dispatchers.IO) {
         when {
             uri.isMediaStoreImageUri() -> querySystemImage(uri)
@@ -216,7 +243,12 @@ class GalleryRepository(private val context: Context) {
             .values.sortedByDescending { it.dateAdded }.drop(offset).take(limit)
     }
 
-    private suspend fun querySystemImages(offset: Int = 0, limit: Int? = null): List<MediaData> {
+    private suspend fun querySystemImages(
+        offset: Int = 0,
+        limit: Int? = null,
+        selection: String? = null,
+        selectionArgs: Array<String>? = null
+    ): List<MediaData> {
         val items = mutableListOf<MediaData>()
         val projection = arrayOf(
             MediaStore.Images.Media._ID,
@@ -228,7 +260,7 @@ class GalleryRepository(private val context: Context) {
             MediaStore.Images.Media.HEIGHT,
             MediaStore.Images.Media.MIME_TYPE
         )
-        val cursor = if (limit != null || offset > 0) {
+        val cursor = if (limit != null || offset > 0 || selection != null) {
             val queryArgs = android.os.Bundle().apply {
                 putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
                 limit?.let { putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, it) }
@@ -236,14 +268,20 @@ class GalleryRepository(private val context: Context) {
                     android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
                     "${MediaStore.Images.Media.DATE_ADDED} DESC"
                 )
+                selection?.let {
+                    putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, it)
+                }
+                selectionArgs?.let {
+                    putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, it)
+                }
             }
             context.contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, queryArgs, null)
         } else {
             context.contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 projection,
-                null,
-                null,
+                selection,
+                selectionArgs,
                 "${MediaStore.Images.Media.DATE_ADDED} DESC"
             )
         }
@@ -295,7 +333,12 @@ class GalleryRepository(private val context: Context) {
         return items
     }
 
-    private suspend fun querySystemVideos(offset: Int = 0, limit: Int? = null): List<MediaData> {
+    private suspend fun querySystemVideos(
+        offset: Int = 0,
+        limit: Int? = null,
+        selection: String? = null,
+        selectionArgs: Array<String>? = null
+    ): List<MediaData> {
         val items = mutableListOf<MediaData>()
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
@@ -309,7 +352,7 @@ class GalleryRepository(private val context: Context) {
             MediaStore.Video.Media.MIME_TYPE,
             MediaStore.Video.Media.DURATION
         )
-        val cursor = if (limit != null || offset > 0) {
+        val cursor = if (limit != null || offset > 0 || selection != null) {
             val queryArgs = android.os.Bundle().apply {
                 putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
                 limit?.let { putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, it) }
@@ -317,14 +360,20 @@ class GalleryRepository(private val context: Context) {
                     android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
                     "${MediaStore.Video.Media.DATE_ADDED} DESC"
                 )
+                selection?.let {
+                    putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, it)
+                }
+                selectionArgs?.let {
+                    putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, it)
+                }
             }
             context.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, projection, queryArgs, null)
         } else {
             context.contentResolver.query(
                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                 projection,
-                null,
-                null,
+                selection,
+                selectionArgs,
                 "${MediaStore.Video.Media.DATE_ADDED} DESC"
             )
         }
