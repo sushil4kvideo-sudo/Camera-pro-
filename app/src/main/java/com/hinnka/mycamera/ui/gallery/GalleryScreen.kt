@@ -81,7 +81,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.recyclerview.widget.DiffUtil
 import android.os.Parcelable
-import kotlin.math.abs
 import com.hinnka.mycamera.ui.icons.AppIcons
 
 /**
@@ -724,7 +723,7 @@ private fun GalleryRecyclerGrid(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT
                     )
-                    layoutManager = StaggeredGridLayoutManager(3, RecyclerView.VERTICAL).apply {
+                    layoutManager = StaggeredGridLayoutManager(4, RecyclerView.VERTICAL).apply {
                         gapStrategy = StaggeredGridLayoutManager.GAP_HANDLING_MOVE_ITEMS_BETWEEN_SPANS
                         // Restore state for this specific tab
                         currentScrollState?.let { onRestoreInstanceState(it) }
@@ -768,7 +767,7 @@ private fun GalleryRecyclerGrid(
             update = { container ->
                 val recyclerView = container.getChildAt(0) as RecyclerView
                 val fastScroller = container.getChildAt(1) as GalleryFastScrollerView
-                val spanCount = 3 // Keep 3 columns as requested
+                val spanCount = 4 // Keep four equal square columns in the gallery
                 val layoutManager = recyclerView.layoutManager as? StaggeredGridLayoutManager
                 if (layoutManager != null && layoutManager.spanCount != spanCount) {
                     layoutManager.spanCount = spanCount
@@ -1158,7 +1157,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-        params.isFullSpan = position >= entries.size || entries[position].isFullSpan()
+        params.isFullSpan = position >= entries.size || entries[position] is GalleryGridEntry.Header
         holder.itemView.layoutParams = params
 
         if (position >= entries.size) {
@@ -1229,10 +1228,6 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
         }
         super.onViewRecycled(holder)
     }
-
-    private fun GalleryGridEntry.isFullSpan(): Boolean =
-        this is GalleryGridEntry.Header ||
-                (this is GalleryGridEntry.Photo && photo.shouldUseFullLineSpan())
 
     private class HeaderHolder(view: View) : RecyclerView.ViewHolder(view) {
         private val titleView = view.findViewById<TextView>(R.id.gallery_header_title)
@@ -1316,13 +1311,6 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
     }
 }
 
-private fun MediaData.shouldUseFullLineSpan(): Boolean {
-    if (!isImage) return false
-    val width = width.takeIf { it > 0 } ?: return false
-    val height = height.takeIf { it > 0 } ?: return false
-    return width.toFloat() / height.toFloat() >= 2.2f
-}
-
 private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
     private val contentLayer: FrameLayout
     private val imageView: ImageView
@@ -1335,7 +1323,6 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
     private val rawBadge: TextView
     private val importedBadge: TextView
     private val relatedBadge: View
-    private var aspectRatio: Float = 1f
     private var boundPhotoId: String? = null
     private val processingShimmer = ProcessingPhotoShimmerView(context)
 
@@ -1378,7 +1365,6 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
         onLongClick: () -> Unit
     ) {
         boundPhotoId = photo.id
-        aspectRatio = photo.galleryAspectRatio(isLandscape)
         imageView.dispose()
         imageView.setImageDrawable(null)
         selectionOverlay.visibility = if (isSelectionMode && isSelected) VISIBLE else GONE
@@ -1421,11 +1407,6 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
 
     fun bindThumbnail(photoId: String, bitmap: Bitmap?) {
         if (boundPhotoId != photoId || bitmap == null || bitmap.isRecycled) return
-        val bitmapAspectRatio = bitmap.galleryBitmapAspectRatio()
-        if (abs(aspectRatio - bitmapAspectRatio) > 0.01f) {
-            aspectRatio = bitmapAspectRatio
-            requestLayout()
-        }
         imageView.setImageBitmap(bitmap)
     }
 
@@ -1457,7 +1438,8 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec).coerceAtLeast(1)
-        val height = (width / aspectRatio.coerceAtLeast(0.1f)).toInt().coerceAtLeast(1)
+        // Fixed 1:1 cells: source photo/video aspect ratios are cropped by centerCrop.
+        val height = width
 
         setMeasuredDimension(width, height)
 
@@ -1502,16 +1484,6 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
     }
 }
 
-private fun Bitmap.galleryBitmapAspectRatio(): Float {
-    val resolvedWidth = width.takeIf { it > 0 } ?: return 1f
-    val resolvedHeight = height.takeIf { it > 0 } ?: return 1f
-    return if (OrientationObserver.isLandscape) {
-        resolvedHeight.toFloat() / resolvedWidth.toFloat()
-    } else {
-        resolvedWidth.toFloat() / resolvedHeight.toFloat()
-    }
-}
-
 private fun MediaData.isSystemRawImage(): Boolean {
     if (!isImage) return false
     if (mimeType?.let { type ->
@@ -1529,28 +1501,3 @@ private fun MediaData.isSystemRawImage(): Boolean {
         }
 }
 
-private fun MediaData.galleryAspectRatio(isLandscape: Boolean): Float {
-    val rawWidth = if (isVideo) {
-        width
-    } else {
-        width
-    }
-    val rawHeight = if (isVideo) {
-        height
-    } else {
-        height
-    }
-    val rotationDegrees = if (isVideo) metadata?.rotationDegrees ?: 0 else 0
-    val shouldSwapDimensions = rotationDegrees == 90 || rotationDegrees == 270
-    val resolvedWidth = if (shouldSwapDimensions) rawHeight else rawWidth
-    val resolvedHeight = if (shouldSwapDimensions) rawWidth else rawHeight
-    return if (resolvedWidth > 0 && resolvedHeight > 0) {
-        if (isLandscape) {
-            resolvedHeight.toFloat() / resolvedWidth.toFloat()
-        } else {
-            resolvedWidth.toFloat() / resolvedHeight.toFloat()
-        }
-    } else {
-        1f
-    }
-}
