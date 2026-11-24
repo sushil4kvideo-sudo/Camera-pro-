@@ -3132,7 +3132,7 @@ private fun VideoDetailPlayer(
                 modifier = Modifier.fillMaxSize()
             )
 
-            if (showWideFeed || showTelephotoFeed) {
+            if (hasSpatialUltraWide || hasSpatialTelephoto) {
                 SpatialVideoZoomControl(
                     zoomRatio = spatialZoomRatio,
                     onZoomChange = onSpatialZoomChange,
