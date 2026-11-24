@@ -50,6 +50,22 @@ class PortraitBokehGl(private val tag: String) {
         return outputTextureId
     }
 
+    /** Recreate GL names after GLSurfaceView loses its EGL context; CPU mask is retained. */
+    fun onContextLost() {
+        programId = 0
+        maskTextureId = 0
+        outputTextureId = 0
+        outputFramebufferId = 0
+        outputWidth = 0
+        outputHeight = 0
+        appliedGeneration = -1L
+    }
+
+    /** Apply queued mask bytes/deletion while the owning GL context is current. */
+    fun applyPendingUpdates() {
+        applyPendingMask()
+    }
+
     /** Render directly into the currently bound/default target framebuffer. */
     fun drawToFramebuffer(
         sourceTextureId: Int,
