@@ -902,6 +902,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun attachCameraGLSurfaceView(view: CameraGLSurfaceView?) {
+        glSurfaceView = view
+        if (view == null) return
+        view.setPortraitVideoEnabled(_videoPortraitEnabled.value)
+        latestVideoPortraitMask?.let { mask ->
+            view.setPortraitMask(mask.width, mask.height, mask.data)
+        }
+    }
+
     fun setVideoPortraitEnabled(enabled: Boolean) {
         if (enabled && state.value.captureMode != CaptureMode.VIDEO) return
         if (_videoPortraitEnabled.value == enabled) return
@@ -914,6 +923,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             portraitVideoSegmentationJob?.cancel()
             portraitVideoSegmentationJob = null
+            latestVideoPortraitMask = null
             glSurfaceView?.setPortraitMask(0, 0, null)
         }
     }
@@ -945,6 +955,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
 
                 if (mask != null && _videoPortraitEnabled.value) {
+                    latestVideoPortraitMask = mask
                     preview.setPortraitMask(mask.width, mask.height, mask.data)
                     cameraController.updateVideoPortraitMask(mask.width, mask.height, mask.data)
                 }
@@ -2069,6 +2080,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _videoPortraitEnabled = MutableStateFlow(false)
     val videoPortraitEnabled = _videoPortraitEnabled.asStateFlow()
     private var portraitVideoSegmentationJob: Job? = null
+    @Volatile private var latestVideoPortraitMask: PortraitSubjectMask? = null
 
     var glSurfaceView by mutableStateOf<CameraGLSurfaceView?>(null)
     var isEyeFocusBusy by mutableStateOf(false)
