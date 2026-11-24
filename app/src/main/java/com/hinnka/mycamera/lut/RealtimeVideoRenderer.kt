@@ -686,7 +686,8 @@ class RealtimeVideoRenderer(
             watermarkProgramId = GlUtils.linkProgram(vertexShader, fragmentShader)
             if (watermarkProgramId == 0) return
 
-            badge = MediaWatermark.createOverlayBitmap(label)
+            val overlayBitmap = MediaWatermark.createOverlayBitmap(label)
+            badge = overlayBitmap
             val textures = IntArray(1)
             GLES30.glGenTextures(1, textures, 0)
             watermarkTextureId = textures[0]
@@ -697,7 +698,7 @@ class RealtimeVideoRenderer(
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
-            GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, badge, 0)
+            GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, overlayBitmap, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         } catch (_: Exception) {
             PLog.w(TAG, "Watermark overlay unavailable; continuing video without watermark")
