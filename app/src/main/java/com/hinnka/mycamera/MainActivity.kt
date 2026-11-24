@@ -816,8 +816,14 @@ fun NavigationHost(
                 GalleryScreen(
                     viewModel = galleryViewModel,
                     onBack = handleGalleryBack,
-                    onPhotoClick = { tab, index ->
-                        navController.navigate(Routes.photoDetail(tab, index))
+                    onPhotoClick = { tab, index, photoId ->
+                        navController.navigate(
+                            Routes.photoDetail(
+                                tab = tab,
+                                index = index,
+                                photoId = photoId
+                            )
+                        )
                     },
                     onNavigateToEdit = { photoId ->
                         if (photoId != null) {
