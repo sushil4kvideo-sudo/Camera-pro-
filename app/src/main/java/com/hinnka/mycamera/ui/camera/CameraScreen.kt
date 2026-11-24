@@ -248,6 +248,8 @@ fun CameraScreen(
     }
     var dualCaptureEnabled by remember { mutableStateOf(false) }
     val spatialVideoEnabled by viewModel.spatialVideoEnabled.collectAsState()
+    val normalVideoUltraWideInstantSwitchActive by
+        viewModel.normalVideoUltraWideInstantSwitchActive.collectAsState()
     val spatialVideoVirtualTelephotoEnabled by viewModel.spatialVideoVirtualTelephotoEnabled.collectAsState()
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
@@ -1435,7 +1437,9 @@ fun CameraScreen(
                     // secondary TextureView is promoted to full screen for 0.5x. Keep GL
                     // calibration bound to that real primary sensor instead of changing its
                     // camera identity every time the displayed lens is switched.
-                    val previewCameraInfo = if (spatialVideoEnabled) {
+                    val previewCameraInfo = if (
+                        spatialVideoEnabled || normalVideoUltraWideInstantSwitchActive
+                    ) {
                         state.availableCameras.asSequence()
                             .filter {
                                 it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
@@ -1573,7 +1577,7 @@ fun CameraScreen(
 
                     if (
                         state.captureMode == CaptureMode.VIDEO &&
-                        spatialVideoEnabled
+                        (spatialVideoEnabled || normalVideoUltraWideInstantSwitchActive)
                     ) {
                         val specialPreviewShape = RoundedCornerShape(12.dp)
                         val selectedZoomRatio = activeCameraInfo?.intrinsicZoomRatio ?: 1f
@@ -1582,7 +1586,8 @@ fun CameraScreen(
                                 selectedZoomRatio.isFinite() &&
                                 selectedZoomRatio in 0.2f..0.85f
                         val showUltraWideInset =
-                            spatialVideoShowUltraWidePreview && !isSpatialVideoUltraWideSelected
+                            spatialVideoEnabled && spatialVideoShowUltraWidePreview &&
+                                !isSpatialVideoUltraWideSelected
                         val showUltraWideFullScreen = isSpatialVideoUltraWideSelected
                         val previewModifier = when {
                             showUltraWideFullScreen -> Modifier.fillMaxSize()
