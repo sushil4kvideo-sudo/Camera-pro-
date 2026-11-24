@@ -123,7 +123,7 @@ val downloadPortraitSegmentationModel by tasks.registering {
     doLast {
         val modelFile = portraitSegmentationModel.asFile
         val expectedSha256 = "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0"
-        fun sha256(file: java.io.File): String =
+        fun sha256(file: File): String =
             MessageDigest.getInstance("SHA-256")
                 .digest(file.readBytes())
                 .joinToString("") { byte: Byte -> "%02x".format(byte) }
