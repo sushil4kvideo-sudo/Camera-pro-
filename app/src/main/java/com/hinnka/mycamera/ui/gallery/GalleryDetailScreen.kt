@@ -2724,7 +2724,7 @@ private fun VideoDetailPlayer(
 
         isWidePlayerReady = false
         isWideFeedSynced = false
-        runCatching {
+        try {
             secondary.setMediaItem(MediaItem.fromUri(Uri.fromFile(ultraWideFile)))
             secondary.prepare()
             var attempts = 0
@@ -2742,7 +2742,9 @@ private fun VideoDetailPlayer(
             } else {
                 PLog.w("VideoDetailPlayer", "Ultra-wide companion did not become ready in time.")
             }
-        }.onFailure { error ->
+        } catch (error: java.util.concurrent.CancellationException) {
+            throw error
+        } catch (error: Exception) {
             PLog.w("VideoDetailPlayer", "Unable to prepare ultra-wide companion.", error)
             isWidePlayerReady = false
         }
@@ -2763,7 +2765,7 @@ private fun VideoDetailPlayer(
 
         isTelephotoPlayerReady = false
         isTelephotoFeedSynced = false
-        runCatching {
+        try {
             telephoto.setMediaItem(MediaItem.fromUri(Uri.fromFile(telephotoFile)))
             telephoto.prepare()
             var attempts = 0
@@ -2781,7 +2783,9 @@ private fun VideoDetailPlayer(
             } else {
                 PLog.w("VideoDetailPlayer", "3.5x telephoto companion did not become ready in time.")
             }
-        }.onFailure { error ->
+        } catch (error: java.util.concurrent.CancellationException) {
+            throw error
+        } catch (error: Exception) {
             PLog.w("VideoDetailPlayer", "Unable to prepare 3.5x telephoto companion.", error)
             isTelephotoPlayerReady = false
         }
@@ -2905,13 +2909,13 @@ private fun VideoDetailPlayer(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) {
                     primary.pause()
-                    primary.seekTo(0L)
                     listOfNotNull(wideExoPlayer, telephotoExoPlayer).forEach { companion ->
                         companion.pause()
                         if (companion.mediaItemCount > 0) {
                             companion.seekTo(0L)
                         }
                     }
+                    primary.seekTo(0L)
                     PLog.i("VideoDetailPlayer", "Gallery Special Video reached EOS; loaded timelines rewound for replay.")
                 }
             }
