@@ -70,7 +70,6 @@ fun FloatingVideoSettingsPanel(
     if (!isOpen) return
 
     val resolutionOptions = videoCapabilities.availableResolutions
-        .filter { it != VideoResolutionPreset.HD_720P }
     val fpsOptions = videoCapabilities.availableFpsByResolution[videoConfig.resolution]
         ?.takeIf { it.isNotEmpty() }
         ?: videoCapabilities.availableFps
