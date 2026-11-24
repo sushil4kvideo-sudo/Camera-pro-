@@ -276,6 +276,24 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     /**
      * 设置 LUT 是否启用
      */
+
+    /** Toggle the live preview portrait bokeh without rebuilding the Camera2 session. */
+    fun setPortraitVideoEnabled(enabled: Boolean) {
+        queueEvent {
+            renderer.setPortraitVideoEnabled(enabled)
+            requestRender()
+        }
+    }
+
+    /** The segmentation thread only copies mask bytes; texture upload is deferred to the GL thread. */
+    fun setPortraitMask(width: Int, height: Int, data: ByteArray?) {
+        val safeData = data?.copyOf()
+        queueEvent {
+            renderer.setPortraitMask(width, height, safeData)
+            requestRender()
+        }
+    }
+
     fun setQuickMenuGlassEffect(
         enabled: Boolean,
         leftPx: Float = 0f,
@@ -448,6 +466,15 @@ class CameraGLSurfaceView @JvmOverloads constructor(
                 }
             }
         }
+    }
+
+    fun captureOriginalPreviewFrame(maxLongEdge: Int, callback: (Bitmap?) -> Unit) {
+        capturePreviewFrameInternal(
+            maxLongEdge = maxLongEdge.coerceAtLeast(64),
+            source = PreviewCaptureSource.Original,
+            requestRenderImmediately = true,
+            callback = callback
+        )
     }
 
     fun captureOriginalPreviewFrame(callback: (Bitmap?) -> Unit) {
