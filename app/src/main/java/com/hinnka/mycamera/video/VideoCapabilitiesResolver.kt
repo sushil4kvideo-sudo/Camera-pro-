@@ -106,7 +106,7 @@ object VideoCapabilitiesResolver {
         }
 
         val availableResolutions = VideoResolutionPreset.entries
-            .filter { it != VideoResolutionPreset.HD_720P }
+            .filter { it != VideoResolutionPreset.QHD_1440P }
             .filter { preset ->
                 (preset != VideoResolutionPreset.THREE_K || supportsThreeKEncoder) &&
                     (preset != VideoResolutionPreset.QHD_1440P || supportsQhdEncoder) &&
