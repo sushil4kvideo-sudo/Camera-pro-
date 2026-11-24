@@ -3141,6 +3141,18 @@ class Camera2Controller(private val context: Context) {
                 PLog.d(TAG, "Camera opened/reused: ${camera.id}")
                 cameraDeviceLifecycle = CameraDeviceLifecycle.OPEN
                 cameraDevice = camera
+                if (normalVideoUltraWideInstantSwitchActive &&
+                    normalVideoPrimaryCameraId != null &&
+                    camera.id != normalVideoPrimaryCameraId
+                ) {
+                    PLog.i(
+                        TAG,
+                        "Normal Video instant switch requested while CameraDevice was opening; " +
+                            "reopening the stable primary: opened=${camera.id}, expected=$normalVideoPrimaryCameraId"
+                    )
+                    openCamera(surfaceTexture, preserveVideoRecording = preserveVideoRecording)
+                    return
+                }
                 if (dualCaptureEnabled && captureMode == CaptureMode.VIDEO) {
                     startDualCaptureCamera()
                 }
@@ -8964,9 +8976,6 @@ class Camera2Controller(private val context: Context) {
         if (mode == CaptureMode.VIDEO) {
             livePhotoRecorder.stopRecording()
             refreshVideoCapabilities()
-            if (normalVideoUltraWideInstantSwitchEnabled && !spatialVideoEnabled) {
-                activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = true)
-            }
         } else {
             stopVideoRecordingTicker()
             _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
@@ -9853,7 +9862,9 @@ class Camera2Controller(private val context: Context) {
             PLog.i(TAG, "Normal Video instant-switch setting will apply after recording finishes")
             return
         }
-        activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = true)
+        activateNormalVideoUltraWideInstantSwitch(
+            reopenPrimaryIfNeeded = cameraDeviceLifecycle != CameraDeviceLifecycle.OPENING
+        )
     }
 
     fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) {
