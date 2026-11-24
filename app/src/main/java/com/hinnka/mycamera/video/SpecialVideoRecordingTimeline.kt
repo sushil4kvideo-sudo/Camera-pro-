@@ -14,6 +14,7 @@ internal class SpecialVideoRecordingTimeline {
     enum class StreamId(val logName: String) {
         MAIN("1x-main"),
         ULTRA_WIDE("0.5x-ultraWide"),
+        TELEPHOTO("3x-virtual-telephoto"),
         SECONDARY("secondary"),
     }
 
@@ -25,14 +26,19 @@ internal class SpecialVideoRecordingTimeline {
 
     private var firstMainFramePtsUs: Long = UNSET
     private var firstSecondaryFramePtsUs: Long = UNSET
+    private var firstTelephotoFramePtsUs: Long = UNSET
+    private var includeTelephoto: Boolean = false
     private var sharedCameraTimestampOffsetNs: Long = UNSET
 
     private var mainEndReported = false
     private var ultraWideEndReported = false
     private var mainVideoEndPtsUs: Long? = null
     private var ultraWideVideoEndPtsUs: Long? = null
+    private var telephotoEndReported = false
+    private var telephotoVideoEndPtsUs: Long? = null
     private var mainTailOverflowed = false
     private var ultraWideTailOverflowed = false
+    private var telephotoTailOverflowed = false
     private var commonVideoEnd = CompletableDeferred<Long?>()
     private var cameraDrainCompleted = CompletableDeferred<Unit>()
 
@@ -47,15 +53,24 @@ internal class SpecialVideoRecordingTimeline {
                 if (firstSecondaryFramePtsUs != UNSET) return
                 firstSecondaryFramePtsUs = ptsUs
             }
+            StreamId.TELEPHOTO -> {
+                if (firstTelephotoFramePtsUs != UNSET) return
+                firstTelephotoFramePtsUs = ptsUs
+            }
         }
 
         PLog.i(TAG, "First accepted video frame: stream=${streamId.logName}, ptsUs=$ptsUs")
 
         if (originUs == UNSET &&
             firstMainFramePtsUs != UNSET &&
-            firstSecondaryFramePtsUs != UNSET
+            firstSecondaryFramePtsUs != UNSET &&
+            (!includeTelephoto || firstTelephotoFramePtsUs != UNSET)
         ) {
-            originUs = maxOf(firstMainFramePtsUs, firstSecondaryFramePtsUs)
+            originUs = if (includeTelephoto) {
+                maxOf(firstMainFramePtsUs, firstSecondaryFramePtsUs, firstTelephotoFramePtsUs)
+            } else {
+                maxOf(firstMainFramePtsUs, firstSecondaryFramePtsUs)
+            }
             PLog.i(
                 TAG,
                 "Shared video origin selected: mainFirstFramePtsUs=$firstMainFramePtsUs, " +
@@ -115,6 +130,12 @@ internal class SpecialVideoRecordingTimeline {
                 ultraWideVideoEndPtsUs = videoEndPtsUs
                 ultraWideTailOverflowed = tailOverflowed
             }
+            StreamId.TELEPHOTO -> {
+                if (telephotoEndReported) return
+                telephotoEndReported = true
+                telephotoVideoEndPtsUs = videoEndPtsUs
+                telephotoTailOverflowed = tailOverflowed
+            }
             StreamId.SECONDARY -> return
         }
 
@@ -124,32 +145,36 @@ internal class SpecialVideoRecordingTimeline {
                 "tailOverflowed=$tailOverflowed"
         )
 
-        if (!mainEndReported || !ultraWideEndReported) return
+        if (!mainEndReported || !ultraWideEndReported || (includeTelephoto && !telephotoEndReported)) return
 
         val mainEnd = mainVideoEndPtsUs
         val ultraWideEnd = ultraWideVideoEndPtsUs
-        if (mainEnd == null || ultraWideEnd == null) {
+        val telephotoEnd = telephotoVideoEndPtsUs
+        if (mainEnd == null || ultraWideEnd == null || (includeTelephoto && telephotoEnd == null)) {
             PLog.e(
                 TAG,
                 "Cannot reconcile Special Video: missing video end PTS " +
-                    "(1x=$mainEnd, 0.5x=$ultraWideEnd); keeping untrimmed outputs"
+                    "(1x=$mainEnd, 0.5x=$ultraWideEnd, 3x=$telephotoEnd); keeping untrimmed outputs"
             )
             commonVideoEnd.complete(null)
             return
         }
 
-        val differenceUs = kotlin.math.abs(mainEnd - ultraWideEnd)
+        val endPoints = if (includeTelephoto) listOf(mainEnd, ultraWideEnd, requireNotNull(telephotoEnd))
+            else listOf(mainEnd, ultraWideEnd)
+        val differenceUs = endPoints.maxOrNull()!! - endPoints.minOrNull()!!
         PLog.i(
             TAG,
             "Final Special Video encoded video-track ends: 1x=$mainEnd us, " +
-                "0.5x=$ultraWideEnd us, delta=${differenceUs}us"
+                "0.5x=$ultraWideEnd us, 3x=$telephotoEnd us, delta=${differenceUs}us"
         )
 
-        if (mainTailOverflowed || ultraWideTailOverflowed) {
+        if (mainTailOverflowed || ultraWideTailOverflowed || (includeTelephoto && telephotoTailOverflowed)) {
             PLog.e(
                 TAG,
                 "Special Video tail buffer limit reached; refusing automatic trim " +
-                    "(1xOverflow=$mainTailOverflowed, 0.5xOverflow=$ultraWideTailOverflowed)"
+                    "(1xOverflow=$mainTailOverflowed, 0.5xOverflow=$ultraWideTailOverflowed, " +
+                    "3xOverflow=$telephotoTailOverflowed)"
             )
             commonVideoEnd.complete(null)
             return
@@ -159,18 +184,18 @@ internal class SpecialVideoRecordingTimeline {
             PLog.e(
                 TAG,
                 "Special Video video-track mismatch exceeds safety limit; refusing trim. " +
-                    "1xEndPtsUs=$mainEnd, 0.5xEndPtsUs=$ultraWideEnd, " +
+                    "1xEndPtsUs=$mainEnd, 0.5xEndPtsUs=$ultraWideEnd, 3xEndPtsUs=$telephotoEnd, " +
                     "deltaUs=$differenceUs, limitUs=$MAX_SAFE_TRIM_DIFFERENCE_US"
             )
             commonVideoEnd.complete(null)
             return
         }
 
-        val endUs = minOf(mainEnd, ultraWideEnd)
+        val endUs = endPoints.minOrNull()!!
         PLog.i(
             TAG,
             "Common Special Video end selected: commonEndUs=$endUs, " +
-                "mainEndUs=$mainEnd, ultraWideEndUs=$ultraWideEnd"
+                "mainEndUs=$mainEnd, ultraWideEndUs=$ultraWideEnd, telephotoEndUs=$telephotoEnd"
         )
         commonVideoEnd.complete(endUs)
     }
@@ -186,18 +211,23 @@ internal class SpecialVideoRecordingTimeline {
     }
 
     @Synchronized
-    fun reset() {
+    fun reset(includeTelephoto: Boolean = false) {
         originUs = UNSET
         stopTimeUs = UNSET
         firstMainFramePtsUs = UNSET
         firstSecondaryFramePtsUs = UNSET
+        firstTelephotoFramePtsUs = UNSET
+        this.includeTelephoto = includeTelephoto
         sharedCameraTimestampOffsetNs = UNSET
         mainEndReported = false
         ultraWideEndReported = false
+        telephotoEndReported = false
         mainVideoEndPtsUs = null
         ultraWideVideoEndPtsUs = null
+        telephotoVideoEndPtsUs = null
         mainTailOverflowed = false
         ultraWideTailOverflowed = false
+        telephotoTailOverflowed = false
         commonVideoEnd = CompletableDeferred()
         cameraDrainCompleted = CompletableDeferred()
     }

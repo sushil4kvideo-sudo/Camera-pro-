@@ -144,6 +144,7 @@ class VideoRecorder(
     private var preparedEncoderColorConfig: VideoEncoderColorConfig? = null
     private var requestedOutputSize = Size(1080, 1920)
     private var requestedCameraInputSize = Size(1920, 1080)
+    private var requestedCameraInputZoomRatio: Float = 1f
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
     private var requestedEnhancedStabilization = false
     private var requestedEnhancedStabilizationStrength = DEFAULT_VIDEO_STABILIZATION_STRENGTH
@@ -246,6 +247,7 @@ class VideoRecorder(
     fun startRecording(
         size: Size,
         cameraInputSize: Size = size,
+        cameraInputZoomRatio: Float = 1f,
         fps: Int,
         bitrateMbps: Int,
         codecMime: String,
@@ -290,6 +292,7 @@ class VideoRecorder(
         requestedOrientationHintDegrees = normalizeOrientationHint(orientationHintDegrees)
         requestedOutputSize = Size(size.width.align16(), size.height.align16())
         requestedCameraInputSize = cameraInputSize
+        requestedCameraInputZoomRatio = cameraInputZoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
         requestedDualCaptureInputSize = dualCaptureInputSize
         requestedDualCaptureSensorOrientationDegrees = dualCaptureSensorOrientationDegrees
         requestedDualCaptureLayout = dualCaptureLayout
@@ -733,6 +736,7 @@ class VideoRecorder(
             dualCapturePositionY = requestedDualCapturePositionY,
             dualCapturePipWidthFraction = requestedDualCapturePipWidthFraction,
             encoderOrientationHintDegrees = requestedOrientationHintDegrees,
+            cameraInputZoomRatio = requestedCameraInputZoomRatio,
             portraitVideoInitiallyEnabled = requestedPortraitVideoEnabled,
         )
         renderer = realtimeRenderer

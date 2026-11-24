@@ -342,7 +342,9 @@ class Camera2Controller(private val context: Context) {
     @Volatile private var spatialVideoPrimaryReopenInProgress = false
     @Volatile private var spatialPrimaryFinishedUri: Uri? = null
     @Volatile private var spatialUltraWideFinishedFile: File? = null
+    @Volatile private var spatialTelephotoFinishedFile: File? = null
     @Volatile private var spatialVideoCompanionFile: File? = null
+    @Volatile private var spatialVideoTelephotoCompanionFile: File? = null
     private var spatialVideoStandbyCameraDevice: CameraDevice? = null
     private var spatialVideoStandbyOpeningCameraId: String? = null
     private var spatialVideoStandbySession: CameraCaptureSession? = null
@@ -518,6 +520,7 @@ class Camera2Controller(private val context: Context) {
     val realtimeStabilizationCoordinator = RealtimeStabilizationCoordinator(context)
     val videoRecorder = VideoRecorder(context, realtimeStabilizationCoordinator)
     private val spatialVideoRecorder = VideoRecorder(context, realtimeStabilizationCoordinator)
+    private val spatialVideoTelephotoRecorder = VideoRecorder(context, realtimeStabilizationCoordinator)
     var onEnhancedStabilizationUnavailable: ((EnhancedStabilizationFallback) -> Unit)? = null
     var onVideoSaved: ((Uri?) -> Unit)? = null
     private var previousVideoStabilizationMode = VideoStabilizationMode.OIS
@@ -3962,6 +3965,13 @@ class Camera2Controller(private val context: Context) {
         val spatialPreviewSurface = if (
             captureMode == CaptureMode.VIDEO && logicalSpatialOutput
         ) spatialVideoStandbyPreviewSurface?.takeIf { it.isValid } else null
+        // The virtual 3x track is another live output from the same main sensor. Its
+        // dedicated renderer applies 3x crop before encoding; the 1x request stays untouched.
+        val spatialTelephotoSurface = if (
+            captureMode == CaptureMode.VIDEO &&
+            spatialVideoEnabled &&
+            _state.value.videoRecordingState.shouldAttachCameraInput()
+        ) spatialVideoTelephotoRecorder.cameraInputSurface?.takeIf { it.isValid } else null
         val usesUltraWideDualCapture = captureMode == CaptureMode.VIDEO &&
             dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE &&
             dualCapturePhysicalCameraId != null
@@ -4014,6 +4024,7 @@ class Camera2Controller(private val context: Context) {
                 stabilizationReader?.surface?.let(::addTarget)
                 videoSurface?.let(::addTarget)
                 spatialSurface?.let(::addTarget)
+                spatialTelephotoSurface?.let(::addTarget)
                 spatialPreviewSurface?.let(::addTarget)
                 ultraWidePreviewSurface?.let(::addTarget)
                 ultraWideRecordSurface?.let(::addTarget)
@@ -4033,6 +4044,7 @@ class Camera2Controller(private val context: Context) {
             stabilizationReader?.surface?.let(surfaces::add)
             videoSurface?.let(surfaces::add)
             spatialSurface?.let(surfaces::add)
+            spatialTelephotoSurface?.let(surfaces::add)
             spatialPreviewSurface?.let(surfaces::add)
             ultraWidePreviewSurface?.let(surfaces::add)
             ultraWideRecordSurface?.let(surfaces::add)
@@ -4101,6 +4113,15 @@ class Camera2Controller(private val context: Context) {
                             val wideId = spatialVideoUltraWidePhysicalCameraId
                                 ?: throw IllegalStateException("Special Video ultra-wide physical camera is unavailable")
                             add(createOutputConfiguration(encoderSurface, physicalCameraId = wideId))
+                        }
+                        spatialTelephotoSurface?.let { telephotoSurface ->
+                            // Default physical routing keeps this output on the primary main sensor.
+                            // The 3x crop is applied by its realtime encoder renderer, not Camera2's
+                            // request-wide zoom (which would also crop the existing 1x stream).
+                            add(createOutputConfiguration(
+                                telephotoSurface,
+                                useHlg10 = videoCameraHlg10InputActive
+                            ))
                         }
                         spatialPreviewSurface?.let { previewOutput ->
                             val wideId = spatialVideoUltraWidePhysicalCameraId
@@ -4956,6 +4977,15 @@ class Camera2Controller(private val context: Context) {
                 spatialVideoRecorder.cameraInputSurface != null
             ) {
                 spatialVideoRecorder.onCameraInputStarted()
+            }
+            if (
+                _state.value.captureMode == CaptureMode.VIDEO &&
+                spatialVideoEnabled &&
+                !deferForIndependentSpecialVideo &&
+                _state.value.videoRecordingState.shouldAttachCameraInput() &&
+                spatialVideoTelephotoRecorder.cameraInputSurface != null
+            ) {
+                spatialVideoTelephotoRecorder.onCameraInputStarted()
             }
 
             _state.value = _state.value.copy(isPreviewActive = true)
@@ -9786,41 +9816,82 @@ class Camera2Controller(private val context: Context) {
     private fun finalizeSpatialVideoCompanionIfReady() {
         val primary = spatialPrimaryFinishedUri ?: return
         val ultraWide = spatialUltraWideFinishedFile ?: return
+        val telephoto = spatialTelephotoFinishedFile ?: return
         spatialPrimaryFinishedUri = null
         spatialUltraWideFinishedFile = null
-        // Both recorder callbacks have fired, so no consumer still needs this timeline.
+        spatialTelephotoFinishedFile = null
+        // All three recorder callbacks have fired, so no consumer still needs this timeline.
         // Reset it before background audio muxing to avoid a late finalizer clobbering a new take.
         specialVideoRecordingTimeline.reset()
-        if (!ultraWide.isFile || ultraWide.length() <= 0L) {
-            PLog.e(TAG, "Special Video companion missing or empty; retaining the main recording only: ${ultraWide.absolutePath}")
+        if (!ultraWide.isFile || ultraWide.length() <= 0L ||
+            !telephoto.isFile || telephoto.length() <= 0L
+        ) {
+            PLog.e(
+                TAG,
+                "Special Video companion missing or empty; retaining the main recording only: " +
+                    "0.5x=${ultraWide.absolutePath} 3x=${telephoto.absolutePath}"
+            )
             ultraWide.delete()
+            telephoto.delete()
             spatialVideoCompanionFile = null
+            spatialVideoTelephotoCompanionFile = null
             _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+            cameraHandler?.post {
+                if (cameraDevice != null && previewSurface != null) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+                if (spatialVideoEnabled &&
+                    spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                    spatialVideoStandbyCameraDevice != null
+                ) {
+                    createSpatialVideoStandbySession("Special Video sidecar finalization failed")
+                }
+            }
             return
         }
-        // Both encoder outputs have now reached finalization. Only now may the next Special
-        // Video recording reset the shared timeline and start a new paired camera session.
+        // All three encoder outputs are now finalized. Release the unpublished-file guards
+        // before allowing mode changes; the sidecar MP4s are now gallery-owned outputs.
+        spatialVideoCompanionFile = null
+        spatialVideoTelephotoCompanionFile = null
         _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+        // The telephoto output is attached to the primary Camera2 session. Recreate that
+        // session after all encoders release their Surfaces so the next preview request
+        // does not retain an invalid encoder target.
+        cameraHandler?.post {
+            if (cameraDevice != null && previewSurface != null) {
+                createPreviewSession(openGeneration = cameraOpenGeneration)
+            }
+        }
         if (spatialVideoEnabled &&
             spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
         ) {
-            // The independent 0.5x CameraDevice was stopped only after both recorders drained.
+            // The independent 0.5x CameraDevice was stopped after all three encoders drained.
             // Rebuild it now without the released encoder Surface, preserving the live preview.
             cameraHandler?.post {
                 if (spatialVideoEnabled && spatialVideoStandbyCameraDevice != null) {
-                    createSpatialVideoStandbySession("both Special Video recorders finished")
+                    createSpatialVideoStandbySession("all Special Video encoders finished")
                 }
             }
         }
         Thread({
             try {
-                val attached = SpatialVideoStore.attachPrimaryAudioTrack(context, primary, ultraWide)
-                PLog.i(TAG, "Special Video companion finalized: file=${ultraWide.name}, audioAttached=$attached")
+                val wideAudioAttached = SpatialVideoStore.attachPrimaryAudioTrack(
+                    context, primary, ultraWide, lensLabel = "0.5x"
+                )
+                val telephotoAudioAttached = SpatialVideoStore.attachPrimaryAudioTrack(
+                    context, primary, telephoto, lensLabel = "3x"
+                )
+                PLog.i(
+                    TAG,
+                    "Special Video companions finalized: wide=${ultraWide.name} audio=$wideAudioAttached, " +
+                        "telephoto=${telephoto.name} audio=$telephotoAudioAttached"
+                )
             } catch (error: Exception) {
                 PLog.e(TAG, "Special Video audio mirror finalization failed: ${ultraWide.absolutePath}", error)
             } finally {
-                if (spatialVideoCompanionFile == ultraWide) {
-                    spatialVideoCompanionFile = null
+                if (spatialVideoCompanionFile == ultraWide) spatialVideoCompanionFile = null
+                if (spatialVideoTelephotoCompanionFile == telephoto) {
+                    spatialVideoTelephotoCompanionFile = null
                 }
             }
         }, "SpatialVideoFinalize").start()
@@ -9957,19 +10028,23 @@ class Camera2Controller(private val context: Context) {
         val mainRequest = previewRequestBuilder ?: return
         val wideSession = spatialVideoStandbySession ?: return
         val wideRequest = spatialVideoStandbyRepeatingRequest ?: return
-        if (!videoRecorder.isRecording() || !spatialVideoRecorder.isRecording()) {
-            failSpatialVideoStandby("Both Special Video encoders must be prepared before camera streams start")
+        if (!videoRecorder.isRecording() ||
+            !spatialVideoRecorder.isRecording() ||
+            !spatialVideoTelephotoRecorder.isRecording()
+        ) {
+            failSpatialVideoStandby("All three Special Video encoders must be prepared before camera streams start")
             return
         }
 
         try {
-            // Both sessions have completed configuration. Both renderer inputs must accept
+            // Both sessions have completed configuration. All three renderer inputs must accept
             // their Camera2 surfaces before either session starts delivering recording frames.
             val mainInputStarted = videoRecorder.onCameraInputStarted()
             val ultraWideInputStarted = spatialVideoRecorder.onCameraInputStarted()
-            if (!mainInputStarted || !ultraWideInputStarted) {
+            val telephotoInputStarted = spatialVideoTelephotoRecorder.onCameraInputStarted()
+            if (!mainInputStarted || !ultraWideInputStarted || !telephotoInputStarted) {
                 throw IllegalStateException(
-                    "Recorder input readiness failed (main=$mainInputStarted, ultraWide=$ultraWideInputStarted)"
+                    "Recorder input readiness failed (main=$mainInputStarted, ultraWide=$ultraWideInputStarted, telephoto=$telephotoInputStarted)"
                 )
             }
             submitRepeatingPreviewRequest(mainSession, mainRequest)
@@ -10124,6 +10199,7 @@ class Camera2Controller(private val context: Context) {
     private fun clearSpecialVideoRuntimeState(reason: String) {
         spatialVideoEnabled = false
         _spatialVideoEnabled.value = false
+        spatialVideoTelephotoRecorder.forceStop()
         spatialVideoMainPhysicalCameraId = null
         spatialVideoUltraWidePhysicalCameraId = null
         spatialVideoPrimaryCameraId = null
@@ -10131,6 +10207,7 @@ class Camera2Controller(private val context: Context) {
         spatialVideoStandbyInputSize = null
         spatialPrimaryFinishedUri = null
         spatialUltraWideFinishedFile = null
+        spatialTelephotoFinishedFile = null
         spatialVideoStandbyRepeatingRequest = null
         spatialVideoPrimarySessionAwaitingStandby = false
         specialVideoRecordingTimeline.reset()
@@ -10145,6 +10222,16 @@ class Camera2Controller(private val context: Context) {
             }
         }
         spatialVideoCompanionFile = null
+        spatialVideoTelephotoCompanionFile?.let { file ->
+            runCatching {
+                if (file.exists() && !file.delete()) {
+                    PLog.w(TAG, "Could not delete failed 3x Special Video companion: ${file.absolutePath}")
+                }
+            }.onFailure {
+                PLog.w(TAG, "Could not delete failed 3x Special Video companion: ${file.absolutePath}", it)
+            }
+        }
+        spatialVideoTelephotoCompanionFile = null
         activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(
             _state.value,
             _state.value.getCurrentCameraInfo()
@@ -10171,6 +10258,7 @@ class Camera2Controller(private val context: Context) {
     private fun failSpatialVideoStandby(reason: String) {
         PLog.e(TAG, "Special Video pipeline failure: $reason")
         spatialVideoRecorder.forceStop()
+        spatialVideoTelephotoRecorder.forceStop()
         videoRecorder.forceStop()
         clearSpecialVideoRuntimeState(reason)
         stopVideoRecordingTicker()
@@ -10990,7 +11078,7 @@ class Camera2Controller(private val context: Context) {
             else -> SpecialVideoRecordingTimeline.StreamId.SECONDARY
         }
         if (hasSharedRecordingTimeline) {
-            specialVideoRecordingTimeline.reset()
+            specialVideoRecordingTimeline.reset(includeTelephoto = spatialVideoEnabled)
         }
         val baseOrientationHintDegrees = resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees)
         val cameraTimestampSource = getActiveOpenCameraCharacteristics()
@@ -11234,28 +11322,46 @@ class Camera2Controller(private val context: Context) {
             val primaryUri = videoRecorder.pendingOutputUri
             val wideId = spatialVideoUltraWidePhysicalCameraId
             if (primaryUri == null || wideId == null) {
-                videoRecorder.stopRecording()
-                onCameraError?.invoke(-1, "Special Video could not prepare its companion output.", false)
+                failSpatialVideoStandby("Special Video could not prepare the 0.5x and 3x companion outputs.")
                 return
             }
             val wideFile = SpatialVideoStore.ultraWideFile(context, primaryUri)
             if (wideFile.exists() && !wideFile.delete()) {
-                videoRecorder.forceStop()
-                onCameraError?.invoke(
-                    -1,
-                    "The previous ultra-wide companion file could not be cleared.",
-                    false
-                )
+                failSpatialVideoStandby("The previous ultra-wide companion file could not be cleared.")
                 return
             }
             val wideInputSize = resolveSpatialVideoInputSize(wideId, cameraInputSize)
             if (wideInputSize == null) {
-                videoRecorder.stopRecording()
-                onCameraError?.invoke(-1, "The ultra-wide camera does not expose a compatible video stream size.", false)
+                failSpatialVideoStandby("The ultra-wide camera does not expose a compatible video stream size.")
+                return
+            }
+            // Prefer a 4K-class main-sensor input for the 3x stream even when the selected
+            // recording preset is 1080p. This preserves more real sensor detail before the
+            // live 3x crop; output encoding still follows the selected video resolution.
+            val videoAspectRatio = cameraInputSize.width.toFloat() / cameraInputSize.height.coerceAtLeast(1)
+            val telephotoInputLimit = if (videoAspectRatio >= 1f) {
+                Size(4096, (4096f / videoAspectRatio).toInt().coerceAtLeast(720))
+            } else {
+                Size((4096f * videoAspectRatio).toInt().coerceAtLeast(720), 4096)
+            }
+            val telephotoCameraId = spatialVideoMainPhysicalCameraId ?: spatialVideoPrimaryCameraId
+            val telephotoInputSize = telephotoCameraId?.let {
+                resolveSpatialVideoInputSize(it, telephotoInputLimit)
+            } ?: cameraInputSize
+            PLog.i(
+                TAG,
+                "Special Video 3x sensor input selected: camera=$telephotoCameraId " +
+                    "size=${telephotoInputSize.width}x${telephotoInputSize.height}, " +
+                    "recordingInput=${cameraInputSize.width}x${cameraInputSize.height}"
+            )
+            val telephotoFile = SpatialVideoStore.telephotoFile(context, primaryUri)
+            if (telephotoFile.exists() && !telephotoFile.delete()) {
+                failSpatialVideoStandby("The previous 3x telephoto companion file could not be cleared.")
                 return
             }
             spatialPrimaryFinishedUri = null
             spatialUltraWideFinishedFile = null
+            spatialTelephotoFinishedFile = null
             val wideCharacteristics = runCatching {
                 cameraManager.getCameraCharacteristics(wideId)
             }.getOrNull()
@@ -11335,18 +11441,85 @@ class Camera2Controller(private val context: Context) {
             if (!wideStarted) {
                 wideFile.delete()
                 spatialVideoCompanionFile = null
-                videoRecorder.forceStop()
-                onCameraError?.invoke(-1, "Special Video could not start the ultra-wide encoder.", false)
+                spatialVideoRecorder.forceStop()
+                failSpatialVideoStandby("Special Video could not start the ultra-wide encoder.")
                 return
             }
+
+            spatialVideoTelephotoCompanionFile = telephotoFile
+            val telephotoStarted = spatialVideoTelephotoRecorder.startRecording(
+                size = outputSize,
+                cameraInputSize = telephotoInputSize,
+                cameraInputZoomRatio = 3f,
+                fps = _state.value.videoConfig.fps.fps,
+                bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
+                codecMime = _state.value.videoConfig.codec.mimeType,
+                fallbackCodecMimes = fallbackCodecMimes,
+                fallbackOutputSizes = fallbackOutputSizes,
+                colorConfig = VideoEncoderColorRequest(
+                    logProfile = logProfile,
+                    hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f
+                ),
+                cameraInputIsHlg10 = cameraInputIsHlg10,
+                colorLayers = colorLayers,
+                cameraTimestampSource = cameraTimestampSource,
+                sensorOrientationDegrees = _state.value.getCurrentCameraInfo()?.sensorOrientation
+                    ?: cachedSensorOrientation,
+                orientationHintDegrees = baseOrientationHintDegrees,
+                flipEncodedFrame = shouldFlipEncodedFrame,
+                enhancedStabilization = false,
+                recordingPath = _state.value.videoConfig.recordingPath,
+                recordingTreeUri = _state.value.videoConfig.recordingTreeUri,
+                privateOutputFile = telephotoFile,
+                recordAudio = false,
+                sharedTimelineOriginProvider = specialVideoRecordingTimeline::currentOriginUs,
+                sharedTimelineStopTimeProvider = specialVideoRecordingTimeline::currentStopTimeUs,
+                onFirstVideoFrame = { ptsUs ->
+                    specialVideoRecordingTimeline.reportFirstFrame(
+                        SpecialVideoRecordingTimeline.StreamId.TELEPHOTO,
+                        ptsUs,
+                    )
+                },
+                sharedTimelineVideoEndReporter = { endPtsUs, tailOverflowed ->
+                    specialVideoRecordingTimeline.reportVideoEnd(
+                        SpecialVideoRecordingTimeline.StreamId.TELEPHOTO,
+                        endPtsUs,
+                        tailOverflowed,
+                    )
+                },
+                sharedTimelineCommonEndAwaiter = specialVideoRecordingTimeline::awaitCommonVideoEndUs,
+                sharedTimelineDrainAwaiter = specialVideoRecordingTimeline::awaitCameraDrain,
+                sharedTimelineDrainCompleter = specialVideoRecordingTimeline::completeCameraDrain,
+                sharedCameraTimestampOffsetResolver = specialVideoRecordingTimeline::resolveCameraTimestampOffsetNs,
+                sharedTimelineStreamName = "3x-virtual-telephoto",
+                onError = { message ->
+                    PLog.e(TAG, "Special Video 3x telephoto recorder error: $message")
+                    cameraHandler?.post {
+                        if (spatialVideoEnabled && videoRecorder.isRecording()) {
+                            failSpatialVideoStandby("3x telephoto encoder failed: $message")
+                        } else {
+                            onCameraError?.invoke(-1, message, false)
+                        }
+                    } ?: onCameraError?.invoke(-1, message, false)
+                }
+            ) { telephotoUri ->
+                spatialTelephotoFinishedFile =
+                    telephotoUri?.path?.let(::File) ?: telephotoFile.takeIf { it.isFile }
+                finalizeSpatialVideoCompanionIfReady()
+            }
+            if (!telephotoStarted) {
+                telephotoFile.delete()
+                spatialVideoTelephotoCompanionFile = null
+                spatialVideoRecorder.forceStop()
+                videoRecorder.forceStop()
+                failSpatialVideoStandby("Special Video could not start its 3x virtual telephoto encoder.")
+                return
+            }
+
             if (spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
                 !startSpatialVideoStandbyCamera(wideId)
             ) {
-                wideFile.delete()
-                spatialVideoCompanionFile = null
-                videoRecorder.forceStop()
-                spatialVideoRecorder.forceStop()
-                onCameraError?.invoke(-1, "Special Video could not open the independent ultra-wide Camera2 device.", false)
+                failSpatialVideoStandby("Special Video could not open the independent ultra-wide Camera2 device.")
                 return
             }
         }
@@ -11519,7 +11692,12 @@ class Camera2Controller(private val context: Context) {
         if ((spatialVideoEnabled || dualAspectRecordingActive) && spatialVideoRecorder.isRecording()) {
             spatialVideoRecorder.pauseRecording()
         }
-        if (videoRecorder.usesDedicatedCameraInput) {
+        if (spatialVideoEnabled && spatialVideoTelephotoRecorder.isRecording()) {
+            spatialVideoTelephotoRecorder.pauseRecording()
+        }
+        // Keep the paired Camera2 outputs attached during Special Video pause. Removing the
+        // main target alone would detach the simultaneous wide/telephoto outputs as well.
+        if (videoRecorder.usesDedicatedCameraInput && !spatialVideoEnabled) {
             updateDedicatedVideoRepeatingTarget(includeVideoSurface = false)
         }
         videoRecordingPauseStartElapsedMs = SystemClock.elapsedRealtime()
@@ -11530,7 +11708,7 @@ class Camera2Controller(private val context: Context) {
 
     fun resumeVideoRecording() {
         if (!_state.value.videoRecordingState.isRecording || !_state.value.videoRecordingState.isPaused) return
-        if (videoRecorder.usesDedicatedCameraInput &&
+        if (videoRecorder.usesDedicatedCameraInput && !spatialVideoEnabled &&
             !updateDedicatedVideoRepeatingTarget(includeVideoSurface = true)
         ) {
             PLog.e(TAG, "Cannot resume dedicated video input because the recording surface is unavailable")
@@ -11539,6 +11717,9 @@ class Camera2Controller(private val context: Context) {
         videoRecorder.resumeRecording()
         if ((spatialVideoEnabled || dualAspectRecordingActive) && spatialVideoRecorder.isRecording()) {
             spatialVideoRecorder.resumeRecording()
+        }
+        if (spatialVideoEnabled && spatialVideoTelephotoRecorder.isRecording()) {
+            spatialVideoTelephotoRecorder.resumeRecording()
         }
         videoRecordingPausedMs += SystemClock.elapsedRealtime() - videoRecordingPauseStartElapsedMs
         _state.value = _state.value.copy(
@@ -11621,6 +11802,7 @@ class Camera2Controller(private val context: Context) {
         videoRecorder.stopRecording()
         if (hasPairedVideoRecording) {
             spatialVideoRecorder.stopRecording()
+            if (spatialVideoEnabled) spatialVideoTelephotoRecorder.stopRecording()
         }
         if (spatialVideoEnabled) {
             spatialVideoStandbyRepeatingRequest = null
@@ -13238,7 +13420,8 @@ class Camera2Controller(private val context: Context) {
                 stopVideoRecording()
             } else if (!keepVideoRecording && !_state.value.videoRecordingState.isProcessing) {
                 videoRecorder.forceStop()
-            spatialVideoRecorder.forceStop()
+                spatialVideoRecorder.forceStop()
+                spatialVideoTelephotoRecorder.forceStop()
                 stopVideoRecordingTicker()
                 _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
             }
@@ -13535,6 +13718,7 @@ class Camera2Controller(private val context: Context) {
         oppoContinuousBurstEngine.release()
         videoRecorder.release()
         spatialVideoRecorder.release()
+        spatialVideoTelephotoRecorder.release()
         stopBackgroundThread()
         cameraDiscovery.clearCache()
     }

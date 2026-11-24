@@ -23,6 +23,7 @@ object SpatialVideoStore {
     private const val SPECIAL_TIMELINE_TAG = "SpecialVideoTimeline"
     private const val DIRECTORY_NAME = "spatial_video"
     private const val SUFFIX = "_0_5x.mp4"
+    private const val TELEPHOTO_SUFFIX = "_3x.mp4"
     private const val FALLBACK_BUFFER_SIZE = 4 * 1024 * 1024
 
     fun ultraWideFile(context: Context, primaryVideoUri: Uri): File {
@@ -41,6 +42,22 @@ object SpatialVideoStore {
         return File(directory, safeKey + SUFFIX)
     }
 
+    fun telephotoFile(context: Context, primaryVideoUri: Uri): File {
+        val rawKey = primaryVideoUri.lastPathSegment
+            ?.substringAfterLast('/')
+            ?.takeIf { it.isNotBlank() }
+            ?: "video_${primaryVideoUri.toString().hashCode()}"
+        val safeKey = rawKey
+            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .take(120)
+            .ifBlank { "video" }
+        val directory = File(context.filesDir, DIRECTORY_NAME)
+        if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
+            throw IllegalStateException("Unable to create Special Video companion directory: ${directory.absolutePath}")
+        }
+        return File(directory, safeKey + TELEPHOTO_SUFFIX)
+    }
+
     /**
      * Copies the primary recording's AAC audio samples into the ultra-wide MP4 without
      * re-encoding either stream. Both recorders use the same elapsed-realtime timeline origin.
@@ -49,7 +66,8 @@ object SpatialVideoStore {
     fun attachPrimaryAudioTrack(
         context: Context,
         primaryVideoUri: Uri,
-        ultraWideFile: File
+        ultraWideFile: File,
+        lensLabel: String = "0.5x",
     ): Boolean {
         if (!ultraWideFile.isFile || ultraWideFile.length() <= 0L) return false
 
@@ -134,7 +152,7 @@ object SpatialVideoStore {
             }
             tempFile.copyTo(ultraWideFile, overwrite = true)
             tempFile.delete()
-            PLog.i(TAG, "Copied primary AAC audio into ultra-wide companion: ${ultraWideFile.name}")
+            PLog.i(TAG, "Copied primary AAC audio into $lensLabel Special Video companion: ${ultraWideFile.name}")
             return true
         } catch (error: Exception) {
             PLog.w(TAG, "Could not attach primary audio to ultra-wide companion: ${error.message}", error)
@@ -151,7 +169,7 @@ object SpatialVideoStore {
             runCatching { primaryVideoPfd?.close() }
             runCatching { retriever.release() }
             if (tempFile.exists()) tempFile.delete()
-            logFinalDurations(context, primaryVideoUri, ultraWideFile)
+            logFinalDurations(context, primaryVideoUri, ultraWideFile, lensLabel)
         }
     }
 
@@ -159,6 +177,7 @@ object SpatialVideoStore {
         context: Context,
         primaryVideoUri: Uri,
         ultraWideFile: File,
+        lensLabel: String,
     ) {
         val primaryDurationMs = runCatching {
             MediaMetadataRetriever().run {
@@ -201,13 +220,13 @@ object SpatialVideoStore {
         PLog.i(
             SPECIAL_TIMELINE_TAG,
             "Final muxed Special Video video-track ends: 1x=$primaryVideoEndUs us, " +
-                "0.5x=$ultraWideVideoEndUs us, deltaUs=$videoEndDeltaUs"
+                "$lensLabel=$ultraWideVideoEndUs us, deltaUs=$videoEndDeltaUs"
         )
         if (videoEndDeltaUs != null && videoEndDeltaUs > 40_000L) {
             PLog.e(
                 SPECIAL_TIMELINE_TAG,
                 "Final Special Video video tracks differ by more than 40ms: " +
-                    "1xEndUs=$primaryVideoEndUs, 0.5xEndUs=$ultraWideVideoEndUs, " +
+                    "1xEndUs=$primaryVideoEndUs, $lensLabel EndUs=$ultraWideVideoEndUs, " +
                     "deltaUs=$videoEndDeltaUs"
             )
         }
@@ -217,13 +236,13 @@ object SpatialVideoStore {
             PLog.i(
                 TAG,
                 "Final Special Video container durations: main=${primaryDurationMs}ms, " +
-                    "ultraWide=${ultraWideDurationMs}ms, delta=${deltaMs}ms"
+                    "$lensLabel=${ultraWideDurationMs}ms, delta=${deltaMs}ms"
             )
             if (deltaMs > 40L) {
                 PLog.w(
                     SPECIAL_TIMELINE_TAG,
                     "Special Video container duration mismatch exceeds 40ms: " +
-                        "main=${primaryDurationMs}ms, ultraWide=${ultraWideDurationMs}ms, delta=${deltaMs}ms"
+                        "main=${primaryDurationMs}ms, $lensLabel=${ultraWideDurationMs}ms, delta=${deltaMs}ms"
                 )
             }
         } else {

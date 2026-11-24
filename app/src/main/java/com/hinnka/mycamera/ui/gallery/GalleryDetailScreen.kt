@@ -341,64 +341,96 @@ fun GalleryDetailScreen(
     val currentPhoto = photos.getOrNull(pagerState.currentPage)
     var activeSpatialZoom by rememberSaveable(currentPhoto?.id) { mutableFloatStateOf(1f) }
     var hasCurrentSpatialUltraWide by remember(currentPhoto?.id) { mutableStateOf(false) }
+    var hasCurrentSpatialTelephoto by remember(currentPhoto?.id) { mutableStateOf(false) }
     val currentSpatialUltraWideFile = remember(context, currentPhoto?.id, currentPhoto?.uri, currentPhoto?.sourceUri) {
         currentPhoto?.takeIf { it.isVideo }?.let { photo ->
             SpatialVideoStore.ultraWideFile(context, photo.sourceUri ?: photo.uri)
         }
     }
+    val currentSpatialTelephotoFile = remember(context, currentPhoto?.id, currentPhoto?.uri, currentPhoto?.sourceUri) {
+        currentPhoto?.takeIf { it.isVideo }?.let { photo ->
+            SpatialVideoStore.telephotoFile(context, photo.sourceUri ?: photo.uri)
+        }
+    }
     val isCurrentSpatialVideo = currentPhoto?.isVideo == true && (
         hasCurrentSpatialUltraWide ||
-            currentSpatialUltraWideFile?.let { it.isFile && it.length() > 0L } == true
+            hasCurrentSpatialTelephoto ||
+            currentSpatialUltraWideFile?.let { it.isFile && it.length() > 0L } == true ||
+            currentSpatialTelephotoFile?.let { it.isFile && it.length() > 0L } == true
         )
 
     fun shareSingleSpatialVideo() {
         val photo = currentPhoto ?: return
-        val companionFile = currentSpatialUltraWideFile
+        val wideFile = currentSpatialUltraWideFile?.takeIf { it.isFile && it.length() > 0L }
+        val telephotoFile = currentSpatialTelephotoFile?.takeIf { it.isFile && it.length() > 0L }
         showSpatialShareSheet = false
-        if (activeSpatialZoom >= 1f || companionFile == null) {
+        val selectedCompanion = when {
+            activeSpatialZoom >= 2.5f -> telephotoFile
+            activeSpatialZoom < 1f -> wideFile
+            else -> null
+        }
+        if (selectedCompanion == null) {
             viewModel.sharePhoto(photo)
             return
         }
+        val lensLabel = if (activeSpatialZoom >= 2.5f) "3x telephoto" else "0.5x ultra-wide"
         runCatching {
-            val wideUri = FileProvider.getUriForFile(
+            val companionUri = FileProvider.getUriForFile(
                 context,
                 context.packageName + ".fileprovider",
-                companionFile
+                selectedCompanion
             )
             val share = Intent(Intent.ACTION_SEND).apply {
                 type = "video/mp4"
-                putExtra(Intent.EXTRA_STREAM, wideUri)
+                putExtra(Intent.EXTRA_STREAM, companionUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                clipData = android.content.ClipData.newUri(context.contentResolver, "Ultra-wide video", wideUri)
+                clipData = android.content.ClipData.newUri(
+                    context.contentResolver, lensLabel, companionUri
+                )
             }
-            context.startActivity(Intent.createChooser(share, "Share ultra-wide video"))
+            context.startActivity(Intent.createChooser(share, "Share $lensLabel video"))
         }.onFailure {
-            Toast.makeText(context, "Unable to share ultra-wide video", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Unable to share $lensLabel video", Toast.LENGTH_SHORT).show()
         }
     }
 
     fun shareBothSpatialVideos() {
         val photo = currentPhoto ?: return
-        val companionFile = currentSpatialUltraWideFile ?: return
         showSpatialShareSheet = false
         runCatching {
             val primaryUri = photo.sourceUri ?: photo.uri
-            val wideUri = FileProvider.getUriForFile(
-                context,
-                context.packageName + ".fileprovider",
-                companionFile
-            )
+            val videoUris = arrayListOf(primaryUri)
+            currentSpatialUltraWideFile
+                ?.takeIf { it.isFile && it.length() > 0L }
+                ?.let { file ->
+                    videoUris += FileProvider.getUriForFile(
+                        context, context.packageName + ".fileprovider", file
+                    )
+                }
+            currentSpatialTelephotoFile
+                ?.takeIf { it.isFile && it.length() > 0L }
+                ?.let { file ->
+                    videoUris += FileProvider.getUriForFile(
+                        context, context.packageName + ".fileprovider", file
+                    )
+                }
+            if (videoUris.size == 1) {
+                viewModel.sharePhoto(photo)
+                return
+            }
             val share = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
                 type = "video/mp4"
-                putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(primaryUri, wideUri))
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, videoUris)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 clipData = android.content.ClipData.newUri(
                     context.contentResolver, "Special Video", primaryUri
-                ).apply { addItem(android.content.ClipData.Item(wideUri)) }
+                ).apply {
+                    videoUris.drop(1).forEach { addItem(android.content.ClipData.Item(it)) }
+                }
             }
-            context.startActivity(Intent.createChooser(share, "Share both lenses"))
+            context.startActivity(Intent.createChooser(share, "Share all Special Video lenses"))
         }.onFailure {
-            Toast.makeText(context, "Unable to share both lens videos", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Unable to share Special Video recordings", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -825,10 +857,13 @@ fun GalleryDetailScreen(
                                             previewHandle = videoPreviewHandle,
                                             spatialZoomRatio = if (page == pagerState.currentPage) activeSpatialZoom else 1f,
                                             onSpatialZoomChange = { ratio ->
-                                                if (page == pagerState.currentPage) activeSpatialZoom = ratio.coerceIn(0.5f, 2f)
+                                                if (page == pagerState.currentPage) activeSpatialZoom = ratio.coerceIn(0.5f, 3f)
                                             },
                                             onSpatialCompanionAvailability = { available ->
                                                 if (page == pagerState.currentPage) hasCurrentSpatialUltraWide = available
+                                            },
+                                            onSpatialTelephotoAvailability = { available ->
+                                                if (page == pagerState.currentPage) hasCurrentSpatialTelephoto = available
                                             },
                                             modifier = Modifier.fillMaxSize()
                                         )
@@ -1486,7 +1521,9 @@ fun GalleryDetailScreen(
         }
     }
 
-    if (showSpatialShareSheet && currentPhoto != null && isCurrentSpatialVideo && currentSpatialUltraWideFile != null) {
+    if (showSpatialShareSheet && currentPhoto != null && isCurrentSpatialVideo &&
+        (currentSpatialUltraWideFile != null || currentSpatialTelephotoFile != null)
+    ) {
         AppModalBottomSheet(
             containerColor = GallerySheetSurface,
             shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
@@ -1509,7 +1546,7 @@ fun GalleryDetailScreen(
             ) {
                 Text("Share Special Video", color = GalleryToolbarContent, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "Choose one lens recording or share both original videos.",
+                    "Choose the 0.5x, 1x or 3x recording, or share every available lens file.",
                     color = GalleryToolbarContent.copy(alpha = 0.68f),
                     fontSize = 13.sp
                 )
@@ -1529,8 +1566,11 @@ fun GalleryDetailScreen(
                         Column(Modifier.weight(1f)) {
                             Text("Single video", fontWeight = FontWeight.SemiBold)
                             Text(
-                                if (activeSpatialZoom < 1f) "Share the selected 0.5x ultra-wide recording"
-                                else "Share the selected 1x main-camera recording",
+                                when {
+                                    activeSpatialZoom >= 2.5f -> "Share the selected 3x virtual telephoto recording"
+                                    activeSpatialZoom < 1f -> "Share the selected 0.5x ultra-wide recording"
+                                    else -> "Share the selected 1x main-camera recording"
+                                },
                                 color = GalleryToolbarContent.copy(alpha = 0.65f),
                                 fontSize = 12.sp
                             )
@@ -1552,9 +1592,9 @@ fun GalleryDetailScreen(
                         Icon(AppIcons.GridView, contentDescription = null)
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("Both lenses", fontWeight = FontWeight.SemiBold)
+                            Text("All lenses", fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Share the 1x and 0.5x videos together",
+                                "Share the original 1x, 0.5x and 3x videos together",
                                 color = GalleryToolbarContent.copy(alpha = 0.65f),
                                 fontSize = 12.sp
                             )
@@ -2465,6 +2505,7 @@ private fun VideoDetailPlayer(
     spatialZoomRatio: Float = 1f,
     onSpatialZoomChange: (Float) -> Unit = {},
     onSpatialCompanionAvailability: (Boolean) -> Unit = {},
+    onSpatialTelephotoAvailability: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -2475,27 +2516,40 @@ private fun VideoDetailPlayer(
     val ultraWideFile = remember(photo.id, mediaUri) {
         SpatialVideoStore.ultraWideFile(context, mediaUri)
     }
+    val telephotoFile = remember(photo.id, mediaUri) {
+        SpatialVideoStore.telephotoFile(context, mediaUri)
+    }
     var hasSpatialUltraWide by remember(photo.id, mediaUri) {
         mutableStateOf(ultraWideFile.isFile && ultraWideFile.length() > 0L)
     }
+    var hasSpatialTelephoto by remember(photo.id, mediaUri) {
+        mutableStateOf(telephotoFile.isFile && telephotoFile.length() > 0L)
+    }
     var isWidePlayerReady by remember(photo.id, mediaUri) { mutableStateOf(false) }
+    var isTelephotoPlayerReady by remember(photo.id, mediaUri) { mutableStateOf(false) }
     val companionCallback by rememberUpdatedState(onSpatialCompanionAvailability)
+    val telephotoCallback by rememberUpdatedState(onSpatialTelephotoAvailability)
 
     LaunchedEffect(photo.id, mediaUri) {
         hasSpatialUltraWide = ultraWideFile.isFile && ultraWideFile.length() > 0L
+        hasSpatialTelephoto = telephotoFile.isFile && telephotoFile.length() > 0L
         companionCallback(hasSpatialUltraWide)
+        telephotoCallback(hasSpatialTelephoto)
         repeat(20) {
-            if (ultraWideFile.isFile && ultraWideFile.length() > 0L) {
+            if (!hasSpatialUltraWide && ultraWideFile.isFile && ultraWideFile.length() > 0L) {
                 hasSpatialUltraWide = true
                 companionCallback(true)
-                return@LaunchedEffect
             }
+            if (!hasSpatialTelephoto && telephotoFile.isFile && telephotoFile.length() > 0L) {
+                hasSpatialTelephoto = true
+                telephotoCallback(true)
+            }
+            if (hasSpatialUltraWide && hasSpatialTelephoto) return@LaunchedEffect
             delay(500)
         }
-        companionCallback(false)
     }
 
-    PLog.d("VideoDetailPlayer", "Initializing gallery video. photoId=${photo.id}, active=$isActive, spatial=$hasSpatialUltraWide")
+    PLog.d("VideoDetailPlayer", "Initializing gallery video. photoId=${photo.id}, active=$isActive, spatialWide=$hasSpatialUltraWide, telephoto=$hasSpatialTelephoto")
 
     val contentRepository = remember {
         com.hinnka.mycamera.data.ContentRepository.getInstance(context)
@@ -2519,12 +2573,15 @@ private fun VideoDetailPlayer(
 
     val videoLutEffect = remember(photo.id, mediaUri) { VideoLutEffect(lutConfig, recipeParams) }
     val wideVideoLutEffect = remember(photo.id, mediaUri) { VideoLutEffect(lutConfig, recipeParams) }
+    val telephotoVideoLutEffect = remember(photo.id, mediaUri) { VideoLutEffect(lutConfig, recipeParams) }
     val videoOutputSize by videoLutEffect.outputSize.collectAsState()
     val wideVideoOutputSize by wideVideoLutEffect.outputSize.collectAsState()
+    val telephotoVideoOutputSize by telephotoVideoLutEffect.outputSize.collectAsState()
 
     LaunchedEffect(lutConfig, recipeParams) {
         videoLutEffect.update(lutConfig, recipeParams)
         wideVideoLutEffect.update(lutConfig, recipeParams)
+        telephotoVideoLutEffect.update(lutConfig, recipeParams)
     }
 
     val exoPlayer = remember(photo.id, mediaUri, isActive) {
@@ -2559,11 +2616,26 @@ private fun VideoDetailPlayer(
         }
     }
 
+    val telephotoExoPlayer = remember(photo.id, mediaUri, isActive) {
+        if (!isActive) return@remember null
+        ExoPlayer.Builder(context).build().apply {
+            repeatMode = Player.REPEAT_MODE_OFF
+            volume = 0f
+            setVideoEffects(listOf(telephotoVideoLutEffect))
+            addListener(object : Player.Listener {
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    PLog.w("VideoDetailPlayer", "3x telephoto ExoPlayer error.", error)
+                }
+            })
+        }
+    }
+
     val playerView = rememberVideoPlayerView(exoPlayer, showController = true)
     val ultraWidePlayerView = rememberVideoPlayerView(wideExoPlayer, showController = false)
+    val telephotoPlayerView = rememberVideoPlayerView(telephotoExoPlayer, showController = false)
 
-    DisposableEffect(exoPlayer, wideExoPlayer, previewHandle) {
-        val players = listOfNotNull(exoPlayer, wideExoPlayer)
+    DisposableEffect(exoPlayer, wideExoPlayer, telephotoExoPlayer, previewHandle) {
+        val players = listOfNotNull(exoPlayer, wideExoPlayer, telephotoExoPlayer)
         val lease = if (players.isNotEmpty()) previewHandle.attach(*players.toTypedArray()) else null
         onDispose {
             if (lease != null) previewHandle.release(lease)
@@ -2612,34 +2684,70 @@ private fun VideoDetailPlayer(
         }
     }
 
-    LaunchedEffect(exoPlayer, wideExoPlayer, isActive, isWidePlayerReady) {
+    LaunchedEffect(telephotoExoPlayer, exoPlayer, hasSpatialTelephoto, isActive) {
         val primary = exoPlayer ?: return@LaunchedEffect
-        val secondary = wideExoPlayer ?: return@LaunchedEffect
-        if (!isWidePlayerReady) return@LaunchedEffect
-        while (true) {
-            if (primary.playbackState == Player.STATE_READY &&
-                secondary.playbackState == Player.STATE_READY
+        val telephoto = telephotoExoPlayer ?: return@LaunchedEffect
+        if (!isActive || !hasSpatialTelephoto) return@LaunchedEffect
+        runCatching {
+            telephoto.setMediaItem(MediaItem.fromUri(Uri.fromFile(telephotoFile)))
+            telephoto.prepare()
+            var attempts = 0
+            while (telephoto.playbackState != Player.STATE_READY &&
+                telephoto.playbackState != Player.STATE_ENDED && attempts < 100
             ) {
-                if (secondary.playWhenReady != primary.playWhenReady) {
-                    secondary.playWhenReady = primary.playWhenReady
+                delay(100)
+                attempts++
+            }
+            if (telephoto.playbackState == Player.STATE_READY) {
+                telephoto.seekTo(primary.currentPosition.coerceAtLeast(0L))
+                telephoto.playWhenReady = primary.playWhenReady
+                isTelephotoPlayerReady = true
+                telephotoCallback(true)
+                PLog.i("VideoDetailPlayer", "3x telephoto companion synchronized at ${primary.currentPosition}ms.")
+            } else {
+                PLog.w("VideoDetailPlayer", "3x telephoto companion did not become ready in time.")
+            }
+        }.onFailure { error ->
+            PLog.w("VideoDetailPlayer", "Unable to prepare 3x telephoto companion.", error)
+        }
+    }
+
+    LaunchedEffect(exoPlayer, wideExoPlayer, telephotoExoPlayer, isActive, isWidePlayerReady, isTelephotoPlayerReady) {
+        val primary = exoPlayer ?: return@LaunchedEffect
+        while (true) {
+            if (primary.playbackState == Player.STATE_READY) {
+                val secondaries = listOfNotNull(
+                    wideExoPlayer?.takeIf { isWidePlayerReady },
+                    telephotoExoPlayer?.takeIf { isTelephotoPlayerReady },
+                )
+                secondaries.forEach { secondary ->
+                    if (secondary.playbackState == Player.STATE_READY) {
+                        if (secondary.playWhenReady != primary.playWhenReady) {
+                            secondary.playWhenReady = primary.playWhenReady
+                        }
+                        val driftMs = primary.currentPosition - secondary.currentPosition
+                        if (abs(driftMs) > 220L) {
+                            secondary.seekTo(primary.currentPosition.coerceAtLeast(0L))
+                        }
+                    }
                 }
-                val driftMs = primary.currentPosition - secondary.currentPosition
-                if (abs(driftMs) > 220L) secondary.seekTo(primary.currentPosition.coerceAtLeast(0L))
             }
             delay(300)
         }
     }
 
-    DisposableEffect(exoPlayer, wideExoPlayer, lifecycle, isActive) {
+    DisposableEffect(exoPlayer, wideExoPlayer, telephotoExoPlayer, lifecycle, isActive) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
                     exoPlayer?.pause()
                     wideExoPlayer?.pause()
+                    telephotoExoPlayer?.pause()
                 }
                 Lifecycle.Event.ON_RESUME -> if (isActive) {
                     exoPlayer?.play()
                     if (isWidePlayerReady) wideExoPlayer?.play()
+                    if (isTelephotoPlayerReady) telephotoExoPlayer?.play()
                 }
                 else -> Unit
             }
@@ -2649,19 +2757,29 @@ private fun VideoDetailPlayer(
     }
 
     val animatedZoomRatio by animateFloatAsState(
-        targetValue = spatialZoomRatio.coerceIn(0.5f, 2f),
+        targetValue = spatialZoomRatio.coerceIn(0.5f, 3f),
         animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
         label = "gallerySpatialZoom"
     )
 
     if (exoPlayer != null) {
         val showWideFeed = hasSpatialUltraWide && isWidePlayerReady && wideExoPlayer != null
+        val showTelephotoFeed = hasSpatialTelephoto && isTelephotoPlayerReady && telephotoExoPlayer != null
         val wideAlpha = if (showWideFeed) {
             1f - ((animatedZoomRatio - 0.94f) / 0.06f).coerceIn(0f, 1f)
         } else 0f
-        val mainAlpha = 1f - wideAlpha
+        // Main footage carries the continuous 1x-3x digital ramp. Switch to the higher
+        // detail 3x sensor crop only in the final handoff band to avoid scaling a pre-cropped
+        // 3x recording down to a false 1x field of view.
+        val telephotoAlpha = if (showTelephotoFeed) {
+            ((animatedZoomRatio - 2.85f) / 0.15f).coerceIn(0f, 1f)
+        } else 0f
+        val mainAlpha = (1f - wideAlpha) * (1f - telephotoAlpha)
         val wideScale = (animatedZoomRatio / 0.5f).coerceIn(1f, 2f)
-        val mainScale = animatedZoomRatio.coerceIn(1f, 2f)
+        val mainScale = animatedZoomRatio.coerceIn(1f, 3f)
+        // The 3x companion already contains the 3x sensor crop, so it fills the output
+        // frame at handoff; scaling it smaller would undo the captured field of view.
+        val telephotoScale = 1f
 
         Box(modifier = modifier.autoRotate(matchParentSize = true)) {
             if (showWideFeed) {
@@ -2684,6 +2802,34 @@ private fun VideoDetailPlayer(
                             frame.pivotX = view.width / 2f
                             frame.pivotY = view.height / 2f
                             wideVideoOutputSize?.let { size -> frame.setAspectRatio(size.width.toFloat() / size.height) }
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            if (showTelephotoFeed) {
+                AndroidView(
+                    factory = { telephotoPlayerView },
+                    update = { view ->
+                        view.player = telephotoExoPlayer
+                        view.useController = false
+                        view.controllerAutoShow = false
+                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        view.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        view.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        view.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                        view.isClickable = false
+                        view.isVisible = true
+                        view.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)?.let { frame ->
+                            frame.alpha = telephotoAlpha
+                            frame.scaleX = telephotoScale
+                            frame.scaleY = telephotoScale
+                            frame.pivotX = view.width / 2f
+                            frame.pivotY = view.height / 2f
+                            telephotoVideoOutputSize?.let { size ->
+                                frame.setAspectRatio(size.width.toFloat() / size.height)
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxSize()
@@ -2714,7 +2860,7 @@ private fun VideoDetailPlayer(
                 modifier = Modifier.fillMaxSize()
             )
 
-            if (showWideFeed) {
+            if (showWideFeed || showTelephotoFeed) {
                 SpatialVideoZoomControl(
                     zoomRatio = spatialZoomRatio,
                     onZoomChange = onSpatialZoomChange,
@@ -3054,15 +3200,15 @@ private fun SpatialVideoZoomControl(
     onZoomChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val currentZoom by rememberUpdatedState(zoomRatio.coerceIn(0.5f, 2f))
+    val currentZoom by rememberUpdatedState(zoomRatio.coerceIn(0.5f, 3f))
     val zoomChange by rememberUpdatedState(onZoomChange)
     var isDragging by remember { mutableStateOf(false) }
     var showRuler by remember { mutableStateOf(false) }
-    var dragZoom by remember { mutableFloatStateOf(zoomRatio.coerceIn(0.5f, 2f)) }
+    var dragZoom by remember { mutableFloatStateOf(zoomRatio.coerceIn(0.5f, 3f)) }
     var lastInteractionTime by remember { mutableLongStateOf(0L) }
 
     val displayedZoom by animateFloatAsState(
-        targetValue = if (isDragging) dragZoom else zoomRatio.coerceIn(0.5f, 2f),
+        targetValue = if (isDragging) dragZoom else zoomRatio.coerceIn(0.5f, 3f),
         animationSpec = tween(durationMillis = 130, easing = FastOutSlowInEasing),
         label = "gallerySpatialZoomControl"
     )
@@ -3088,7 +3234,7 @@ private fun SpatialVideoZoomControl(
                     },
                     onHorizontalDrag = { change, dragAmount ->
                         change.consume()
-                        dragZoom = (dragZoom * exp(-dragAmount.toDouble() * 0.0027).toFloat()).coerceIn(0.5f, 2f)
+                        dragZoom = (dragZoom * exp(-dragAmount.toDouble() * 0.0027).toFloat()).coerceIn(0.5f, 3f)
                         lastInteractionTime = System.currentTimeMillis()
                         zoomChange(dragZoom)
                     },
@@ -3108,7 +3254,7 @@ private fun SpatialVideoZoomControl(
             ZoomContinuousRuler(
                 zoomRatio = displayedZoom,
                 minZoom = 0.5f,
-                maxZoom = 2f,
+                maxZoom = 3f,
                 mainCamera = null,
                 displayMode = ZoomDisplayMode.ZOOM_RATIO,
                 onClose = {
@@ -3123,7 +3269,7 @@ private fun SpatialVideoZoomControl(
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                listOf(0.5f, 1f, 2f).forEach { preset ->
+                listOf(0.5f, 1f, 2f, 3f).forEach { preset ->
                     val selected = abs(zoomRatio - preset) <= 0.045f
                     val label = if (preset == 0.5f) "0.5" else preset.toInt().toString()
                     Box(

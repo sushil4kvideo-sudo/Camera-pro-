@@ -59,6 +59,7 @@ class RealtimeVideoRenderer(
     dualCapturePositionY: Float = 0.05f,
     dualCapturePipWidthFraction: Float = 0.33f,
     private val encoderOrientationHintDegrees: Int = 0,
+    private val cameraInputZoomRatio: Float = 1f,
     portraitVideoInitiallyEnabled: Boolean = false,
 ) {
     companion object {
@@ -398,6 +399,9 @@ class RealtimeVideoRenderer(
             sourceCropRect = cameraCropRect
         }
         if (timestampNs <= 0L) return null
+        // Special Video's virtual telephoto is cropped from the live sensor frame here,
+        // before it reaches the dedicated MediaCodec input surface (never after recording).
+        sourceCropRect = resolveRealtimeVideoZoomCropRect(sourceCropRect, cameraInputZoomRatio)
         val presentationTimeNs = mapPresentationTimeNs(timestampNs)
         if (presentationTimeNs <= 0L) return null
 
@@ -1419,6 +1423,29 @@ class RealtimeVideoRenderer(
         eglDisplay = EGL14.EGL_NO_DISPLAY
         initialized = false
     }
+}
+
+/**
+ * Applies centered digital zoom to a resolved live camera-frame crop rectangle.
+ * This is executed by the realtime encoder renderer before each frame is submitted to MediaCodec.
+ */
+internal fun resolveRealtimeVideoZoomCropRect(
+    sourceCropRect: FloatArray,
+    zoomRatio: Float,
+): FloatArray {
+    if (sourceCropRect.size < 4) return sourceCropRect
+    val zoom = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
+    if (zoom <= 1.001f) return sourceCropRect
+    val centerX = (sourceCropRect[0] + sourceCropRect[2]) * 0.5f
+    val centerY = (sourceCropRect[1] + sourceCropRect[3]) * 0.5f
+    val halfWidth = (sourceCropRect[2] - sourceCropRect[0]) * 0.5f / zoom
+    val halfHeight = (sourceCropRect[3] - sourceCropRect[1]) * 0.5f / zoom
+    return floatArrayOf(
+        (centerX - halfWidth).coerceIn(0f, 1f),
+        (centerY - halfHeight).coerceIn(0f, 1f),
+        (centerX + halfWidth).coerceIn(0f, 1f),
+        (centerY + halfHeight).coerceIn(0f, 1f),
+    )
 }
 
 /**
