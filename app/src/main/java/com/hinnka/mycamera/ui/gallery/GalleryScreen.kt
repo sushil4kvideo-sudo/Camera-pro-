@@ -92,7 +92,7 @@ import com.hinnka.mycamera.ui.icons.AppIcons
 fun GalleryScreen(
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
-    onPhotoClick: (GalleryTab, Int) -> Unit,
+    onPhotoClick: (GalleryTab, Int, String) -> Unit,
     onNavigateToEdit: (String?) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -685,7 +685,7 @@ private fun GalleryRecyclerGrid(
     isSelectionMode: Boolean,
     isSelectionEnabled: Boolean,
     isLoadingMore: Boolean,
-    onPhotoClick: (GalleryTab, Int) -> Unit,
+    onPhotoClick: (GalleryTab, Int, String) -> Unit,
     onLoadMore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1029,7 +1029,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
     private var isLoadingMore: Boolean = false
     private var isLandscape: Boolean = false
     private var rotationDegrees: Float = 0f
-    private var onPhotoClick: (GalleryTab, Int) -> Unit = { _, _ -> }
+    private var onPhotoClick: (GalleryTab, Int, String) -> Unit = { _, _ -> }
     private var onLoadMore: () -> Unit = {}
 
     init {
@@ -1047,7 +1047,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
         isLoadingMore: Boolean,
         isLandscape: Boolean,
         rotationDegrees: Float,
-        onPhotoClick: (GalleryTab, Int) -> Unit,
+        onPhotoClick: (GalleryTab, Int, String) -> Unit,
         onLoadMore: () -> Unit
     ) {
         val oldEntries = this.entries
@@ -1197,11 +1197,15 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
                             if (photo.id !in processingPhotos) model.togglePhotoSelection(photo)
                         } else {
                             if (entry.sourceTab == GalleryTab.SYSTEM) {
-                                model.prepareSystemPhotoDetail(entry.sourceIndex)
+                                model.prepareSystemPhotoDetail(0)
                             } else {
                                 model.setCurrentPhoto(entry.sourceIndex)
                             }
-                            onPhotoClick(entry.sourceTab, entry.sourceIndex)
+                            onPhotoClick(
+                                entry.sourceTab,
+                                if (entry.sourceTab == GalleryTab.SYSTEM) 0 else entry.sourceIndex,
+                                photo.id
+                            )
                         }
                     },
                     onLongClick = {
