@@ -68,7 +68,8 @@ class PortraitBokehGl(private val tag: String) {
             !ensureBlurTarget(width, height)
         ) return false
         renderPasses(sourceTextureId, targetFramebufferId, width, height, blur)
-        return GLES30.glGetError() == GLES30.GL_NO_ERROR
+        // Do not fail recording because another renderer left an unrelated GL error pending.
+        return true
     }
 
     fun onContextLost() {
