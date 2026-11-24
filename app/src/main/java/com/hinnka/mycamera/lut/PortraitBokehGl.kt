@@ -357,8 +357,10 @@ class PortraitBokehGl(private val tag: String) {
             out vec4 fragColor;
 
             float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+            // Android Bitmap rows are top-down, while the GL source FBO uses bottom-up UVs.
             float subjectAt(vec2 uv) {
-                return smoothstep(0.32, 0.68, texture(uMask, clamp(uv, vec2(0.001), vec2(0.999))).r);
+                vec2 maskUv = vec2(uv.x, 1.0 - uv.y);
+                return smoothstep(0.32, 0.68, texture(uMask, clamp(maskUv, vec2(0.001), vec2(0.999))).r);
             }
             void main() {
                 vec2 uv = vUv;
@@ -390,7 +392,8 @@ class PortraitBokehGl(private val tag: String) {
             uniform sampler2D uMask;
             out vec4 fragColor;
             void main() {
-                float subject = smoothstep(0.32, 0.68, texture(uMask, vUv).r);
+                vec2 maskUv = vec2(vUv.x, 1.0 - vUv.y);
+            float subject = smoothstep(0.32, 0.68, texture(uMask, maskUv).r);
                 float depth = mix(0.65, 1.0, smoothstep(0.98, 0.35, vUv.y));
                 vec3 sharp = texture(uSource, vUv).rgb;
                 vec3 blurred = texture(uBlurred, vUv).rgb;
