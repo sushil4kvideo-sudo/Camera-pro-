@@ -96,7 +96,9 @@ fun GalleryScreen(
     onNavigateToEdit: (String?) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val photos by viewModel.currentPhotos.collectAsState()
+    val photos by viewModel.galleryPhotos.collectAsState()
+    val photonPhotos by viewModel.photos.collectAsState()
+    val systemPhotos by viewModel.systemPhotos.collectAsState()
     val processingPhotos by viewModel.processingPhotos.collectAsState()
     var previousProcessingIds by remember { mutableStateOf(processingPhotos.keys.toSet()) }
     LaunchedEffect(processingPhotos.keys) {
@@ -117,7 +119,6 @@ fun GalleryScreen(
     val selectedPhotos = viewModel.selectedPhotos
     val selectedImageCount = selectedPhotos.count { it.isImage }
     val selectedTab = viewModel.selectedTab
-    val hasPermission = viewModel.hasGalleryPermission
     val isBatchOperationRunning = isExporting || isPastingSettings
     val scope = rememberCoroutineScope()
     var shouldRenderGrid by rememberSaveable { mutableStateOf(false) }
@@ -157,14 +158,6 @@ fun GalleryScreen(
         importSelectedMedia(selection)
     }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { grants ->
-        if (grants.values.all { it }) {
-            viewModel.checkGalleryPermission()
-        }
-    }
-
     // Activity Result Launcher for batch delete confirmation
     val batchDeleteLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
@@ -196,7 +189,11 @@ fun GalleryScreen(
 
     // 首次进入时先让导航过渡完成，再挂载重型网格，避免首屏动画和列表构建抢主线程。
     LaunchedEffect(Unit) {
-        viewModel.loadCurrentTabData()
+        if (viewModel.selectedTab != GalleryTab.PHOTON) {
+            viewModel.selectTab(GalleryTab.PHOTON)
+        } else {
+            viewModel.loadCurrentTabData()
+        }
         delay(300L)
         shouldRenderGrid = true
     }
@@ -212,7 +209,13 @@ fun GalleryScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                loadCurrentTabData()
+                scope.launch {
+                    if (viewModel.selectedTab != GalleryTab.PHOTON) {
+                        viewModel.selectTab(GalleryTab.PHOTON)
+                    } else {
+                        viewModel.loadCurrentTabData()
+                    }
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -269,7 +272,11 @@ fun GalleryScreen(
                         if (isSelectionMode) {
                             IconButton(
                                 onClick = {
-                                    val selectable = photos.filterNot { it.id in processingPhotos }
+                                    val selectable = photos.filterNot {
+                                        it.id in processingPhotos ||
+                                            it.id.startsWith("image_") ||
+                                            it.id.startsWith("video_")
+                                    }
                                     val allSelected = selectable.all { photo -> selectedPhotos.any { it.id == photo.id } }
                                     if (allSelected) {
                                         selectedPhotos.toList().forEach(viewModel::togglePhotoSelection)
@@ -306,16 +313,6 @@ fun GalleryScreen(
                         containerColor = Color(0xFF151515)
                     )
                 )
-                if (!isSelectionMode) {
-                    GalleryTabRow(
-                        selectedTab = selectedTab,
-                        onTabSelected = { tab ->
-                            scope.launch {
-                                viewModel.selectTab(tab)
-                            }
-                        }
-                    )
-                }
             }
         },
         bottomBar = {
@@ -539,39 +536,7 @@ fun GalleryScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            if (selectedTab == GalleryTab.SYSTEM && !hasPermission) {
-                // 权限缺失提示
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = stringResource(R.string.permission_required_gallery),
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 16.sp,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(
-                        onClick = {
-                            val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                arrayOf(
-                                    android.Manifest.permission.READ_MEDIA_IMAGES,
-                                    android.Manifest.permission.READ_MEDIA_VIDEO
-                                )
-                            } else {
-                                arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-                            }
-                            permissionLauncher.launch(permission)
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentColor)
-                    ) {
-                        Text(stringResource(R.string.grant_permission))
-                    }
-                }
-            } else if (photos.isEmpty()) {
+            if (photos.isEmpty()) {
                 // 空状态
                 Column(
                     modifier = Modifier.align(Alignment.Center),
@@ -597,10 +562,12 @@ fun GalleryScreen(
                 }
             } else {
                 val currentPhotos = photos
-                val gridEntries = remember(currentPhotos, context) {
+                val gridEntries = remember(currentPhotos, photonPhotos, systemPhotos, context) {
                     buildGalleryGridEntries(
                         context = context,
-                        photos = currentPhotos
+                        photos = currentPhotos,
+                        photonPhotos = photonPhotos,
+                        systemPhotos = systemPhotos
                     )
                 }
                 GalleryRecyclerGrid(
@@ -704,36 +671,6 @@ fun GalleryScreen(
             containerColor = Color(0xFF2D2D2D),
             titleContentColor = Color.White,
             textContentColor = Color.White
-        )
-    }
-}
-
-@Composable
-private fun GalleryTabRow(
-    selectedTab: GalleryTab,
-    onTabSelected: (GalleryTab) -> Unit
-) {
-    val selectedTabIndex = selectedTab.ordinal
-    TabRow(
-        selectedTabIndex = selectedTabIndex,
-        containerColor = Color(0xFF151515),
-        contentColor = Color.White,
-        indicator = { tabPositions ->
-            TabRowDefaults.SecondaryIndicator(
-                modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
-                color = AccentColor
-            )
-        }
-    ) {
-        Tab(
-            selected = selectedTab == GalleryTab.PHOTON,
-            onClick = { onTabSelected(GalleryTab.PHOTON) },
-            text = { Text(stringResource(R.string.gallery_photon)) }
-        )
-        Tab(
-            selected = selectedTab == GalleryTab.SYSTEM,
-            onClick = { onTabSelected(GalleryTab.SYSTEM) },
-            text = { Text(stringResource(R.string.gallery_system)) }
         )
     }
 }
@@ -1259,12 +1196,16 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
                         if (isSelectionMode) {
                             if (photo.id !in processingPhotos) model.togglePhotoSelection(photo)
                         } else {
-                            model.setCurrentPhoto(entry.index)
-                            onPhotoClick(selectedTab, entry.index)
+                            if (entry.sourceTab == GalleryTab.SYSTEM) {
+                                model.prepareSystemPhotoDetail(entry.sourceIndex)
+                            } else {
+                                model.setCurrentPhoto(entry.sourceIndex)
+                            }
+                            onPhotoClick(entry.sourceTab, entry.sourceIndex)
                         }
                     },
                     onLongClick = {
-                        if (photo.id !in processingPhotos) {
+                        if (entry.sourceTab == GalleryTab.PHOTON && photo.id !in processingPhotos) {
                             if (!isSelectionMode) {
                                 model.enterSelectionMode()
                             }
