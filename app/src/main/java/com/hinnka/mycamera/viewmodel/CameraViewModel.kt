@@ -1967,6 +1967,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val keepUltraWideAeReady: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.keepUltraWideAeReady }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val normalVideoUltraWideInstantSwitchEnabled: StateFlow<Boolean> =
+        userPreferencesRepository.userPreferences
+            .map { it.normalVideoUltraWideInstantSwitchEnabled }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val photoPreviewStabilizationEnabled: StateFlow<Boolean> =
         userPreferencesRepository.userPreferences
             .map { it.photoPreviewStabilizationEnabled }
@@ -2489,6 +2493,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLensLockEnabled(it.videoLensLockEnabled)
                 cameraController.setVideoWhiteBalanceLockEnabled(it.videoWhiteBalanceLockEnabled)
                 cameraController.setKeepUltraWideAeReady(it.keepUltraWideAeReady)
+                cameraController.setNormalVideoUltraWideInstantSwitchEnabled(
+                    it.normalVideoUltraWideInstantSwitchEnabled
+                )
                 cameraController.setVideoCodec(it.videoCodec)
                 cameraController.setVideoApvQuality(it.videoApvQuality)
                 cameraController.setMirrorFrontCameraEnabled(it.mirrorFrontCamera)
@@ -2672,6 +2679,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLensLockEnabled(prefs.videoLensLockEnabled)
                 cameraController.setVideoWhiteBalanceLockEnabled(prefs.videoWhiteBalanceLockEnabled)
                 cameraController.setKeepUltraWideAeReady(prefs.keepUltraWideAeReady)
+                cameraController.setNormalVideoUltraWideInstantSwitchEnabled(
+                    prefs.normalVideoUltraWideInstantSwitchEnabled
+                )
                 cameraController.setVideoCodec(prefs.videoCodec)
                 cameraController.setVideoApvQuality(prefs.videoApvQuality)
                 cameraController.setMeteringMode(prefs.meteringMode)
@@ -3568,6 +3578,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val spatialVideoEnabled = cameraController.spatialVideoEnabledFlow
     val spatialVideoShowUltraWidePreview = cameraController.spatialVideoShowUltraWidePreview
     val spatialVideoVirtualTelephotoEnabled = cameraController.spatialVideoVirtualTelephotoEnabledFlow
+    val normalVideoUltraWideInstantSwitchActive =
+        cameraController.normalVideoUltraWideInstantSwitchActiveFlow
     val spatialVideoPreviewStreamSize = cameraController.spatialVideoPreviewStreamSize
     val spatialVideoPreviewSensorOrientationDegrees =
         cameraController.spatialVideoPreviewSensorOrientationDegrees
@@ -3577,6 +3589,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun isSpatialVideoSupported(): Boolean = cameraController.isSpatialVideoSupported()
 
     fun setSpatialVideoEnabled(enabled: Boolean) = cameraController.setSpatialVideoEnabled(enabled)
+
+    fun setNormalVideoUltraWideInstantSwitchEnabled(enabled: Boolean) {
+        cameraController.setNormalVideoUltraWideInstantSwitchEnabled(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveNormalVideoUltraWideInstantSwitchEnabled(enabled)
+        }
+    }
 
     fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) =
         cameraController.setSpatialVideoShowUltraWidePreview(enabled)
