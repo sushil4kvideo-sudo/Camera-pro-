@@ -432,13 +432,14 @@ class Camera2Controller(private val context: Context) {
     private fun isNormalVideoUltraWideLens(camera: CameraInfo?): Boolean {
         camera ?: return false
         val wideId = normalVideoUltraWidePhysicalCameraId ?: return false
-        val ids = buildSet {
-            add(camera.cameraId)
-            camera.outputPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
-            runCatching { camera.getOpenCameraId() }.getOrNull()?.takeIf { it.isNotBlank() }?.let(::add)
-            camera.physicalCameras.mapTo(this) { it.cameraId }
-        }
-        return camera.lensFacing == CameraCharacteristics.LENS_FACING_BACK && wideId in ids
+        val openId = runCatching { camera.getOpenCameraId() }.getOrNull()
+        return camera.lensFacing == CameraCharacteristics.LENS_FACING_BACK && (
+            camera.lensType == LensType.BACK_ULTRA_WIDE ||
+                camera.cameraId == wideId ||
+                camera.outputPhysicalCameraId == wideId ||
+                openId == wideId ||
+                (camera.intrinsicZoomRatio.isFinite() && camera.intrinsicZoomRatio in 0.2f..0.75f)
+            )
     }
 
     private fun isCurrentNormalVideoPairLens(camera: CameraInfo?): Boolean {
@@ -462,6 +463,11 @@ class Camera2Controller(private val context: Context) {
 
     private fun clearNormalVideoUltraWideInstantSwitchRuntime(reason: String, reopenSelectedCamera: Boolean) {
         if (!normalVideoUltraWideInstantSwitchActive) return
+        if (videoRecorder.isRecording()) {
+            // A missing standby stream must never leave the encoder waiting on an empty
+            // alternate texture. Fall back to the main 1x source and finish the same MP4.
+            videoRecorder.setSwitchableCameraInputActive(false)
+        }
         val oldPrimaryId = normalVideoPrimaryCameraId
         normalVideoUltraWideInstantSwitchActive = false
         _normalVideoUltraWideInstantSwitchActive.value = false
@@ -12376,7 +12382,11 @@ class Camera2Controller(private val context: Context) {
                     ?.takeIf { includeVideoSurface && dualAspectRecordingActive }
                     ?.let(::addTarget)
                 videoRecorder.switchableCameraInputSurface
-                    ?.takeIf { includeVideoSurface && normalVideoUltraWideInstantSwitchActive }
+                    ?.takeIf {
+                        includeVideoSurface &&
+                            normalVideoUltraWideInstantSwitchActive &&
+                            normalVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+                    }
                     ?.let(::addTarget)
                 applyBaseCameraSettings(this, isCapture = false)
             }
