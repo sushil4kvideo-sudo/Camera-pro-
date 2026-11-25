@@ -713,6 +713,26 @@ fun CameraScreen(
             targetCamera.cameraId != currentCamera?.cameraId
 
         zoomStopAnimationJob?.cancel()
+
+        // The normal-video instant-switch path has both sensors streaming already.
+        // Swap the selected source immediately and animate only the visible standby
+        // preview in Compose; do not run the regular Camera2 zoom animation here,
+        // because it changes the hidden primary stream rather than the visible preview.
+        if (
+            normalVideoUltraWideInstantSwitchActive &&
+            state.captureMode == CaptureMode.VIDEO &&
+            shouldSwitchLens &&
+            targetCamera != null &&
+            shouldUseNormalVideoUltraWideHandoffAnimation(
+                currentLensIntrinsicZoomRatio = currentCamera?.intrinsicZoomRatio,
+                targetLensIntrinsicZoomRatio = targetCamera.intrinsicZoomRatio,
+                targetZoomRatio = targetZoom
+            )
+        ) {
+            viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, targetZoom)
+            return
+        }
+
         if (abs(targetZoom - startZoom) <= 0.001f) {
             if (shouldSwitchLens) {
                 viewModel.switchToLensAndSetZoomRatio(targetCamera!!.cameraId, targetZoom)
@@ -1593,12 +1613,58 @@ fun CameraScreen(
                             spatialVideoEnabled && spatialVideoShowUltraWidePreview &&
                                 !isSpatialVideoUltraWideSelected
                         val showUltraWideFullScreen = isSpatialVideoUltraWideSelected
+                        val normalVideoUltraWideHandoffPreviewActive =
+                            normalVideoUltraWideInstantSwitchActive && !spatialVideoEnabled
+                        val normalVideoUltraWidePreviewScaleTarget = remember(state.availableCameras) {
+                            val ultraWideIntrinsicZoom = state.availableCameras.asSequence()
+                                .filter {
+                                    it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                                        it.intrinsicZoomRatio.isFinite() &&
+                                        it.intrinsicZoomRatio in 0.2f..0.85f
+                                }
+                                .minByOrNull {
+                                    abs(it.intrinsicZoomRatio - NormalVideoUltraWideHandoffZoomRatio)
+                                }
+                                ?.intrinsicZoomRatio
+                            normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsicZoom)
+                        }
+                        val normalVideoUltraWidePreviewAlpha by animateFloatAsState(
+                            targetValue = if (
+                                normalVideoUltraWideHandoffPreviewActive && isSpatialVideoUltraWideSelected
+                            ) 1f else 0f,
+                            animationSpec = if (normalVideoUltraWideHandoffPreviewActive) {
+                                tween(
+                                    durationMillis = ZoomStopAnimationDurationMillis,
+                                    easing = ZoomStopAnimationEasing
+                                )
+                            } else {
+                                snap()
+                            },
+                            label = "normalVideoUltraWidePreviewAlpha"
+                        )
+                        val normalVideoUltraWidePreviewScale by animateFloatAsState(
+                            targetValue = if (
+                                normalVideoUltraWideHandoffPreviewActive && isSpatialVideoUltraWideSelected
+                            ) 1f else normalVideoUltraWidePreviewScaleTarget,
+                            animationSpec = if (normalVideoUltraWideHandoffPreviewActive) {
+                                tween(
+                                    durationMillis = ZoomStopAnimationDurationMillis,
+                                    easing = ZoomStopAnimationEasing
+                                )
+                            } else {
+                                snap()
+                            },
+                            label = "normalVideoUltraWidePreviewScale"
+                        )
                         val previewModifier = when {
                             showUltraWideFullScreen -> Modifier.fillMaxSize()
                             showUltraWideInset -> Modifier
                                 .align(Alignment.BottomStart)
                                 .padding(start = 12.dp, bottom = 104.dp)
                                 .size(width = 112.dp, height = 150.dp)
+                            // Normal Video keeps the standby TextureView full-size and transparent
+                            // on 1x so the 0.6x/1x handoff can animate without recreating its surface.
+                            normalVideoUltraWideHandoffPreviewActive -> Modifier.fillMaxSize()
                             // Keep the TextureView and its SurfaceTexture alive while hidden.
                             // This lets the standby camera keep producing frames before a tap.
                             // A tiny non-zero view keeps SurfaceTexture attached without
@@ -1610,7 +1676,13 @@ fun CameraScreen(
                         Box(
                             modifier = previewModifier
                                 .graphicsLayer {
-                                    alpha = if (showUltraWideFullScreen || showUltraWideInset) 1f else 0f
+                                    if (normalVideoUltraWideHandoffPreviewActive) {
+                                        alpha = normalVideoUltraWidePreviewAlpha
+                                        scaleX = normalVideoUltraWidePreviewScale
+                                        scaleY = normalVideoUltraWidePreviewScale
+                                    } else {
+                                        alpha = if (showUltraWideFullScreen || showUltraWideInset) 1f else 0f
+                                    }
                                 }
                                 .then(
                                     if (showUltraWideInset) Modifier
