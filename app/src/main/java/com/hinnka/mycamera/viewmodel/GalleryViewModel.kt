@@ -1013,7 +1013,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 loadSystemPhotos(reset = true)
             }
         } else if (!hasGalleryPermission) {
-            _systemPhotos.value = emptyList()
+            // Shared URIs carry their own temporary read grant and do not require broad media
+            // library permission. Retain only those explicitly shared items across onResume.
+            _systemPhotos.update { current -> current.filter { it.isExternalShared } }
             _photonCameraPhotos.value = emptyList()
         }
     }
@@ -1341,8 +1343,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 loadSystemPhotos(reset = true)
             }
 
-            val sharedVideos = uris.distinct().map { uri ->
-                createExternalSharedVideo(context, uri, mimeType)
+            val sharedVideos = withContext(Dispatchers.IO) {
+                uris.distinct().map { uri ->
+                    createExternalSharedVideo(context, uri, mimeType)
+                }
             }
             if (sharedVideos.isEmpty()) {
                 onFallback()
