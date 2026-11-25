@@ -6990,8 +6990,86 @@ class Camera2Controller(private val context: Context) {
             } else if (supportedNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST)) {
                 builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
             }
+            if (isVideo) {
+                applySpecialVideoLogicalUltraWideImageQualitySettings(
+                    builder = builder,
+                    selectedEdgeLevel = selectedEdgeLevel,
+                    selectedNrLevel = effectiveNrLevel,
+                )
+            }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply image quality settings", e)
+        }
+    }
+
+    /**
+     * A logical multi-camera Special Video session can route the 0.5x sensor through a
+     * physical output of the main CameraDevice. Global request keys target the logical
+     * camera, so also set the per-physical keys when the HAL advertises them.
+     */
+    private fun applySpecialVideoLogicalUltraWideImageQualitySettings(
+        builder: CaptureRequest.Builder,
+        selectedEdgeLevel: Int,
+        selectedNrLevel: NoiseReductionLevel,
+    ) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
+            !spatialVideoEnabled ||
+            spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+        ) return
+
+        val physicalCameraId = spatialVideoUltraWidePhysicalCameraId ?: return
+        val characteristics = getCameraCharacteristicsOrNull(
+            physicalCameraId,
+            "Special Video ultra-wide image quality",
+        ) ?: return
+        val physicalRequestKeys = characteristics.get(
+            CameraCharacteristics.REQUEST_AVAILABLE_PHYSICAL_CAMERA_REQUEST_KEYS
+        ).orEmpty()
+        val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+            ?: intArrayOf()
+        val noiseReductionModes = characteristics.get(
+            CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES
+        ) ?: intArrayOf()
+
+        val edgeMode = when (selectedEdgeLevel) {
+            0 -> CaptureRequest.EDGE_MODE_OFF
+            1 -> CaptureRequest.EDGE_MODE_FAST
+            2 -> CaptureRequest.EDGE_MODE_HIGH_QUALITY
+            3 -> if (edgeModes.contains(CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG)) {
+                CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG
+            } else {
+                CaptureRequest.EDGE_MODE_FAST
+            }
+            else -> CaptureRequest.EDGE_MODE_FAST
+        }
+        if (physicalRequestKeys.contains(CaptureRequest.EDGE_MODE) && edgeModes.contains(edgeMode)) {
+            builder.setPhysicalCameraKey(CaptureRequest.EDGE_MODE, edgeMode, physicalCameraId)
+        }
+
+        val noiseReductionMode = when (selectedNrLevel) {
+            NoiseReductionLevel.OFF -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
+            NoiseReductionLevel.MINIMAL -> if (noiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL)) {
+                CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL
+            } else {
+                CaptureRequest.NOISE_REDUCTION_MODE_FAST
+            }
+            NoiseReductionLevel.FAST -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+            NoiseReductionLevel.HIGH_QUALITY -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+            NoiseReductionLevel.ZERO_SHUTTER_LAG -> if (noiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) {
+                CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG
+            } else {
+                CaptureRequest.NOISE_REDUCTION_MODE_FAST
+            }
+            else -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+        }
+        if (physicalRequestKeys.contains(CaptureRequest.NOISE_REDUCTION_MODE) &&
+            noiseReductionModes.contains(noiseReductionMode)
+        ) {
+            builder.setPhysicalCameraKey(
+                CaptureRequest.NOISE_REDUCTION_MODE,
+                noiseReductionMode,
+                physicalCameraId,
+            )
         }
     }
 
