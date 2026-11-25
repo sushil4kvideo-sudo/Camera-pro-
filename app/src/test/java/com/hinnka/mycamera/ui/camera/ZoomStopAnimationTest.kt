@@ -83,7 +83,7 @@ class ZoomStopAnimationTest {
     }
 
     @Test
-    fun ultraWideToMainTwoAndThreeXUseContinuousHandoff() {
+    fun ultraWideToMainOrTelephotoTwoAndThreeXUseContinuousHandoff() {
         assertTrue(
             shouldUseNormalVideoUltraWideExtendedZoomHandoff(
                 currentLensIntrinsicZoomRatio = 0.6f,
@@ -95,6 +95,27 @@ class ZoomStopAnimationTest {
             shouldUseNormalVideoUltraWideExtendedZoomHandoff(
                 currentLensIntrinsicZoomRatio = 0.6f,
                 targetLensIntrinsicZoomRatio = 1f,
+                targetZoomRatio = 3f,
+            )
+        )
+        assertTrue(
+            shouldUseNormalVideoUltraWideExtendedZoomHandoff(
+                currentLensIntrinsicZoomRatio = 0.6f,
+                targetLensIntrinsicZoomRatio = 2f,
+                targetZoomRatio = 2f,
+            )
+        )
+        assertTrue(
+            shouldUseNormalVideoUltraWideExtendedZoomHandoff(
+                currentLensIntrinsicZoomRatio = 0.6f,
+                targetLensIntrinsicZoomRatio = 2f,
+                targetZoomRatio = 3f,
+            )
+        )
+        assertTrue(
+            shouldUseNormalVideoUltraWideExtendedZoomHandoff(
+                currentLensIntrinsicZoomRatio = 0.5f,
+                targetLensIntrinsicZoomRatio = 3f,
                 targetZoomRatio = 3f,
             )
         )
