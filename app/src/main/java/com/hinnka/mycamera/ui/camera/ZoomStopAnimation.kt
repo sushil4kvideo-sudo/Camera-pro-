@@ -80,6 +80,29 @@ internal fun shouldUseNormalVideoUltraWideReverseZoomHandoff(
 }
 
 /** Scale the standby ultra-wide preview to match the requested main-camera field of view. */
+/**
+ * Find the visible zoom at which a zoomed-in main/telephoto lens reaches its minimum
+ * usable field of view. The standby ultra-wide preview can be scaled to this same FOV,
+ * allowing the reverse lens handoff to happen without a visible crop jump.
+ */
+internal fun normalVideoUltraWideReverseHandoffZoomRatio(
+    currentLensDisplayIntrinsicZoomRatio: Float?,
+    currentLensMinimumDeviceZoomRatio: Float?,
+    startZoomRatio: Float,
+    targetZoomRatio: Float,
+): Float? {
+    val intrinsic = currentLensDisplayIntrinsicZoomRatio
+        ?.takeIf { it.isFinite() && it > 0f } ?: return null
+    val minimumDeviceZoom = currentLensMinimumDeviceZoomRatio
+        ?.takeIf { it.isFinite() && it > 0f } ?: return null
+    if (!startZoomRatio.isFinite() || startZoomRatio <= 0f ||
+        !targetZoomRatio.isFinite() || targetZoomRatio <= 0f ||
+        startZoomRatio <= targetZoomRatio
+    ) return null
+
+    return (intrinsic * minimumDeviceZoom).coerceIn(targetZoomRatio, startZoomRatio)
+}
+
 internal fun normalVideoUltraWideHandoffPreviewScale(
     ultraWideIntrinsicZoomRatio: Float?,
     targetZoomRatio: Float = 1f,
