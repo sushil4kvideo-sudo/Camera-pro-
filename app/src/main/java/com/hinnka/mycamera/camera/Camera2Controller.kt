@@ -4411,6 +4411,19 @@ class Camera2Controller(private val context: Context) {
                             }
                             PLog.e(TAG, "Video session configuration failed")
                             safeCloseCaptureSession(session, "video configure failure")
+                            if (normalVideoSwitchableRecordSurface != null &&
+                                normalVideoUltraWideInstantSwitchActive
+                            ) {
+                                PLog.w(
+                                    TAG,
+                                    "Normal Video ultra-wide recording output rejected by Camera2; " +
+                                        "retrying the same recording on the main 1x input",
+                                )
+                                fallbackNormalVideoUltraWideInstantSwitchToMain(
+                                    "Camera2 rejected the ultra-wide recording output",
+                                )
+                                return
+                            }
                             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
                             if (retryPreviewSessionWithoutUltraWideAeMetering("video configure failed", openGeneration)) return
                             if (vendorSessionParametersApplied &&
@@ -10639,12 +10652,40 @@ class Camera2Controller(private val context: Context) {
         PLog.i(TAG, "Special Video standby camera closed: id=${device?.id}, reason=$reason")
     }
 
+    private fun fallbackNormalVideoUltraWideInstantSwitchToMain(reason: String) {
+        if (!normalVideoUltraWideInstantSwitchActive) return
+        if (videoRecorder.isRecording()) {
+            videoRecorder.setSwitchableCameraInputActive(false)
+        }
+        val mainPhysicalId = normalVideoMainPhysicalCameraId
+        val mainInfo = _state.value.availableCameras.firstOrNull { camera ->
+            camera.cameraId == normalVideoPrimaryCameraId ||
+                camera.cameraId == mainPhysicalId ||
+                camera.outputPhysicalCameraId == mainPhysicalId ||
+                camera.physicalCameras.any { it.cameraId == mainPhysicalId }
+        }
+        if (mainInfo != null) {
+            _state.value = _state.value.copy(
+                currentCameraId = mainInfo.cameraId,
+                currentLensType = mainInfo.lensType,
+                zoomRatio = 1f,
+                zoomPanX = 0f,
+                zoomPanY = 0f,
+                zoomPanEnabled = false,
+            )
+        }
+        clearNormalVideoUltraWideInstantSwitchRuntime(reason, reopenSelectedCamera = false)
+        if (cameraDevice != null && previewSurface != null) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+        }
+    }
+
     private fun handleUltraWideStandbyPreviewFailure(reason: String) {
         if (spatialVideoEnabled) {
             failSpatialVideoStandby(reason)
         } else if (normalVideoUltraWideInstantSwitchActive) {
             PLog.e(TAG, "Normal Video ultra-wide standby preview unavailable: $reason")
-            clearNormalVideoUltraWideInstantSwitchRuntime(reason, reopenSelectedCamera = false)
+            fallbackNormalVideoUltraWideInstantSwitchToMain(reason)
             onCameraError?.invoke(
                 -1,
                 "Instant ultra-wide switching is unavailable on this camera session: $reason",
