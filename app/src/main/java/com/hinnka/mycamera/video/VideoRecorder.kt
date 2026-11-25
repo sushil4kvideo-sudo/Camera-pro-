@@ -150,6 +150,10 @@ class VideoRecorder(
     private var requestedEnhancedStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
     private var requestedDualCaptureInputSize: Size? = null
     private var requestedDualCaptureSensorOrientationDegrees: Int = 0
+    private var requestedSwitchableCameraInputSize: Size? = null
+    private var requestedSwitchableCameraSensorOrientationDegrees: Int = 0
+    private var requestedSwitchableCameraTimestampSource = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+    private var switchableCameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
     private var requestedDualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
     private var requestedDualCapturePositionX: Float = 0.66f
     private var requestedDualCapturePositionY: Float = 0.05f
@@ -240,6 +244,11 @@ class VideoRecorder(
             isRecording && !stopRequested
         }
 
+    val switchableCameraInputSurface: Surface?
+        get() = renderer?.switchableCameraInputSurface.takeIf {
+            isRecording && !stopRequested
+        }
+
     val pendingOutputUri: Uri?
         get() = pendingVideoOutput?.uri
 
@@ -281,6 +290,9 @@ class VideoRecorder(
         dualCaptureInputSize: Size? = null,
         dualCaptureSensorOrientationDegrees: Int = 0,
         dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
+        switchableCameraInputSize: Size? = null,
+        switchableCameraSensorOrientationDegrees: Int = 0,
+        switchableCameraTimestampSource: Int = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
         dualCapturePositionX: Float = 0.66f,
         dualCapturePositionY: Float = 0.05f,
         dualCapturePipWidthFraction: Float = 0.33f,
@@ -296,6 +308,11 @@ class VideoRecorder(
         requestedDualCaptureInputSize = dualCaptureInputSize
         requestedDualCaptureSensorOrientationDegrees = dualCaptureSensorOrientationDegrees
         requestedDualCaptureLayout = dualCaptureLayout
+        requestedSwitchableCameraInputSize = switchableCameraInputSize
+            ?.takeIf { it.width > 0 && it.height > 0 }
+        requestedSwitchableCameraSensorOrientationDegrees = switchableCameraSensorOrientationDegrees
+        requestedSwitchableCameraTimestampSource = switchableCameraTimestampSource
+        switchableCameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
         requestedDualCapturePositionX = dualCapturePositionX.coerceIn(0f, 1f)
         requestedDualCapturePositionY = dualCapturePositionY.coerceIn(0f, 1f)
         requestedDualCapturePipWidthFraction = dualCapturePipWidthFraction.coerceIn(0.01f, 0.33f)
@@ -510,6 +527,23 @@ class VideoRecorder(
         )
     }
 
+    fun setSwitchableCameraInputActive(active: Boolean) {
+        if (!isRecording || stopRequested) return
+        if (requestedSwitchableCameraInputSize == null) {
+            if (active) PLog.w(TAG, "Cannot select ultra-wide video source: switchable input was not prepared")
+            return
+        }
+        runBlocking(renderDispatcher) {
+            renderer?.setSwitchableCameraInputActive(active)
+        }
+        // Separate CameraDevices can expose different clock origins when their timestamp
+        // source is UNKNOWN. Recalibrate after a handoff so PTS remains aligned to BOOTTIME.
+        if (requestedSwitchableCameraTimestampSource != CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
+            switchableCameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
+        }
+        PLog.i(TAG, "Video encoder input source updated")
+    }
+
     fun onCameraInputStarted(): Boolean {
         if (!isRecording || stopRequested || cameraInputStarted) return false
         cameraInputStarted = true
@@ -721,6 +755,8 @@ class VideoRecorder(
             dualCapturePositionY = requestedDualCapturePositionY,
             dualCapturePipWidthFraction = requestedDualCapturePipWidthFraction,
             encoderOrientationHintDegrees = requestedOrientationHintDegrees,
+            switchableCameraInputSize = requestedSwitchableCameraInputSize,
+            switchableCameraSensorOrientationDegrees = requestedSwitchableCameraSensorOrientationDegrees,
             cameraInputZoomRatio = requestedCameraInputZoomRatio,
             watermarkLabel = if (sharedTimelineStreamName != null) MediaWatermark.SPECIAL_VIDEO else null,
         )
@@ -1388,9 +1424,30 @@ class VideoRecorder(
         return activeAudioConfig.channelCount * AUDIO_BYTES_PER_SAMPLE
     }
 
-    private fun mapCameraTimestampToBoottimeNs(cameraTimestampNs: Long): Long {
-        if (requestedCameraTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
+    private fun mapCameraTimestampToBoottimeNs(
+        cameraTimestampNs: Long,
+        switchableInput: Boolean = false,
+    ): Long {
+        val timestampSource = if (switchableInput) {
+            requestedSwitchableCameraTimestampSource
+        } else {
+            requestedCameraTimestampSource
+        }
+        if (timestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
             return cameraTimestampNs
+        }
+
+        if (switchableInput) {
+            if (switchableCameraTimestampToBoottimeOffsetNs == UNSET_TIMESTAMP) {
+                switchableCameraTimestampToBoottimeOffsetNs =
+                    SystemClock.elapsedRealtimeNanos() - cameraTimestampNs
+                PLog.w(
+                    TAG,
+                    "Ultra-wide camera timestamp calibrated to BOOTTIME with " +
+                        "offsetNs=$switchableCameraTimestampToBoottimeOffsetNs",
+                )
+            }
+            return cameraTimestampNs + switchableCameraTimestampToBoottimeOffsetNs
         }
 
         if (cameraTimestampToBoottimeOffsetNs == UNSET_TIMESTAMP) {
@@ -1407,7 +1464,6 @@ class VideoRecorder(
         }
         return cameraTimestampNs + cameraTimestampToBoottimeOffsetNs
     }
-
     private fun establishTimelineOrigin(firstVideoPresentationTimeUs: Long) {
         if (usesSharedTimelineOrigin) {
             onSharedTimelineFirstFrame?.invoke(firstVideoPresentationTimeUs)
@@ -1476,7 +1532,9 @@ class VideoRecorder(
                 val videoRenderer = renderer ?: continue
                 val renderStartMs = SystemClock.elapsedRealtime()
                 val presentationTimeNs = videoRenderer.renderLatestFrame(
-                    mapPresentationTimeNs = ::mapCameraTimestampToBoottimeNs,
+                    mapPresentationTimeNs = { timestampNs, switchableInput ->
+                        mapCameraTimestampToBoottimeNs(timestampNs, switchableInput)
+                    },
                 ) ?: continue
                 establishTimelineOrigin(presentationTimeNs / 1_000L)
                 val renderCostMs = (SystemClock.elapsedRealtime() - renderStartMs).coerceAtLeast(0L)
