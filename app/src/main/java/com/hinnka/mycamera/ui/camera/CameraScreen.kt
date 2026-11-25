@@ -798,7 +798,7 @@ fun CameraScreen(
         // hand the live preview to the main lens exactly at its native 1x field of view.
         // The wide overlay is removed at that frame; the remaining zoom continues on the
         // main camera, so it never has to stop at 1x or stretch the wide feed to 3x.
-        if (normalInstantPairHandoff && currentIsUltraWide && targetIsMain &&
+        if (normalInstantPairHandoff && currentIsUltraWide &&
             targetCamera != null &&
             shouldUseNormalVideoUltraWideExtendedZoomHandoff(
                 currentLensIntrinsicZoomRatio = currentIntrinsic,
@@ -806,10 +806,16 @@ fun CameraScreen(
                 targetZoomRatio = targetZoom,
             )
         ) {
-            val handoffZoom = targetCamera.displayIntrinsicZoomRatio
+            val targetLensBaseZoom = targetCamera.displayIntrinsicZoomRatio
                 .takeIf { it.isFinite() && it > 0f }
                 ?: targetIntrinsic?.takeIf { it.isFinite() && it > 0f }
                 ?: 1f
+            // Keep the standby image within a 5x crop while handing off at the
+            // destination lens' native focal length (1x main, 2x/3x telephoto).
+            val maxStandbyPreviewZoom = (ultraWideIntrinsic
+                ?.takeIf { it.isFinite() && it in 0.2f..0.85f }
+                ?: NormalVideoUltraWideHandoffZoomRatio) * 5f
+            val handoffZoom = targetLensBaseZoom.coerceAtMost(maxStandbyPreviewZoom)
             normalVideoUltraWidePreviewVisible = true
             normalVideoUltraWidePreviewScaleTarget =
                 normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, startZoom)
