@@ -80,6 +80,11 @@ class ZoomStopAnimationTest {
             normalVideoUltraWideHandoffPreviewScale(0.6f, 3f),
             0.0001f,
         )
+        assertEquals(
+            6f,
+            normalVideoUltraWideHandoffPreviewScale(0.5f, 3f),
+            0.0001f,
+        )
     }
 
     @Test
