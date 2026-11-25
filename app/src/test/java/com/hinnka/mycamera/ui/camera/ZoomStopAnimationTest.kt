@@ -134,6 +134,42 @@ class ZoomStopAnimationTest {
     }
 
     @Test
+    fun zoomedInRearLensToUltraWideUsesContinuousZoomOutFromActualStartRatio() {
+        assertTrue(
+            shouldUseNormalVideoUltraWideReverseZoomHandoff(
+                currentLensIntrinsicZoomRatio = 1f,
+                targetLensIntrinsicZoomRatio = 0.6f,
+                startZoomRatio = 3f,
+                targetZoomRatio = 0.6f,
+            )
+        )
+        assertTrue(
+            shouldUseNormalVideoUltraWideReverseZoomHandoff(
+                currentLensIntrinsicZoomRatio = 3f,
+                targetLensIntrinsicZoomRatio = 0.6f,
+                startZoomRatio = 3f,
+                targetZoomRatio = 0.6f,
+            )
+        )
+        assertFalse(
+            shouldUseNormalVideoUltraWideReverseZoomHandoff(
+                currentLensIntrinsicZoomRatio = 1f,
+                targetLensIntrinsicZoomRatio = 0.6f,
+                startZoomRatio = 1f,
+                targetZoomRatio = 0.6f,
+            )
+        )
+        assertFalse(
+            shouldUseNormalVideoUltraWideReverseZoomHandoff(
+                currentLensIntrinsicZoomRatio = 0.6f,
+                targetLensIntrinsicZoomRatio = 1f,
+                startZoomRatio = 3f,
+                targetZoomRatio = 1f,
+            )
+        )
+    }
+
+    @Test
     fun invalidUltraWideRatioUsesSafePointSixFallback() {
         assertEquals(
             1f / 0.6f,

@@ -683,11 +683,16 @@ fun CameraScreen(
         }
     }
 
-    suspend fun runZoomStopAnimation(startZoom: Float, targetZoom: Float) {
+    suspend fun runZoomStopAnimation(
+        startZoom: Float,
+        targetZoom: Float,
+        onZoomFrame: (Float) -> Unit = {},
+    ) {
         if (!startZoom.isFinite() || startZoom <= 0f ||
             !targetZoom.isFinite() || targetZoom <= 0f
         ) {
             viewModel.setZoomRatio(targetZoom)
+            onZoomFrame(targetZoom)
             return
         }
         zoomStopAnimationProgress.snapTo(0f)
@@ -698,11 +703,12 @@ fun CameraScreen(
                 easing = ZoomStopAnimationEasing
             )
         ) {
-            viewModel.setZoomRatio(
-                interpolateZoomRatio(startZoom, targetZoom, value)
-            )
+            val nextZoom = interpolateZoomRatio(startZoom, targetZoom, value)
+            viewModel.setZoomRatio(nextZoom)
+            onZoomFrame(nextZoom)
         }
         viewModel.setZoomRatio(targetZoom)
+        onZoomFrame(targetZoom)
     }
 
     fun animateZoomStopTo(targetZoom: Float, requestedCameraId: String? = null) {
@@ -753,6 +759,7 @@ fun CameraScreen(
         // Main -> ultra-wide: promote the already-running wide preview and animate its
         // scale. No alpha cross-fade is used, so the two live camera images never blend.
         if (normalInstantPairHandoff && currentIsMain && targetIsUltraWide && targetCamera != null &&
+            startZoom <= 1.05f &&
             shouldUseNormalVideoUltraWideHandoffAnimation(
                 currentLensIntrinsicZoomRatio = currentIntrinsic,
                 targetLensIntrinsicZoomRatio = targetIntrinsic,
@@ -763,6 +770,38 @@ fun CameraScreen(
             normalVideoUltraWidePreviewScaleTarget =
                 normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, targetZoom)
             viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, targetZoom)
+            return
+        }
+
+        // Zoomed-in rear lens -> ultra-wide: animate from the actual selected zoom (for
+        // example 3x) down to 0.6x rather than restarting the transition at 1x.
+        if (normalInstantPairHandoff && !currentIsUltraWide && targetIsUltraWide &&
+            targetCamera != null &&
+            shouldUseNormalVideoUltraWideReverseZoomHandoff(
+                currentLensIntrinsicZoomRatio = currentIntrinsic,
+                targetLensIntrinsicZoomRatio = targetIntrinsic,
+                startZoomRatio = startZoom,
+                targetZoomRatio = targetZoom,
+            )
+        ) {
+            val initialWideScale =
+                normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, startZoom)
+            normalVideoUltraWidePreviewVisible = true
+            normalVideoUltraWidePreviewScaleTarget = initialWideScale
+            normalVideoUltraWidePreviewScaleFrame = initialWideScale
+            zoomStopAnimationJob = scope.launch {
+                // Place the already-running wide feed over the main preview before animating.
+                withFrameNanos { }
+                runZoomStopAnimation(startZoom, targetZoom) { nextZoom ->
+                    normalVideoUltraWidePreviewScaleFrame =
+                        normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, nextZoom)
+                }
+                val finalWideScale =
+                    normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, targetZoom)
+                normalVideoUltraWidePreviewScaleTarget = finalWideScale
+                normalVideoUltraWidePreviewScaleFrame = finalWideScale
+                viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, targetZoom)
+            }
             return
         }
 
@@ -794,10 +833,9 @@ fun CameraScreen(
             return
         }
 
-        // Ultra-wide -> main 2x/3x: drive one continuous 400 ms zoom timeline and
-        // hand the live preview to the main lens exactly at its native 1x field of view.
-        // The wide overlay is removed at that frame; the remaining zoom continues on the
-        // main camera, so it never has to stop at 1x or stretch the wide feed to 3x.
+        // Ultra-wide -> main/telephoto 2x/3x: keep one continuous 400 ms zoom timeline.
+        // Keep the opaque wide preview through the physical handoff so a temporary 1x
+        // state on the destination camera cannot appear as a pause in the animation.
         if (normalInstantPairHandoff && currentIsUltraWide &&
             targetCamera != null &&
             shouldUseNormalVideoUltraWideExtendedZoomHandoff(
@@ -810,12 +848,11 @@ fun CameraScreen(
                 .takeIf { it.isFinite() && it > 0f }
                 ?: targetIntrinsic?.takeIf { it.isFinite() && it > 0f }
                 ?: 1f
-            // Keep the standby image within an 8x crop while handing off at the
-            // destination lens' native focal length (1x main, 2x/3x telephoto).
             val maxStandbyPreviewZoom = (ultraWideIntrinsic
                 ?.takeIf { it.isFinite() && it in 0.2f..0.85f }
                 ?: NormalVideoUltraWideHandoffZoomRatio) * 8f
             val handoffZoom = targetLensBaseZoom.coerceAtMost(maxStandbyPreviewZoom)
+            val keepWidePreviewThroughAnimation = targetZoom <= maxStandbyPreviewZoom + 0.001f
             normalVideoUltraWidePreviewVisible = true
             normalVideoUltraWidePreviewScaleTarget =
                 normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, startZoom)
@@ -824,43 +861,60 @@ fun CameraScreen(
             zoomStopAnimationJob = scope.launch {
                 if (startZoom >= handoffZoom) {
                     viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, startZoom)
-                    normalVideoUltraWidePreviewVisible = false
-                    normalVideoUltraWidePreviewScaleTarget = Float.NaN
-                    normalVideoUltraWidePreviewScaleFrame = Float.NaN
-                    runZoomStopAnimation(startZoom, targetZoom)
-                    return@launch
-                }
-
-                zoomStopAnimationProgress.snapTo(0f)
-                var lensHandedOff = false
-                zoomStopAnimationProgress.animateTo(
-                    targetValue = 1f,
-                    animationSpec = tween(
-                        durationMillis = resolveZoomStopAnimationDurationMillis(startZoom, targetZoom),
-                        easing = ZoomStopAnimationEasing,
-                    ),
-                ) {
-                    val nextZoom = interpolateZoomRatio(startZoom, targetZoom, value)
-                    if (!lensHandedOff && nextZoom >= handoffZoom) {
-                        viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, handoffZoom)
-                        lensHandedOff = true
+                    if (keepWidePreviewThroughAnimation) {
+                        runZoomStopAnimation(startZoom, targetZoom) { nextZoom ->
+                            normalVideoUltraWidePreviewScaleFrame =
+                                normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, nextZoom)
+                        }
+                    } else {
                         normalVideoUltraWidePreviewVisible = false
                         normalVideoUltraWidePreviewScaleTarget = Float.NaN
                         normalVideoUltraWidePreviewScaleFrame = Float.NaN
+                        runZoomStopAnimation(startZoom, targetZoom)
                     }
-                    viewModel.setZoomRatio(nextZoom)
+                } else {
+                    zoomStopAnimationProgress.snapTo(0f)
+                    var lensHandedOff = false
+                    zoomStopAnimationProgress.animateTo(
+                        targetValue = 1f,
+                        animationSpec = tween(
+                            durationMillis = resolveZoomStopAnimationDurationMillis(startZoom, targetZoom),
+                            easing = ZoomStopAnimationEasing,
+                        ),
+                    ) {
+                        val nextZoom = interpolateZoomRatio(startZoom, targetZoom, value)
+                        if (!lensHandedOff && nextZoom >= handoffZoom) {
+                            viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, handoffZoom)
+                            lensHandedOff = true
+                            if (!keepWidePreviewThroughAnimation) {
+                                normalVideoUltraWidePreviewVisible = false
+                                normalVideoUltraWidePreviewScaleTarget = Float.NaN
+                                normalVideoUltraWidePreviewScaleFrame = Float.NaN
+                            }
+                        }
+                        viewModel.setZoomRatio(nextZoom)
+                        if (keepWidePreviewThroughAnimation || !lensHandedOff) {
+                            normalVideoUltraWidePreviewScaleFrame =
+                                normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, nextZoom)
+                        }
+                    }
                     if (!lensHandedOff) {
-                        normalVideoUltraWidePreviewScaleFrame =
-                            normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, nextZoom)
+                        viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, handoffZoom)
                     }
+                    viewModel.setZoomRatio(targetZoom)
                 }
-                if (!lensHandedOff) {
-                    viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, handoffZoom)
-                    normalVideoUltraWidePreviewVisible = false
-                    normalVideoUltraWidePreviewScaleTarget = Float.NaN
-                    normalVideoUltraWidePreviewScaleFrame = Float.NaN
+
+                if (keepWidePreviewThroughAnimation) {
+                    val finalWideScale =
+                        normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, targetZoom)
+                    normalVideoUltraWidePreviewScaleTarget = finalWideScale
+                    normalVideoUltraWidePreviewScaleFrame = finalWideScale
+                    // Allow the destination camera's final zoom request to reach its preview.
+                    delay(50L)
                 }
-                viewModel.setZoomRatio(targetZoom)
+                normalVideoUltraWidePreviewVisible = false
+                normalVideoUltraWidePreviewScaleTarget = Float.NaN
+                normalVideoUltraWidePreviewScaleFrame = Float.NaN
             }
             return
         }

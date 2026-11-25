@@ -56,6 +56,29 @@ internal fun shouldUseNormalVideoUltraWideExtendedZoomHandoff(
     return currentIsUltraWide && targetIsFurtherTelephoto
 }
 
+/**
+ * Route a zoomed-in rear-camera -> ultra-wide tap through a continuous zoom-out animation
+ * starting at the actual selected ratio. The established 1x -> 0.6x handoff is unchanged.
+ */
+internal fun shouldUseNormalVideoUltraWideReverseZoomHandoff(
+    currentLensIntrinsicZoomRatio: Float?,
+    targetLensIntrinsicZoomRatio: Float?,
+    startZoomRatio: Float,
+    targetZoomRatio: Float,
+): Boolean {
+    val currentIntrinsic = currentLensIntrinsicZoomRatio
+        ?.takeIf { it.isFinite() && it > 0f } ?: return false
+    val targetIntrinsic = targetLensIntrinsicZoomRatio
+        ?.takeIf { it.isFinite() && it > 0f } ?: return false
+    if (!startZoomRatio.isFinite() || startZoomRatio <= 1.05f ||
+        !targetZoomRatio.isFinite() || targetZoomRatio !in 0.2f..0.85f
+    ) return false
+
+    return currentIntrinsic > 0.85f &&
+        targetIntrinsic in 0.2f..0.85f &&
+        startZoomRatio > targetZoomRatio + 0.05f
+}
+
 /** Scale the standby ultra-wide preview to match the requested main-camera field of view. */
 internal fun normalVideoUltraWideHandoffPreviewScale(
     ultraWideIntrinsicZoomRatio: Float?,

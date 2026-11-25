@@ -7019,6 +7019,7 @@ class Camera2Controller(private val context: Context) {
                 builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
             }
             if (isVideo) {
+                applyNormalVideoLogicalUltraWideImageQualitySettings(builder)
                 applySpecialVideoLogicalUltraWideImageQualitySettings(
                     builder = builder,
                     selectedEdgeLevel = selectedEdgeLevel,
@@ -7027,6 +7028,76 @@ class Camera2Controller(private val context: Context) {
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply image quality settings", e)
+        }
+    }
+
+    /**
+     * Keep the Normal Video ultra-wide stream free of Camera2 HAL edge enhancement
+     * (sharpness) and noise reduction. For a logical pair use physical request keys so
+     * the main sensor retains its own settings; for a stand-alone wide camera use the
+     * global request keys. The independent standby camera is configured separately below.
+     */
+    private fun applyNormalVideoLogicalUltraWideImageQualitySettings(
+        builder: CaptureRequest.Builder,
+    ) {
+        if (spatialVideoEnabled) return
+
+        if (normalVideoUltraWideInstantSwitchActive) {
+            // Independent standby sessions receive OFF directly in their own request.
+            if (normalVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ||
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.P
+            ) return
+
+            val physicalCameraId = normalVideoUltraWidePhysicalCameraId ?: return
+            val characteristics = getCameraCharacteristicsOrNull(
+                physicalCameraId,
+                "Normal Video ultra-wide image quality",
+            ) ?: return
+            val physicalRequestKeys = characteristics.availablePhysicalCameraRequestKeys.orEmpty()
+            val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+                ?: intArrayOf()
+            val noiseReductionModes = characteristics.get(
+                CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES
+            ) ?: intArrayOf()
+
+            if (physicalRequestKeys.contains(CaptureRequest.EDGE_MODE) &&
+                edgeModes.contains(CaptureRequest.EDGE_MODE_OFF)
+            ) {
+                builder.setPhysicalCameraKey(
+                    CaptureRequest.EDGE_MODE,
+                    CaptureRequest.EDGE_MODE_OFF,
+                    physicalCameraId,
+                )
+            }
+            if (physicalRequestKeys.contains(CaptureRequest.NOISE_REDUCTION_MODE) &&
+                noiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+            ) {
+                builder.setPhysicalCameraKey(
+                    CaptureRequest.NOISE_REDUCTION_MODE,
+                    CaptureRequest.NOISE_REDUCTION_MODE_OFF,
+                    physicalCameraId,
+                )
+            }
+            return
+        }
+
+        // Normal Video with instant switching disabled: the selected camera itself may
+        // be the rear ultra-wide lens, so disable both controls on its global request.
+        val selectedCamera = _state.value.getCurrentCameraInfo() ?: return
+        val selectedIsUltraWide = selectedCamera.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+            (selectedCamera.lensType == LensType.BACK_ULTRA_WIDE ||
+                (selectedCamera.intrinsicZoomRatio.isFinite() &&
+                    selectedCamera.intrinsicZoomRatio in 0.2f..0.85f))
+        if (!selectedIsUltraWide) return
+
+        if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_OFF)) {
+            builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+        }
+        if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF)) {
+            builder.set(
+                CaptureRequest.NOISE_REDUCTION_MODE,
+                CaptureRequest.NOISE_REDUCTION_MODE_OFF,
+            )
         }
     }
 
@@ -7494,10 +7565,17 @@ class Camera2Controller(private val context: Context) {
 
         targetCamera?.let { cam ->
             PLog.d(TAG, "Switching to camera ID: $cameraId")
-            _state.value = _state.value.copy(
+            val previousState = _state.value
+            val currentCamera = previousState.getCurrentCameraInfo()
+            val preserveNormalVideoPairZoom = normalVideoUltraWideInstantSwitchActive &&
+                isCurrentNormalVideoPairLens(currentCamera) &&
+                isCurrentNormalVideoPairLens(cam)
+            _state.value = previousState.copy(
                 currentCameraId = cam.cameraId,
                 currentLensType = cam.lensType,
-                zoomRatio = 1f
+                // Both paired streams are already running; resetting to 1x here creates
+                // a visible pause in the middle of an otherwise continuous zoom handoff.
+                zoomRatio = if (preserveNormalVideoPairZoom) previousState.zoomRatio else 1f
             )
             if (normalVideoUltraWideInstantSwitchActive && videoRecorder.isRecording()) {
                 videoRecorder.setSwitchableCameraInputActive(isNormalVideoUltraWideLens(cam))
@@ -10678,6 +10756,21 @@ class Camera2Controller(private val context: Context) {
                         supportedEdgeModes = wideEdgeModes,
                         supportedNoiseReductionModes = wideNoiseReductionModes,
                     )
+                } else if (
+                    normalVideoUltraWideInstantSwitchActive &&
+                    device.id == normalVideoUltraWidePhysicalCameraId
+                ) {
+                    // Independent Normal Video ultra-wide CameraDevice: disable HAL
+                    // sharpness and noise reduction without changing the main camera.
+                    if (wideEdgeModes.contains(CaptureRequest.EDGE_MODE_OFF)) {
+                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+                    }
+                    if (wideNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF)) {
+                        set(
+                            CaptureRequest.NOISE_REDUCTION_MODE,
+                            CaptureRequest.NOISE_REDUCTION_MODE_OFF,
+                        )
+                    }
                 }
             }
             spatialVideoStandbyRequestBuilder = request.takeIf { spatialVideoEnabled }
