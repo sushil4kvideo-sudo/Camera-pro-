@@ -3580,6 +3580,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val spatialVideoEnabled = cameraController.spatialVideoEnabledFlow
     val spatialVideoShowUltraWidePreview = cameraController.spatialVideoShowUltraWidePreview
     val spatialVideoVirtualTelephotoEnabled = cameraController.spatialVideoVirtualTelephotoEnabledFlow
+    val topOffZoomEnabled = cameraController.topOffZoomEnabledFlow
+    val topOffZoomFactor = cameraController.topOffZoomFactorFlow
     val normalVideoUltraWideInstantSwitchActive =
         cameraController.normalVideoUltraWideInstantSwitchActiveFlow
     val spatialVideoPreviewStreamSize = cameraController.spatialVideoPreviewStreamSize
@@ -3642,6 +3644,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             reopenCamera()
         }
     }
+
+    fun setTopOffZoomEnabled(enabled: Boolean) =
+        cameraController.setTopOffZoomEnabled(enabled)
+
+    fun setTopOffZoomFactor(factor: Float) =
+        cameraController.setTopOffZoomFactor(factor)
 
     fun setSpatialVideoPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) =
         cameraController.setSpatialVideoPreviewSurfaceTexture(surfaceTexture)
