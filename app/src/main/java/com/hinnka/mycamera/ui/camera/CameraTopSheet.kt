@@ -366,6 +366,29 @@ fun CameraTopSheet(
                             modifier = itemModifier
                         )
                         PhotoMenuQuickTile(
+                            title = "AUTO",
+                            subtitle = if (oppoPhotoSettings.autoHdrEnabled) "HDR ON" else "HDR OFF",
+                            accentTitle = true,
+                            leadingIcon = { tint ->
+                                Text(
+                                    "HDR",
+                                    color = tint,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                )
+                            },
+                            selected = oppoPhotoSettings.autoHdrEnabled,
+                            checked = oppoPhotoSettings.autoHdrEnabled,
+                            enabled = !isProfessionalMode,
+                            showStatusDot = true,
+                            onClick = {
+                                onOppoPhotoSettingsChange(
+                                    oppoPhotoSettings.copy(autoHdrEnabled = !oppoPhotoSettings.autoHdrEnabled)
+                                )
+                            },
+                            modifier = itemModifier
+                        )
+                        PhotoMenuQuickTile(
                             title = "REFOCUS",
                             accentTitle = false,
                             leadingIcon = { tint -> PhotoMenuRefocusGlyph(tint) },
