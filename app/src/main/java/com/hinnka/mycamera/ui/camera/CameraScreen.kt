@@ -810,11 +810,11 @@ fun CameraScreen(
                 .takeIf { it.isFinite() && it > 0f }
                 ?: targetIntrinsic?.takeIf { it.isFinite() && it > 0f }
                 ?: 1f
-            // Keep the standby image within a 5x crop while handing off at the
+            // Keep the standby image within an 8x crop while handing off at the
             // destination lens' native focal length (1x main, 2x/3x telephoto).
             val maxStandbyPreviewZoom = (ultraWideIntrinsic
                 ?.takeIf { it.isFinite() && it in 0.2f..0.85f }
-                ?: NormalVideoUltraWideHandoffZoomRatio) * 5f
+                ?: NormalVideoUltraWideHandoffZoomRatio) * 8f
             val handoffZoom = targetLensBaseZoom.coerceAtMost(maxStandbyPreviewZoom)
             normalVideoUltraWidePreviewVisible = true
             normalVideoUltraWidePreviewScaleTarget =
