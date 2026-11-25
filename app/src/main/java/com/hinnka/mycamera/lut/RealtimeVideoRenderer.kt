@@ -63,6 +63,8 @@ class RealtimeVideoRenderer(
     private val encoderOrientationHintDegrees: Int = 0,
     private val cameraInputZoomRatio: Float = 1f,
     private val watermarkLabel: String? = null,
+    private val switchableCameraInputSize: Size? = null,
+    private val switchableCameraSensorOrientationDegrees: Int = 0,
 ) {
     companion object {
         private const val TAG = "RealtimeVideoRenderer"
@@ -155,6 +157,14 @@ class RealtimeVideoRenderer(
     private var cameraSurfaceTexture: SurfaceTexture? = null
     @Volatile private var currentCameraInputSize: Size = cameraInputSize
     private var cameraSurface: Surface? = null
+    private var switchableCameraTextureId = 0
+    private var switchableCameraSurfaceTexture: SurfaceTexture? = null
+    private var switchableCameraSurface: Surface? = null
+    private val switchableCameraFramePending = AtomicBoolean(false)
+    private val switchableCameraStMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+    private val switchableCameraPresentationMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+    @Volatile private var switchableCameraHasFrame = false
+    @Volatile private var switchableCameraInputActive = false
     private var dualCaptureTextureId = 0
     private var dualCaptureSurfaceTexture: SurfaceTexture? = null
     private var dualCaptureSurface: Surface? = null
@@ -193,6 +203,19 @@ class RealtimeVideoRenderer(
 
     val dualCaptureInputSurface: Surface?
         get() = dualCaptureSurface
+
+    val switchableCameraInputSurface: Surface?
+        get() = switchableCameraSurface
+
+    fun setSwitchableCameraInputActive(active: Boolean) {
+        if (active && switchableCameraSurfaceTexture == null) {
+            PLog.w(TAG, "Ignoring ultra-wide recording handoff: alternate camera input is unavailable")
+            switchableCameraInputActive = false
+            return
+        }
+        switchableCameraInputActive = active
+        PLog.i(TAG, "Recording camera source selected: ${if (active) "0.5x-ultraWide" else "1x-main"}")
+    }
 
     fun updateDualCaptureLayout(layout: DualCaptureLayout) {
         currentDualCaptureLayout = layout
@@ -323,6 +346,9 @@ class RealtimeVideoRenderer(
             }
         }
         cameraSurface = Surface(cameraSurfaceTexture)
+        switchableCameraInputSize?.takeIf { it.width > 0 && it.height > 0 }?.let { size ->
+            initializeSwitchableCameraInput(size, onFrameAvailable)
+        }
         currentDualCaptureInputSize?.let(::initializeDualCaptureInput)
         if (enhancedStabilizationEnabled) {
             check(
@@ -369,35 +395,62 @@ class RealtimeVideoRenderer(
     ): Long? {
         if (!initialized || !makeCurrent()) return null
         val surfaceTexture = cameraSurfaceTexture ?: return null
+        val useSwitchableCameraInput = switchableCameraInputActive &&
+            switchableCameraSurfaceTexture != null
         if (dualCaptureSurfaceTexture != null) {
             acquireLatestDualCaptureFrame()
             if (!dualCaptureHasFrame) return null
         }
-        val cameraFrameUpdated = cameraFramePending.getAndSet(false) &&
-            acquireLatestCameraFrame(surfaceTexture)
-        val cameraTimestampNs = surfaceTexture.timestamp
+
+        val cameraFrameUpdated = if (useSwitchableCameraInput) {
+            false
+        } else {
+            cameraFramePending.getAndSet(false) && acquireLatestCameraFrame(surfaceTexture)
+        }
+        val switchableFrameUpdated = if (useSwitchableCameraInput) {
+            switchableCameraFramePending.getAndSet(false) && acquireLatestSwitchableCameraFrame()
+        } else {
+            false
+        }
 
         var sourceTextureSource = PreviewColorTextureSource.EXTERNAL_OES
         var sourceTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
         var sourceTextureId = cameraTextureId
         var sourceStMatrix = if (enhancedStabilizationEnabled) stMatrix else cameraPresentationMatrix
-        // Resolve the crop only after acquiring the frame: that operation updates the
-        // SurfaceTexture matrix and may recompute cameraCropRect for a newly switched lens.
         var sourceCropRect = fullCropRect
-        var timestampNs = cameraTimestampNs
+        var timestampNs = surfaceTexture.timestamp
 
         val session = stabilizationSession
-        val stabilizationOperational = enhancedStabilizationEnabled &&
+        val stabilizationSessionOperational = enhancedStabilizationEnabled &&
             stabilizationCoordinator?.isCurrentCameraSupported == true &&
             stabilizationSessionStarted &&
             session?.isOperational == true
-        if (stabilizationSessionStarted && !stabilizationOperational) {
+        // Keep EIS+ alive while the alternate lens is selected. It is bypassed only for those
+        // ultra-wide frames; returning to 1x can immediately resume the existing stabilized feed.
+        if (stabilizationSessionStarted && !stabilizationSessionOperational) {
             session?.stop()
             stabilizationSessionStarted = false
             mgcEisPresentationTransform.reset()
         }
-        if (stabilizationOperational) {
-            val frame = session.dequeueFrame() ?: return null
+
+        if (useSwitchableCameraInput) {
+            if (!switchableFrameUpdated) return null
+            val alternateSize = switchableCameraInputSize ?: return null
+            val presentationMatrix = resolveSwitchableCameraPresentationMatrix(
+                switchableCameraStMatrix,
+                alternateSize,
+            )
+            timestampNs = switchableCameraSurfaceTexture?.timestamp ?: return null
+            if (timestampNs <= 0L) return null
+            sourceTextureId = switchableCameraTextureId
+            sourceStMatrix = presentationMatrix
+            sourceCropRect = resolveCameraCropRect(
+                presentationMatrix = presentationMatrix,
+                inputWidth = alternateSize.width,
+                inputHeight = alternateSize.height,
+            )
+        } else if (stabilizationSessionOperational) {
+            val frame = session?.dequeueFrame() ?: return null
             val rendered = renderMgcEisFrame(frame) ?: return null
             sourceTextureSource = PreviewColorTextureSource.TEXTURE_2D
             sourceTextureTarget = GLES30.GL_TEXTURE_2D
@@ -410,14 +463,14 @@ class RealtimeVideoRenderer(
             )
             timestampNs = rendered.timestampNs
         } else {
-            if (!cameraFrameUpdated || cameraTimestampNs <= 0L) return null
+            if (!cameraFrameUpdated || timestampNs <= 0L) return null
             sourceCropRect = cameraCropRect
         }
         if (timestampNs <= 0L) return null
         // Special Video's virtual telephoto is cropped from the live sensor frame here,
         // before it reaches the dedicated MediaCodec input surface (never after recording).
         sourceCropRect = resolveRealtimeVideoZoomCropRect(sourceCropRect, cameraInputZoomRatio)
-        val presentationTimeNs = mapPresentationTimeNs(timestampNs)
+        val presentationTimeNs = mapPresentationTimeNs(timestampNs, useSwitchableCameraInput)
         if (presentationTimeNs <= 0L) return null
 
         val firstLayer = layers.first()
@@ -486,6 +539,25 @@ class RealtimeVideoRenderer(
             )
         }
         return presentationTimeNs
+    }
+
+    private fun initializeSwitchableCameraInput(size: Size, onFrameAvailable: () -> Unit) {
+        switchableCameraTextureId = GlUtils.createOESTexture()
+        check(switchableCameraTextureId != 0) { "Cannot create switchable camera OES texture" }
+        switchableCameraSurfaceTexture = SurfaceTexture(switchableCameraTextureId).apply {
+            setDefaultBufferSize(size.width, size.height)
+            setOnFrameAvailableListener {
+                switchableCameraFramePending.set(true)
+                // Wake the encoder renderer as soon as the standby lens delivers a frame.
+                onFrameAvailable()
+            }
+        }
+        switchableCameraSurface = Surface(switchableCameraSurfaceTexture)
+        PLog.i(
+            TAG,
+            "Switchable ultra-wide recording input ready: ${size.width}x${size.height}, " +
+                "sensorOrientation=$switchableCameraSensorOrientationDegrees",
+        )
     }
 
     private fun initializeDualCaptureInput(size: Size) {
@@ -759,6 +831,52 @@ class RealtimeVideoRenderer(
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         GLES30.glUseProgram(0)
         GLES30.glDisable(GLES30.GL_BLEND)
+    }
+
+    private fun acquireLatestSwitchableCameraFrame(): Boolean {
+        val surfaceTexture = switchableCameraSurfaceTexture ?: return false
+        return try {
+            surfaceTexture.updateTexImage()
+            surfaceTexture.getTransformMatrix(switchableCameraStMatrix)
+            switchableCameraHasFrame = true
+            true
+        } catch (error: RuntimeException) {
+            PLog.e(TAG, "Failed to acquire switchable ultra-wide recording frame", error)
+            false
+        }
+    }
+
+    private fun resolveSwitchableCameraPresentationMatrix(
+        sourceMatrix: FloatArray,
+        inputSize: Size,
+    ): FloatArray {
+        System.arraycopy(
+            sourceMatrix,
+            0,
+            switchableCameraPresentationMatrix,
+            0,
+            switchableCameraPresentationMatrix.size,
+        )
+        val shouldApplySensorRotation = shouldApplySensorOrientationFallback(
+            inputWidth = inputSize.width,
+            inputHeight = inputSize.height,
+            targetWidth = encoderOutputSize.width,
+            targetHeight = encoderOutputSize.height,
+            sensorOrientationDegrees = switchableCameraSensorOrientationDegrees,
+            textureTransformMatrix = sourceMatrix,
+        )
+        if (!shouldApplySensorRotation) return switchableCameraPresentationMatrix
+        val sensorRotation = resolveMgcEisPresentationMatrix(switchableCameraSensorOrientationDegrees)
+            ?: return switchableCameraPresentationMatrix
+        Matrix.multiplyMM(
+            switchableCameraPresentationMatrix,
+            0,
+            sourceMatrix,
+            0,
+            sensorRotation,
+            0,
+        )
+        return switchableCameraPresentationMatrix
     }
 
     private fun acquireLatestCameraFrame(surfaceTexture: SurfaceTexture): Boolean {
@@ -1430,6 +1548,15 @@ class RealtimeVideoRenderer(
         cameraSurface = null
         cameraSurfaceTexture?.release()
         cameraSurfaceTexture = null
+        switchableCameraSurfaceTexture?.setOnFrameAvailableListener(null)
+        switchableCameraSurface?.release()
+        switchableCameraSurface = null
+        switchableCameraSurfaceTexture?.release()
+        switchableCameraSurfaceTexture = null
+        if (switchableCameraTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(switchableCameraTextureId), 0)
+            switchableCameraTextureId = 0
+        }
         dualCaptureSurfaceTexture?.setOnFrameAvailableListener(null)
         dualCaptureSurface?.release()
         dualCaptureSurface = null
