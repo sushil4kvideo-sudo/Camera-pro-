@@ -52,8 +52,8 @@ internal fun shouldUseNormalVideoUltraWideExtendedZoomHandoff(
     if (!targetZoomRatio.isFinite() || targetZoomRatio <= 1.05f) return false
 
     val currentIsUltraWide = currentIntrinsic in 0.2f..0.85f
-    val targetIsMain = abs(targetIntrinsic - 1f) <= 0.15f
-    return currentIsUltraWide && targetIsMain
+    val targetIsFurtherTelephoto = targetIntrinsic > currentIntrinsic + 0.15f
+    return currentIsUltraWide && targetIsFurtherTelephoto
 }
 
 /** Scale the standby ultra-wide preview to match the requested main-camera field of view. */
