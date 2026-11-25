@@ -8,6 +8,7 @@ import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.util.LruCache
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateMap
@@ -1034,7 +1035,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             hasMoreSystemPhotos = false
 
             val newPhotos = repository.getPhotonCameraPhotos()
-            _systemPhotos.value = newPhotos
+            // Keep temporary items opened from another app (for example cloud-only Google Photos
+            // videos) visible while refreshing the device-backed gallery list.
+            val externalSharedPhotos = _systemPhotos.value.filter { it.isExternalShared }
+            _systemPhotos.value = (externalSharedPhotos + newPhotos)
+                .distinctBy { it.id }
+                .sortedByDescending { it.dateAdded }
             _photonCameraPhotos.value = newPhotos
             systemOffset = newPhotos.size
             hasMoreSystemPhotos = false
@@ -1317,6 +1323,134 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 onFallback()
             }
         }
+    }
+
+    /**
+     * Open video content shared by another app without importing/copying it into Photon storage.
+     * The receiving app reads the provider URI using the temporary grant attached to the share.
+     */
+    fun openExternalSharedVideos(
+        uris: List<Uri>,
+        mimeType: String?,
+        onSuccess: (GalleryTab, String) -> Unit,
+        onFallback: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            if (hasGalleryPermission) {
+                loadSystemPhotos(reset = true)
+            }
+
+            val sharedVideos = uris.distinct().map { uri ->
+                createExternalSharedVideo(context, uri, mimeType)
+            }
+            if (sharedVideos.isEmpty()) {
+                onFallback()
+                return@launch
+            }
+
+            sharedVideos.forEach(::upsertSystemMedia)
+            selectedTab = GalleryTab.SYSTEM
+            val firstVideo = sharedVideos.first()
+            setCurrentSystemPhotoById(firstVideo.id)
+            PLog.i(TAG, "Opening ${sharedVideos.size} shared video(s) directly from content URIs")
+            onSuccess(GalleryTab.SYSTEM, firstVideo.id)
+        }
+    }
+
+    private fun createExternalSharedVideo(
+        context: Application,
+        uri: Uri,
+        requestedMimeType: String?
+    ): MediaData {
+        val resolver = context.contentResolver
+        var displayName = "Shared video"
+        var size = 0L
+
+        runCatching {
+            resolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0 && !cursor.isNull(nameIndex)) {
+                        cursor.getString(nameIndex)?.takeIf { it.isNotBlank() }?.let { displayName = it }
+                    }
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                        size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
+                    }
+                }
+            }
+        }.onFailure {
+            PLog.w(TAG, "Unable to query metadata for shared video URI: $uri", it)
+        }
+
+        var width = 0
+        var height = 0
+        var durationMs: Long? = null
+        runCatching {
+            resolver.query(
+                uri,
+                arrayOf(
+                    MediaStore.Video.Media.DURATION,
+                    MediaStore.Video.Media.WIDTH,
+                    MediaStore.Video.Media.HEIGHT
+                ),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val durationIndex = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
+                    if (durationIndex >= 0 && !cursor.isNull(durationIndex)) {
+                        durationMs = cursor.getLong(durationIndex).coerceAtLeast(0L)
+                    }
+                    val widthIndex = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
+                    if (widthIndex >= 0 && !cursor.isNull(widthIndex)) {
+                        width = cursor.getInt(widthIndex).coerceAtLeast(0)
+                    }
+                    val heightIndex = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+                    if (heightIndex >= 0 && !cursor.isNull(heightIndex)) {
+                        height = cursor.getInt(heightIndex).coerceAtLeast(0)
+                    }
+                }
+            }
+        }
+
+        val providerMimeType = runCatching { resolver.getType(uri) }
+            .getOrNull()
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.US)
+            ?.takeIf { it.startsWith("video/") }
+        val sharedMimeType = providerMimeType
+            ?: requestedMimeType
+                ?.substringBefore(';')
+                ?.trim()
+                ?.lowercase(Locale.US)
+                ?.takeIf { it.startsWith("video/") }
+            ?: "video/mp4"
+
+        return MediaData(
+            id = "external-shared-video-${Integer.toHexString(uri.toString().hashCode())}",
+            uri = uri,
+            thumbnailUri = uri,
+            displayName = displayName,
+            dateAdded = System.currentTimeMillis(),
+            size = size,
+            width = width,
+            height = height,
+            mediaType = MediaType.VIDEO,
+            mimeType = sharedMimeType,
+            durationMs = durationMs,
+            sourceUri = uri,
+            isExternalShared = true
+        )
     }
 
     private fun upsertSystemMedia(media: MediaData) {
