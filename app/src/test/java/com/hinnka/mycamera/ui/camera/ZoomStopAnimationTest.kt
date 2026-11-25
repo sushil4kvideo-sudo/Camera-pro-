@@ -170,6 +170,53 @@ class ZoomStopAnimationTest {
     }
 
     @Test
+    fun reverseHandoffOccursAtOutgoingLensMinimumReachableZoom() {
+        assertEquals(
+            1f,
+            normalVideoUltraWideReverseHandoffZoomRatio(
+                currentLensDisplayIntrinsicZoomRatio = 1f,
+                currentLensMinimumDeviceZoomRatio = 1f,
+                startZoomRatio = 3f,
+                targetZoomRatio = 0.6f,
+            )!!,
+            0.0001f,
+        )
+        assertEquals(
+            2f,
+            normalVideoUltraWideReverseHandoffZoomRatio(
+                currentLensDisplayIntrinsicZoomRatio = 2f,
+                currentLensMinimumDeviceZoomRatio = 1f,
+                startZoomRatio = 3f,
+                targetZoomRatio = 0.6f,
+            )!!,
+            0.0001f,
+        )
+        assertEquals(
+            2.4f,
+            normalVideoUltraWideReverseHandoffZoomRatio(
+                currentLensDisplayIntrinsicZoomRatio = 2f,
+                currentLensMinimumDeviceZoomRatio = 1.2f,
+                startZoomRatio = 3f,
+                targetZoomRatio = 0.6f,
+            )!!,
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun reverseHandoffRejectsInvalidLensZoomMetadata() {
+        assertEquals(
+            null,
+            normalVideoUltraWideReverseHandoffZoomRatio(
+                currentLensDisplayIntrinsicZoomRatio = Float.NaN,
+                currentLensMinimumDeviceZoomRatio = 1f,
+                startZoomRatio = 3f,
+                targetZoomRatio = 0.6f,
+            ),
+        )
+    }
+
+    @Test
     fun invalidUltraWideRatioUsesSafePointSixFallback() {
         assertEquals(
             1f / 0.6f,
