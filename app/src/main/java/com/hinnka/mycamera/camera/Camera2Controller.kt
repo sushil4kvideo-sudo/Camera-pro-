@@ -4165,6 +4165,7 @@ class Camera2Controller(private val context: Context) {
             captureMode == CaptureMode.VIDEO &&
             normalVideoUltraWideInstantSwitchActive &&
             !spatialVideoEnabled &&
+            normalVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
             _state.value.videoRecordingState.shouldAttachCameraInput() &&
             !highSpeedVideo
         ) {
@@ -11492,6 +11493,7 @@ class Camera2Controller(private val context: Context) {
             _state.value.videoConfig.fps != VideoFpsPreset.FPS_120 &&
             !useEnhancedStabilization &&
             colorLayers.isEmpty() &&
+            switchableCameraInputSize == null &&
             supportsCameraHlg10Input()
         videoCameraHlg10InputActive = cameraInputIsHlg10
         PLog.d(
