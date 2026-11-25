@@ -153,7 +153,7 @@ class VideoRecorder(
     private var requestedSwitchableCameraInputSize: Size? = null
     private var requestedSwitchableCameraSensorOrientationDegrees: Int = 0
     private var requestedSwitchableCameraTimestampSource = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
-    private var switchableCameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
+    @Volatile private var switchableCameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
     private var requestedDualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
     private var requestedDualCapturePositionX: Float = 0.66f
     private var requestedDualCapturePositionY: Float = 0.05f
@@ -533,13 +533,14 @@ class VideoRecorder(
             if (active) PLog.w(TAG, "Cannot select ultra-wide video source: switchable input was not prepared")
             return
         }
-        runBlocking(renderDispatcher) {
-            renderer?.setSwitchableCameraInputActive(active)
-        }
         // Separate CameraDevices can expose different clock origins when their timestamp
-        // source is UNKNOWN. Recalibrate after a handoff so PTS remains aligned to BOOTTIME.
+        // source is UNKNOWN. Recalibrate before the next frame is rendered so its PTS cannot
+        // accidentally reuse the previous lens' offset.
         if (requestedSwitchableCameraTimestampSource != CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
             switchableCameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
+        }
+        runBlocking(renderDispatcher) {
+            renderer?.setSwitchableCameraInputActive(active)
         }
         PLog.i(TAG, "Video encoder input source updated")
     }
