@@ -381,6 +381,14 @@ class Camera2Controller(private val context: Context) {
         specialVideoPreferences.getFloat("top_off_zoom_factor", 2f).coerceIn(1f, 4f)
     )
     val topOffZoomFactorFlow: StateFlow<Float> = _topOffZoomFactor.asStateFlow()
+    private val _topOffZoomPanX = MutableStateFlow(
+        specialVideoPreferences.getFloat("top_off_zoom_pan_x", 0f).coerceIn(-1f, 1f)
+    )
+    val topOffZoomPanXFlow: StateFlow<Float> = _topOffZoomPanX.asStateFlow()
+    private val _topOffZoomPanY = MutableStateFlow(
+        specialVideoPreferences.getFloat("top_off_zoom_pan_y", 0f).coerceIn(-1f, 1f)
+    )
+    val topOffZoomPanYFlow: StateFlow<Float> = _topOffZoomPanY.asStateFlow()
     private val _spatialVideoEnabled = MutableStateFlow(false)
     val spatialVideoEnabledFlow: StateFlow<Boolean> = _spatialVideoEnabled.asStateFlow()
     private val _spatialVideoShowUltraWidePreview = MutableStateFlow(
@@ -6678,21 +6686,24 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
-     * Convert the displayed top edge into the sensor coordinate system used by
-     * SCALER_CROP_REGION. The result is normalized to the existing freeform-pan range.
+     * Convert the crop-box position from display coordinates to the active sensor
+     * coordinate system used by SCALER_CROP_REGION. Both axes are normalized to [-1, 1].
      */
-    private fun resolveTopOffZoomPan(cameraInfo: CameraInfo?): Pair<Float, Float> {
-        val orientation = Math.floorMod(cameraInfo?.sensorOrientation ?: 0, 360)
-        val (sensorX, sensorY) = when (orientation) {
-            90 -> -1f to 0f
-            180 -> 0f to 1f
-            270 -> 1f to 0f
-            else -> 0f to -1f
+    private fun resolveTopOffZoomPan(
+        cameraInfo: CameraInfo?,
+        displayPanX: Float,
+        displayPanY: Float,
+    ): Pair<Float, Float> {
+        val sensorPan = when (Math.floorMod(cameraInfo?.sensorOrientation ?: 0, 360)) {
+            90 -> displayPanY to -displayPanX
+            180 -> -displayPanX to -displayPanY
+            270 -> -displayPanY to displayPanX
+            else -> displayPanX to displayPanY
         }
-        val facingAdjustedX = if (
+        val sensorX = if (
             cameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
-        ) -sensorX else sensorX
-        return facingAdjustedX.coerceIn(-1f, 1f) to sensorY.coerceIn(-1f, 1f)
+        ) -sensorPan.first else sensorPan.first
+        return sensorX.coerceIn(-1f, 1f) to sensorPan.second.coerceIn(-1f, 1f)
     }
 
     /**
@@ -6729,7 +6740,11 @@ class Camera2Controller(private val context: Context) {
             val zoomMultiplier = if (topOffZoomActive) _topOffZoomFactor.value else 1f
             val zoomRatio = (userZoomRatio * zoomMultiplier).coerceIn(minZoom, maxSupportedZoom)
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-            val topOffPan = if (topOffZoomActive) resolveTopOffZoomPan(cameraInfo) else null
+            val topOffPan = if (topOffZoomActive) {
+                resolveTopOffZoomPan(cameraInfo, _topOffZoomPanX.value, _topOffZoomPanY.value)
+            } else {
+                null
+            }
             val panX = topOffPan?.first ?: state.zoomPanX
             val panY = topOffPan?.second ?: state.zoomPanY
 
@@ -10263,6 +10278,31 @@ class Camera2Controller(private val context: Context) {
         val safeFactor = if (factor.isFinite()) factor.coerceIn(1f, 4f) else 2f
         _topOffZoomFactor.value = safeFactor
         specialVideoPreferences.edit().putFloat("top_off_zoom_factor", safeFactor).apply()
+        reapplyTopOffZoomRequest()
+    }
+
+    fun setTopOffZoomPan(panX: Float, panY: Float) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setTopOffZoomPan(panX, panY) }
+            return
+        }
+        if (
+            videoRecorder.isRecording() ||
+            spatialVideoRecorder.isRecording() ||
+            spatialVideoTelephotoRecorder.isRecording() ||
+            _state.value.videoRecordingState.isRecording ||
+            _state.value.videoRecordingState.isProcessing
+        ) return
+
+        val safePanX = if (panX.isFinite()) panX.coerceIn(-1f, 1f) else 0f
+        val safePanY = if (panY.isFinite()) panY.coerceIn(-1f, 1f) else 0f
+        _topOffZoomPanX.value = safePanX
+        _topOffZoomPanY.value = safePanY
+        specialVideoPreferences.edit()
+            .putFloat("top_off_zoom_pan_x", safePanX)
+            .putFloat("top_off_zoom_pan_y", safePanY)
+            .apply()
         reapplyTopOffZoomRequest()
     }
 

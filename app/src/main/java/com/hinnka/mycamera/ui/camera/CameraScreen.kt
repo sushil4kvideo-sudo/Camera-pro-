@@ -253,6 +253,8 @@ fun CameraScreen(
     val spatialVideoVirtualTelephotoEnabled by viewModel.spatialVideoVirtualTelephotoEnabled.collectAsState()
     val topOffZoomEnabled by viewModel.topOffZoomEnabled.collectAsState()
     val topOffZoomFactor by viewModel.topOffZoomFactor.collectAsState()
+    val topOffZoomPanX by viewModel.topOffZoomPanX.collectAsState()
+    val topOffZoomPanY by viewModel.topOffZoomPanY.collectAsState()
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
     val spatialVideoPreviewSensorOrientation by
@@ -2673,8 +2675,11 @@ fun CameraScreen(
                 onVirtualTelephotoEnabledChange = viewModel::setSpatialVideoVirtualTelephotoEnabled,
                 topOffZoomEnabled = topOffZoomEnabled,
                 topOffZoomFactor = topOffZoomFactor,
+                topOffZoomPanX = topOffZoomPanX,
+                topOffZoomPanY = topOffZoomPanY,
                 onTopOffZoomEnabledChange = viewModel::setTopOffZoomEnabled,
                 onTopOffZoomFactorChange = viewModel::setTopOffZoomFactor,
+                onTopOffZoomPanChange = viewModel::setTopOffZoomPan,
                 onDismiss = { videoSettingsPanelOpen = false },
                 glassTransparency = cameraMenuTransparency,
                 glassBlurStrength = cameraMenuBlurRadius,

@@ -10,10 +10,15 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,12 +36,15 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -68,8 +77,11 @@ fun FloatingVideoSettingsPanel(
     onVirtualTelephotoEnabledChange: (Boolean) -> Unit,
     topOffZoomEnabled: Boolean,
     topOffZoomFactor: Float,
+    topOffZoomPanX: Float,
+    topOffZoomPanY: Float,
     onTopOffZoomEnabledChange: (Boolean) -> Unit,
     onTopOffZoomFactorChange: (Float) -> Unit,
+    onTopOffZoomPanChange: (Float, Float) -> Unit,
     onDismiss: () -> Unit,
     glassTransparency: Float,
     glassBlurStrength: Float,
@@ -315,7 +327,7 @@ fun FloatingVideoSettingsPanel(
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
-                                    text = "Sensor crop anchored to the top edge",
+                                    text = "Move the crop window to choose the zoom centre",
                                     color = VideoSelectorDescription,
                                     fontSize = 11.5.sp,
                                 )
@@ -357,10 +369,100 @@ fun FloatingVideoSettingsPanel(
                                 steps = 5,
                                 modifier = Modifier.testTag("top_off_zoom_factor_slider"),
                             )
+                            Text(
+                                text = "Crop position",
+                                color = VideoSelectorLabel,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            TopOffZoomCropEditor(
+                                zoomFactor = topOffZoomFactor,
+                                panX = topOffZoomPanX,
+                                panY = topOffZoomPanY,
+                                onPanChange = onTopOffZoomPanChange,
+                            )
                         }
                     }
                 }
             }
         }
+    }
+}
+
+
+@Composable
+private fun TopOffZoomCropEditor(
+    zoomFactor: Float,
+    panX: Float,
+    panY: Float,
+    onPanChange: (Float, Float) -> Unit,
+) {
+    val density = LocalDensity.current
+    val currentPanX by rememberUpdatedState(panX.coerceIn(-1f, 1f))
+    val currentPanY by rememberUpdatedState(panY.coerceIn(-1f, 1f))
+    val currentFactor by rememberUpdatedState(zoomFactor.coerceIn(1f, 4f))
+    val currentOnPanChange by rememberUpdatedState(onPanChange)
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(9.dp))
+                .background(Color(0xFF11151B))
+                .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(9.dp))
+                .testTag("top_off_zoom_crop_frame"),
+        ) {
+            val factor = zoomFactor.coerceIn(1f, 4f)
+            val cropWidth = maxWidth / factor
+            val cropHeight = maxHeight / factor
+            val maxTravelX = (maxWidth - cropWidth) / 2f
+            val maxTravelY = (maxHeight - cropHeight) / 2f
+            val cropOffsetX = maxTravelX * (1f + panX.coerceIn(-1f, 1f))
+            val cropOffsetY = maxTravelY * (1f + panY.coerceIn(-1f, 1f))
+            val latestTravelX by rememberUpdatedState(maxTravelX)
+            val latestTravelY by rememberUpdatedState(maxTravelY)
+
+            Box(
+                modifier = Modifier
+                    .offset(x = cropOffsetX, y = cropOffsetY)
+                    .size(width = cropWidth, height = cropHeight)
+                    .background(VideoSelectorGold.copy(alpha = 0.12f))
+                    .border(2.dp, VideoSelectorGold, RoundedCornerShape(3.dp))
+                    .pointerInput(maxWidth, maxHeight) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            val travelXpx = with(density) { latestTravelX.toPx() }
+                            val travelYpx = with(density) { latestTravelY.toPx() }
+                            val nextPanX = if (travelXpx > 0f) {
+                                (currentPanX + dragAmount.x / travelXpx).coerceIn(-1f, 1f)
+                            } else {
+                                0f
+                            }
+                            val nextPanY = if (travelYpx > 0f) {
+                                (currentPanY + dragAmount.y / travelYpx).coerceIn(-1f, 1f)
+                            } else {
+                                0f
+                            }
+                            currentOnPanChange(nextPanX, nextPanY)
+                        }
+                    }
+                    .testTag("top_off_zoom_crop_box"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "CROP",
+                    color = VideoSelectorGold,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        Text(
+            text = "Drag the small box to move the actual sensor crop. Resize it with the zoom slider.",
+            color = VideoSelectorDescription,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Start,
+        )
     }
 }
