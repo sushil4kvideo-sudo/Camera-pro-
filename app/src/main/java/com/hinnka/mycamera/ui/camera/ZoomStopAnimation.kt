@@ -65,7 +65,7 @@ internal fun normalVideoUltraWideHandoffPreviewScale(
         ?.takeIf { it.isFinite() && it in 0.2f..0.85f }
         ?: NormalVideoUltraWideHandoffZoomRatio
     val safeTarget = targetZoomRatio.takeIf { it.isFinite() && it > 0f } ?: 1f
-    return (safeTarget / safeIntrinsic).coerceIn(1f, 5f)
+    return (safeTarget / safeIntrinsic).coerceIn(1f, 8f)
 }
 internal val ZoomStopAnimationEasing = CubicBezierEasing(0.4f, 0f, 0.6f, 1f)
 
