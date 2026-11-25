@@ -391,7 +391,7 @@ class RealtimeVideoRenderer(
      * @return 写入编码器的帧时间戳（纳秒）；没有有效帧时返回 null。
      */
     fun renderLatestFrame(
-        mapPresentationTimeNs: (cameraTimestampNs: Long) -> Long,
+        mapPresentationTimeNs: (cameraTimestampNs: Long, switchableInput: Boolean) -> Long,
     ): Long? {
         if (!initialized || !makeCurrent()) return null
         val surfaceTexture = cameraSurfaceTexture ?: return null
