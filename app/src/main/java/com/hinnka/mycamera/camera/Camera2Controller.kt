@@ -7010,7 +7010,7 @@ class Camera2Controller(private val context: Context) {
     private fun applySpecialVideoLogicalUltraWideImageQualitySettings(
         builder: CaptureRequest.Builder,
         selectedEdgeLevel: Int,
-        selectedNrLevel: NoiseReductionLevel,
+        selectedNrLevel: Int,
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
             !spatialVideoEnabled ||
@@ -7022,9 +7022,7 @@ class Camera2Controller(private val context: Context) {
             physicalCameraId,
             "Special Video ultra-wide image quality",
         ) ?: return
-        val physicalRequestKeys = characteristics.get(
-            CameraCharacteristics.REQUEST_AVAILABLE_PHYSICAL_CAMERA_REQUEST_KEYS
-        ).orEmpty()
+        val physicalRequestKeys = characteristics.availablePhysicalCameraRequestKeys.orEmpty()
         val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
             ?: intArrayOf()
         val noiseReductionModes = characteristics.get(
