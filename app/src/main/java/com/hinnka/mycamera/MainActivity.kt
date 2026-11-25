@@ -405,10 +405,28 @@ class MainActivity : AppCompatActivity() {
     private fun handleIntent(intent: Intent?) {
         intent ?: return
         val lutImportUris = getExternalLutImportUris(intent)
+        val sharedVideoUris = getSharedVideoUris(intent)
         if (lutImportUris.isNotEmpty()) {
             PLog.d("MainActivity", "External LUT import intent: action=${intent.action}, type=${intent.type}, count=${lutImportUris.size}")
             pendingLutImportUris = lutImportUris
             pendingRoute = Routes.filterManagement()
+        } else if (sharedVideoUris.isNotEmpty()) {
+            PLog.d(
+                "MainActivity",
+                "External video share intent: action=${intent.action}, type=${intent.type}, count=${sharedVideoUris.size}"
+            )
+            externalGalleryReviewReturnToCaller = false
+            galleryViewModel.openExternalSharedVideos(
+                uris = sharedVideoUris,
+                mimeType = intent.type,
+                onSuccess = { tab, photoId ->
+                    pendingRoute = Routes.photoDetail(tab = tab, photoId = photoId)
+                },
+                onFallback = {
+                    PLog.w("MainActivity", "Unable to open shared video content")
+                    pendingRoute = Routes.GALLERY
+                }
+            )
         } else if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("image/") == true) {
             val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
@@ -527,6 +545,38 @@ class MainActivity : AppCompatActivity() {
             normalizedMimeType == "text/plain" -> CustomImportManager.isCubeImportFileName(fileName)
             normalizedMimeType == "application/octet-stream" -> CustomImportManager.isExternalLutImportFileName(fileName)
             else -> false
+        }
+    }
+
+    private fun getSharedVideoUris(intent: Intent): List<Uri> {
+        if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) {
+            return emptyList()
+        }
+
+        val candidates = mutableListOf<Uri>()
+        when (intent.action) {
+            Intent.ACTION_SEND -> getStreamUri(intent)?.let(candidates::add)
+            Intent.ACTION_SEND_MULTIPLE -> candidates.addAll(getStreamUris(intent))
+        }
+        intent.data?.let(candidates::add)
+        intent.clipData?.let { clip ->
+            for (index in 0 until clip.itemCount) {
+                clip.getItemAt(index).uri?.let(candidates::add)
+            }
+        }
+
+        val declaredMimeType = intent.type
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.US)
+        return candidates.distinct().filter { uri ->
+            val providerMimeType = runCatching { contentResolver.getType(uri) }
+                .getOrNull()
+                ?.substringBefore(';')
+                ?.trim()
+                ?.lowercase(Locale.US)
+            declaredMimeType?.startsWith("video/") == true ||
+                providerMimeType?.startsWith("video/") == true
         }
     }
 
