@@ -687,6 +687,9 @@ class Camera2Controller(private val context: Context) {
     private var videoCaptureStatsWindowStartMs: Long = 0L
     private var videoCaptureStatsFrames: Int = 0
     private var videoCaptureStatsFirstTimestampNs: Long = 0L
+    private var specialVideoWideStatsWindowStartMs: Long = 0L
+    private var specialVideoWideStatsFrames: Int = 0
+    private var specialVideoWideStatsFirstTimestampNs: Long = 0L
     private var stabilizationInputStatsFirstTimestampNs: Long = 0L
     private var stabilizationInputStatsFrames: Int = 0
     private var stabilizationInputFrameCount: Long = 0L
@@ -1692,6 +1695,45 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private val spatialVideoStandbyCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult,
+        ) {
+            if (session !== spatialVideoStandbySession || !spatialVideoEnabled) return
+            logSpecialVideoWideCaptureStats(result)
+        }
+
+        override fun onCaptureFailed(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            failure: CaptureFailure,
+        ) {
+            if (session !== spatialVideoStandbySession || !spatialVideoEnabled) return
+            PLog.w(
+                TAG,
+                "Special Video ultra-wide capture failed: camera=${spatialVideoStandbyCameraDevice?.id}, " +
+                    "frame=${failure.frameNumber}, reason=${failure.reason}",
+            )
+        }
+
+        override fun onCaptureSequenceAborted(
+            session: CameraCaptureSession,
+            sequenceId: Int,
+        ) {
+            if (session === spatialVideoStandbySession && spatialVideoEnabled &&
+                _state.value.videoRecordingState.isRecording
+            ) {
+                PLog.e(
+                    TAG,
+                    "Special Video ultra-wide repeating sequence aborted: " +
+                        "camera=${spatialVideoStandbyCameraDevice?.id}, sequence=$sequenceId",
+                )
+            }
+        }
+    }
+
     private var lastAfState: Int? = null
 
     private fun logVideoCaptureStats(result: TotalCaptureResult) {
@@ -1712,23 +1754,68 @@ class Camera2Controller(private val context: Context) {
 
         val sensorElapsedNs =
             (sensorTimestampNs - videoCaptureStatsFirstTimestampNs).coerceAtLeast(0L)
-        val callbackFps = videoCaptureStatsFrames * 1000f / elapsedMs.toFloat()
-        val sensorFps = if (sensorElapsedNs > 0L && videoCaptureStatsFrames > 1) {
-            (videoCaptureStatsFrames - 1) * 1_000_000_000f / sensorElapsedNs.toFloat()
+        // The first result establishes the window baseline; count frame intervals, not
+        // frame callbacks, so this value is directly comparable with timestamp-derived FPS.
+        val frameIntervals = (videoCaptureStatsFrames - 1).coerceAtLeast(0)
+        val callbackFps = frameIntervals * 1000f / elapsedMs.toFloat()
+        val sensorFps = if (sensorElapsedNs > 0L && frameIntervals > 0) {
+            frameIntervals * 1_000_000_000f / sensorElapsedNs.toFloat()
         } else {
             0f
         }
         val fpsRange = result.readMetadataOrNull(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)
+        val frameDurationNs = result.readMetadataOrNull(CaptureResult.SENSOR_FRAME_DURATION)
         PLog.i(
             TAG,
-            "Video capture stats: requested=${_state.value.videoConfig.fps.fps}, " +
+            "Video capture stats: stream=1x-main requested=${_state.value.videoConfig.fps.fps}, " +
                 "aeRange=$fpsRange, callbackFps=${"%.1f".format(callbackFps)}, " +
-                "sensorFps=${"%.1f".format(sensorFps)}, preview=${_state.value.currentPreviewSize.width}x${_state.value.currentPreviewSize.height}"
+                "sensorFps=${"%.1f".format(sensorFps)}, frameDurationNs=$frameDurationNs, " +
+                "preview=${_state.value.currentPreviewSize.width}x${_state.value.currentPreviewSize.height}"
         )
 
         videoCaptureStatsWindowStartMs = nowMs
         videoCaptureStatsFrames = 1
         videoCaptureStatsFirstTimestampNs = sensorTimestampNs
+    }
+
+    private fun logSpecialVideoWideCaptureStats(result: TotalCaptureResult) {
+        if (!_state.value.videoRecordingState.isRecording) return
+        val sensorTimestampNs = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+        val nowMs = SystemClock.elapsedRealtime()
+        if (specialVideoWideStatsWindowStartMs == 0L) {
+            specialVideoWideStatsWindowStartMs = nowMs
+            specialVideoWideStatsFrames = 1
+            specialVideoWideStatsFirstTimestampNs = sensorTimestampNs
+            return
+        }
+
+        specialVideoWideStatsFrames += 1
+        val elapsedMs = nowMs - specialVideoWideStatsWindowStartMs
+        if (elapsedMs < 1000L) return
+
+        val frameIntervals = (specialVideoWideStatsFrames - 1).coerceAtLeast(0)
+        val sensorElapsedNs =
+            (sensorTimestampNs - specialVideoWideStatsFirstTimestampNs).coerceAtLeast(0L)
+        val callbackFps = frameIntervals * 1000f / elapsedMs.toFloat()
+        val sensorFps = if (sensorElapsedNs > 0L && frameIntervals > 0) {
+            frameIntervals * 1_000_000_000f / sensorElapsedNs.toFloat()
+        } else {
+            0f
+        }
+        val fpsRange = result.readMetadataOrNull(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)
+        val frameDurationNs = result.readMetadataOrNull(CaptureResult.SENSOR_FRAME_DURATION)
+        PLog.i(
+            TAG,
+            "Video capture stats: stream=0.5x-ultraWide " +
+                "camera=${spatialVideoStandbyCameraDevice?.id}, " +
+                "requested=${_state.value.videoConfig.fps.fps}, aeRange=$fpsRange, " +
+                "callbackFps=${"%.1f".format(callbackFps)}, sensorFps=${"%.1f".format(sensorFps)}, " +
+                "frameDurationNs=$frameDurationNs"
+        )
+
+        specialVideoWideStatsWindowStartMs = nowMs
+        specialVideoWideStatsFrames = 1
+        specialVideoWideStatsFirstTimestampNs = sensorTimestampNs
     }
 
     /** MGC forced flash: AE converged, AF locked when supported, AWB unrestricted. */
@@ -6188,23 +6275,22 @@ class Camera2Controller(private val context: Context) {
                 state.flashMode != CameraMetadata.FLASH_MODE_SINGLE
     }
 
-    private fun applyVideoFpsRange(builder: CaptureRequest.Builder, targetFps: Int) {
-        val characteristics = getActiveOpenCameraCharacteristics() ?: return
+    private fun resolveSupportedVideoFpsRange(
+        characteristics: CameraCharacteristics,
+        targetFps: Int,
+        cameraLabel: String,
+    ): Range<Int>? {
         val availableRanges = characteristics
             .readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             ?.filter { it.lower > 0 && it.upper >= it.lower }
             .orEmpty()
         if (availableRanges.isEmpty()) {
-            PLog.w(TAG, "Camera advertises no usable AE FPS ranges; keeping the HAL default")
-            return
+            PLog.w(TAG, "$cameraLabel advertises no usable AE FPS ranges; keeping the HAL default")
+            return null
         }
 
-        // Camera2 only accepts FPS ranges advertised by this camera. A fabricated
-        // [targetFps, targetFps] range can make the repeating request fail entirely.
-        // Prefer an exact fixed range. If unavailable, prefer a containing range
-        // whose upper bound is the selected FPS, then the highest lower bound. This
-        // avoids permitting a slower cadence or a higher cadence when a tighter
-        // advertised range exists for this sensor.
+        // Only use ranges advertised by the specific physical camera. A fabricated
+        // fixed range can make a repeating request fail for that camera.
         val exactRange = availableRanges.firstOrNull {
             it.lower == targetFps && it.upper == targetFps
         }
@@ -6222,16 +6308,23 @@ class Camera2Controller(private val context: Context) {
                 targetFps > range.upper -> targetFps - range.upper
                 else -> 0
             }
-        } ?: return
+        } ?: return null
 
         if (resolvedRange.lower != targetFps || resolvedRange.upper != targetFps) {
-            PLog.i(
+            val containsTarget = targetFps in resolvedRange.lower..resolvedRange.upper
+            PLog.w(
                 TAG,
-                "Using advertised AE FPS range $resolvedRange for target $targetFps; " +
-                    "available=${availableRanges.joinToString()}"
+                "$cameraLabel requested $targetFps fps but will use advertised AE range " +
+                    "$resolvedRange (containsTarget=$containsTarget, available=${availableRanges.joinToString()})"
             )
         }
-        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, resolvedRange)
+        return resolvedRange
+    }
+
+    private fun applyVideoFpsRange(builder: CaptureRequest.Builder, targetFps: Int) {
+        val characteristics = getActiveOpenCameraCharacteristics() ?: return
+        resolveSupportedVideoFpsRange(characteristics, targetFps, "Main camera")
+            ?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
     }
 
     /**
@@ -10415,6 +10508,10 @@ class Camera2Controller(private val context: Context) {
 
         try {
             // Start only the renderer inputs required by the current Special Video options.
+            specialVideoWideStatsWindowStartMs = 0L
+            specialVideoWideStatsFrames = 0
+            specialVideoWideStatsFirstTimestampNs = 0L
+
             val mainInputStarted = videoRecorder.onCameraInputStarted()
             val ultraWideInputStarted = spatialVideoRecorder.onCameraInputStarted()
             val telephotoInputStarted = if (telephotoRequired) {
@@ -10427,14 +10524,26 @@ class Camera2Controller(private val context: Context) {
                     "Recorder input readiness failed (main=$mainInputStarted, ultraWide=$ultraWideInputStarted, telephoto=$telephotoInputStarted)"
                 )
             }
+            // Both requests are submitted back-to-back on the same camera handler after
+            // every encoder input has been armed. Camera2 has no cross-device atomic-start
+            // primitive; the shared first-frame timeline aligns their encoded start times.
+            val requestSubmitStartNs = SystemClock.elapsedRealtimeNanos()
             submitRepeatingPreviewRequest(mainSession, mainRequest)
-            wideSession.setRepeatingRequest(wideRequest, null, handler)
+            val mainRequestSubmittedNs = SystemClock.elapsedRealtimeNanos()
+            wideSession.setRepeatingRequest(
+                wideRequest,
+                spatialVideoStandbyCaptureCallback,
+                handler,
+            )
+            val wideRequestSubmittedNs = SystemClock.elapsedRealtimeNanos()
             spatialVideoPrimarySessionAwaitingStandby = false
             startVideoRecordingTicker()
             PLog.i(
                 TAG,
-                "Special Video dual sessions started together: mode=$spatialVideoStreamingMode " +
-                    "main=$spatialVideoPrimaryCameraId ultraWide=${spatialVideoStandbyCameraDevice?.id} " +
+                "Special Video camera start requests submitted: mode=$spatialVideoStreamingMode " +
+                    "main=${spatialVideoPrimaryCameraId} ultraWide=${spatialVideoStandbyCameraDevice?.id}, " +
+                    "submissionDeltaUs=${(wideRequestSubmittedNs - mainRequestSubmittedNs) / 1_000L}, " +
+                    "totalSubmissionUs=${(wideRequestSubmittedNs - requestSubmitStartNs) / 1_000L}, " +
                     "timelineOriginUs=${specialVideoRecordingTimeline.currentOriginUs()}"
             )
         } catch (error: Exception) {
@@ -10499,6 +10608,14 @@ class Camera2Controller(private val context: Context) {
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
                 }
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                if (spatialVideoEnabled) {
+                    val targetFps = _state.value.videoConfig.fps.fps
+                    resolveSupportedVideoFpsRange(
+                        characteristics = characteristics,
+                        targetFps = targetFps,
+                        cameraLabel = "Special Video ultra-wide camera ${device.id}",
+                    )?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                }
                 set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
                 // Match VCamera's resolveSpecialVideoStandbyCropRatio(...)=1.0:
                 // the separate 0.5x file keeps the native, uncropped sensor field of view.
@@ -10530,7 +10647,11 @@ class Camera2Controller(private val context: Context) {
                                 startIndependentSpecialVideoInputsWhenReady()
                             } else {
                                 // Normal Video feeds this OES surface into the existing encoder.
-                                session.setRepeatingRequest(request.build(), null, handler)
+                                session.setRepeatingRequest(
+                                    request.build(),
+                                    spatialVideoStandbyCaptureCallback,
+                                    handler,
+                                )
                             }
                             PLog.i(
                                 TAG,
@@ -11442,6 +11563,9 @@ class Camera2Controller(private val context: Context) {
         videoCaptureStatsWindowStartMs = 0L
         videoCaptureStatsFrames = 0
         videoCaptureStatsFirstTimestampNs = 0L
+        specialVideoWideStatsWindowStartMs = 0L
+        specialVideoWideStatsFrames = 0
+        specialVideoWideStatsFirstTimestampNs = 0L
         val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
         val requestedCameraInputSize = if (useEnhancedStabilization) {
             _state.value.videoCapabilities.enhancedStabilizationInputSizesByResolution[
@@ -12319,6 +12443,9 @@ class Camera2Controller(private val context: Context) {
         videoCaptureStatsWindowStartMs = 0L
         videoCaptureStatsFrames = 0
         videoCaptureStatsFirstTimestampNs = 0L
+        specialVideoWideStatsWindowStartMs = 0L
+        specialVideoWideStatsFrames = 0
+        specialVideoWideStatsFirstTimestampNs = 0L
         stopVideoRecordingTicker()
         _state.value = _state.value.copy(
             videoRecordingState = _state.value.videoRecordingState.copy(
