@@ -103,12 +103,6 @@
                 android:layout_marginBottom="0dp"
                 android:visibility="gone" />
 
-            <TextView
-                android:id="@+id/gallery_photo_imported_badge"
-                style="@style/GallerySmallBadge"
-                android:layout_marginStart="4dp"
-                android:layout_marginBottom="0dp"
-                android:visibility="gone" />
         </LinearLayout>
 
         <FrameLayout
