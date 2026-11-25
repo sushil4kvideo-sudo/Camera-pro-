@@ -4084,6 +4084,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun canSwitchLensWithoutReopen(cameraId: String): Boolean =
+        cameraController.canSwitchLensWithoutReopen(cameraId)
+
     fun switchToLensAndSetZoomRatio(cameraId: String, ratio: Float) {
         if (isVideoLensLocked()) {
             setZoomRatio(ratio)
