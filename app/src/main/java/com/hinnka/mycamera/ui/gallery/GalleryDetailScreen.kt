@@ -2580,6 +2580,8 @@ private fun VideoDetailPlayer(
     val mediaUri = remember(photo.id, photo.uri, photo.sourceUri) {
         photo.sourceUri ?: photo.uri
     }
+    var mainPlaybackUri by remember(photo.id, mediaUri) { mutableStateOf(mediaUri) }
+    var isMainPlaybackReady by remember(photo.id, mediaUri) { mutableStateOf(false) }
     val ultraWideFile = remember(photo.id, mediaUri) {
         SpatialVideoStore.ultraWideFile(context, mediaUri)
     }
@@ -2601,6 +2603,32 @@ private fun VideoDetailPlayer(
     val telephotoCallback by rememberUpdatedState(onSpatialTelephotoAvailability)
     val isUltraWideFeedRequested = spatialZoomRatio < 1f && hasSpatialUltraWide
     val isTelephotoFeedRequested = spatialZoomRatio >= 3.35f && hasSpatialTelephoto
+
+    LaunchedEffect(photo.id, mediaUri, isActive) {
+        if (!isActive) return@LaunchedEffect
+        isMainPlaybackReady = false
+        mainPlaybackUri = mediaUri
+        try {
+            val mainFile = withContext(Dispatchers.IO) {
+                SpatialVideoStore.restoreMainPlaybackFile(context, mediaUri)
+            }
+            mainPlaybackUri = mainFile
+                ?.takeIf { it.isFile && it.length() > 0L }
+                ?.let(Uri::fromFile)
+                ?: mediaUri
+            PLog.i(
+                "VideoDetailPlayer",
+                "Special Video primary playback source: " +
+                    if (mainPlaybackUri != mediaUri) "extracted 1x main track" else "original single-track/fallback URI"
+            )
+        } catch (error: Exception) {
+            if (error is java.util.concurrent.CancellationException) throw error
+            mainPlaybackUri = mediaUri
+            PLog.w("VideoDetailPlayer", "Unable to prepare an isolated 1x playback source; using original URI.", error)
+        } finally {
+            isMainPlaybackReady = true
+        }
+    }
 
     LaunchedEffect(photo.id, mediaUri, isActive) {
         if (!isActive) return@LaunchedEffect
@@ -2713,12 +2741,13 @@ private fun VideoDetailPlayer(
         }
     }
 
-    // Prepare the main track once. Lens changes below never replace its MediaItem.
-    LaunchedEffect(exoPlayer, isActive, lifecycle) {
+    // Prepare the isolated 1x main stream once. Lens changes never replace this MediaItem;
+    // companion players remain responsible for the 0.5x and 3.5x feeds.
+    LaunchedEffect(exoPlayer, isActive, lifecycle, isMainPlaybackReady, mainPlaybackUri) {
         val primary = exoPlayer ?: return@LaunchedEffect
-        if (!isActive) return@LaunchedEffect
+        if (!isActive || !isMainPlaybackReady) return@LaunchedEffect
         delay(150)
-        primary.setMediaItem(MediaItem.fromUri(mediaUri))
+        primary.setMediaItem(MediaItem.fromUri(mainPlaybackUri))
         primary.prepare()
         primary.playWhenReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
     }

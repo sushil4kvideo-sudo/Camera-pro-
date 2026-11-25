@@ -29,6 +29,7 @@ object SpatialVideoStore {
     private const val CACHE_DIRECTORY_NAME = "spatial_video_cache"
     private const val SUFFIX = "_0_5x.mp4"
     private const val TELEPHOTO_SUFFIX = "_4x.mp4"
+    private const val MAIN_PLAYBACK_SUFFIX = "_main_1x.mp4"
     private const val FALLBACK_BUFFER_SIZE = 4 * 1024 * 1024
     private const val LENS_MAP_MIME = "application/x-photon-lens-map"
     private const val LENS_MAP_MAGIC = "PHOTON_SPECIAL_VIDEO_V1"
@@ -80,6 +81,53 @@ object SpatialVideoStore {
     /** Temporary, regenerable extraction used by Photon Gallery's existing multi-preview UI. */
     fun telephotoFile(context: Context, primaryVideoUri: Uri): File =
         cacheCompanionFile(context, primaryVideoUri, TELEPHOTO_SUFFIX)
+
+    /** Single-track 1x source used by Photon Gallery to avoid ambiguous MP4 track selection. */
+    private fun mainPlaybackFile(context: Context, primaryVideoUri: Uri): File =
+        cacheCompanionFile(context, primaryVideoUri, MAIN_PLAYBACK_SUFFIX)
+
+    /**
+     * Restores the exact 1x stream recorded in the Special Video lens map.
+     *
+     * The published MP4 intentionally contains several video tracks. ExoPlayer's default
+     * selector is free to choose a different supported track, so Photon Gallery plays this
+     * bit-for-bit extracted main stream instead. Ordinary and legacy single-track videos return
+     * null and continue to use their original URI.
+     */
+    fun restoreMainPlaybackFile(context: Context, primaryVideoUri: Uri): File? {
+        val destination = mainPlaybackFile(context, primaryVideoUri)
+        if (isUsableVideoFile(destination)) return destination
+        if (destination.exists() && !destination.delete()) {
+            PLog.w(TAG, "Unable to clear invalid cached 1x playback file: " + destination.absolutePath)
+            return null
+        }
+
+        val source = MediaExtractor()
+        try {
+            setExtractorDataSource(context, source, primaryVideoUri)
+            val trackMap = readLensTrackMap(source) ?: return null
+            if (!isVideoTrack(source, trackMap.main)) {
+                PLog.w(TAG, "Special Video lens map points to an invalid 1x track: " + trackMap.main)
+                return null
+            }
+            val audioTrack = (0 until source.trackCount).firstOrNull { index ->
+                source.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+            }
+            val extracted = extractVideoTrackWithAudio(
+                context = context,
+                primaryVideoUri = primaryVideoUri,
+                videoTrackIndex = trackMap.main,
+                audioTrackIndex = audioTrack,
+                destination = destination,
+            )
+            return destination.takeIf { extracted && isUsableVideoFile(it) }
+        } catch (error: Exception) {
+            PLog.w(TAG, "Unable to restore the Special Video 1x playback track: " + error.message, error)
+            return null
+        } finally {
+            runCatching { source.release() }
+        }
+    }
 
     /**
      * Rebuilds the gallery's temporary lens previews from the multi-video-track MP4.
@@ -531,6 +579,19 @@ object SpatialVideoStore {
             extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
 
     private fun isUsableFile(file: File): Boolean = file.isFile && file.length() > 0L
+
+    private fun isUsableVideoFile(file: File): Boolean {
+        if (!isUsableFile(file)) return false
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(file.absolutePath)
+            firstTrack(extractor, "video/") != null
+        } catch (_: Exception) {
+            false
+        } finally {
+            runCatching { extractor.release() }
+        }
+    }
 
     /**
      * Copies the primary recording's AAC audio samples into the ultra-wide MP4 without
