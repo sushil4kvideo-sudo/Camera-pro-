@@ -1321,7 +1321,6 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
     private val motionIcon: ImageView
     private val burstIcon: ImageView
     private val rawBadge: TextView
-    private val importedBadge: TextView
     private val relatedBadge: View
     private var boundPhotoId: String? = null
     private val processingShimmer = ProcessingPhotoShimmerView(context)
@@ -1343,7 +1342,6 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
         motionIcon = findViewById(R.id.gallery_photo_motion_icon)
         burstIcon = findViewById(R.id.gallery_photo_burst_icon)
         rawBadge = findViewById(R.id.gallery_photo_raw_badge)
-        importedBadge = findViewById(R.id.gallery_photo_imported_badge)
         relatedBadge = findViewById(R.id.gallery_photo_related_badge)
         contentLayer.addView(processingShimmer, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
@@ -1383,9 +1381,6 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
         }
         rawBadge.visibility = if (photo.isImage && isRawPhoto) VISIBLE else GONE
         rawBadge.text = context.getString(R.string.gallery_raw_badge)
-        importedBadge.visibility =
-            if (viewModel.selectedTab == GalleryTab.PHOTON && photo.sourceUri != null) VISIBLE else GONE
-        importedBadge.text = context.getString(R.string.imported)
         relatedBadge.visibility =
             if (viewModel.selectedTab == GalleryTab.SYSTEM && photo.relatedPhoto != null) VISIBLE else GONE
 
