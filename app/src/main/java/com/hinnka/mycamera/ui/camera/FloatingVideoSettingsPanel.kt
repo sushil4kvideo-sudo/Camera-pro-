@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -65,6 +66,10 @@ fun FloatingVideoSettingsPanel(
     onFpsSelected: (VideoFpsPreset) -> Unit,
     virtualTelephotoEnabled: Boolean,
     onVirtualTelephotoEnabledChange: (Boolean) -> Unit,
+    topOffZoomEnabled: Boolean,
+    topOffZoomFactor: Float,
+    onTopOffZoomEnabledChange: (Boolean) -> Unit,
+    onTopOffZoomFactorChange: (Float) -> Unit,
     onDismiss: () -> Unit,
     glassTransparency: Float,
     glassBlurStrength: Float,
@@ -288,6 +293,69 @@ fun FloatingVideoSettingsPanel(
                                     uncheckedThumbColor = Color.White.copy(alpha = 0.78f),
                                     uncheckedTrackColor = Color.White.copy(alpha = 0.18f),
                                 ),
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("top_off_zoom_row"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    text = "Top Off Zoom",
+                                    color = VideoSelectorText,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = "Sensor crop anchored to the top edge",
+                                    color = VideoSelectorDescription,
+                                    fontSize = 11.5.sp,
+                                )
+                            }
+                            Switch(
+                                checked = topOffZoomEnabled,
+                                onCheckedChange = onTopOffZoomEnabledChange,
+                                modifier = Modifier.testTag("top_off_zoom_toggle"),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = VideoSelectorGold,
+                                    checkedTrackColor = VideoSelectorGold.copy(alpha = 0.34f),
+                                    uncheckedThumbColor = Color.White.copy(alpha = 0.78f),
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.18f),
+                                ),
+                            )
+                        }
+                        if (topOffZoomEnabled) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Zoom value",
+                                    color = VideoSelectorLabel,
+                                    fontSize = 12.5.sp,
+                                )
+                                Text(
+                                    text = String.format(java.util.Locale.US, "%.1fx", topOffZoomFactor),
+                                    color = VideoSelectorGold,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                            Slider(
+                                value = topOffZoomFactor.coerceIn(1f, 4f),
+                                onValueChange = onTopOffZoomFactorChange,
+                                valueRange = 1f..4f,
+                                steps = 5,
+                                modifier = Modifier.testTag("top_off_zoom_factor_slider"),
                             )
                         }
                     }
