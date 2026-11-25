@@ -36,14 +36,36 @@ internal fun shouldUseNormalVideoUltraWideHandoffAnimation(
         (currentIsUltraWide && targetIsMain && targetIsMainStop)
 }
 
-/** Scale the standby ultra-wide preview until it matches the main 1x field of view. */
+/**
+ * Returns true when a selected ultra-wide preview must stay active while the
+ * main 1x camera takes over a zoom target above 1x.
+ */
+internal fun shouldUseNormalVideoUltraWideExtendedZoomHandoff(
+    currentLensIntrinsicZoomRatio: Float?,
+    targetLensIntrinsicZoomRatio: Float?,
+    targetZoomRatio: Float,
+): Boolean {
+    val currentIntrinsic = currentLensIntrinsicZoomRatio
+        ?.takeIf { it.isFinite() && it > 0f } ?: return false
+    val targetIntrinsic = targetLensIntrinsicZoomRatio
+        ?.takeIf { it.isFinite() && it > 0f } ?: return false
+    if (!targetZoomRatio.isFinite() || targetZoomRatio <= 1.05f) return false
+
+    val currentIsUltraWide = currentIntrinsic in 0.2f..0.85f
+    val targetIsMain = abs(targetIntrinsic - 1f) <= 0.15f
+    return currentIsUltraWide && targetIsMain
+}
+
+/** Scale the standby ultra-wide preview to match the requested main-camera field of view. */
 internal fun normalVideoUltraWideHandoffPreviewScale(
-    ultraWideIntrinsicZoomRatio: Float?
+    ultraWideIntrinsicZoomRatio: Float?,
+    targetZoomRatio: Float = 1f,
 ): Float {
     val safeIntrinsic = ultraWideIntrinsicZoomRatio
         ?.takeIf { it.isFinite() && it in 0.2f..0.85f }
         ?: NormalVideoUltraWideHandoffZoomRatio
-    return (1f / safeIntrinsic).coerceIn(1f, 5f)
+    val safeTarget = targetZoomRatio.takeIf { it.isFinite() && it > 0f } ?: 1f
+    return (safeTarget / safeIntrinsic).coerceIn(1f, 5f)
 }
 internal val ZoomStopAnimationEasing = CubicBezierEasing(0.4f, 0f, 0.6f, 1f)
 
