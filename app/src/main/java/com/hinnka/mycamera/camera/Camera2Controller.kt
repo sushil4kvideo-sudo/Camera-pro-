@@ -766,6 +766,7 @@ class Camera2Controller(private val context: Context) {
         var state: CameraState,
         val reader: ImageReader,
         val expectedFrames: Int,
+        val hdrBracketEvOffsets: List<Float> = emptyList(),
         val characteristics: CameraCharacteristics?,
         val physicalCameraId: String?,
         val continuousBurst: Boolean = false,
@@ -896,7 +897,19 @@ class Camera2Controller(private val context: Context) {
         reader: ImageReader,
         continuousBurst: Boolean = false,
     ): PhotoCaptureContext? {
-        val frameCount = if (continuousBurst) BURST_CAPTURE_BATCH_SIZE else captureImageRequestCount(state, reader)
+        // Freeze the HDR decision at shutter acceptance. The preview histogram can update
+        // during AE precapture, but buffer reservation and submitted requests must share
+        // the same exposure plan and therefore the same expected frame count.
+        val hdrBracketEvOffsets = if (continuousBurst) {
+            emptyList()
+        } else {
+            resolveJpgMaxHdrBracketEvOffsets(state, isRawCaptureReader(reader))
+        }
+        val frameCount = if (continuousBurst) {
+            BURST_CAPTURE_BATCH_SIZE
+        } else {
+            captureImageRequestCount(state, reader, hdrBracketEvOffsets)
+        }
         val occupied = openImagesCount.get() + reservedImageCount()
         if (occupied + frameCount > CAPTURE_READER_MAX_IMAGES) {
             PLog.w(TAG, "Capture rejected: occupied=$occupied requested=$frameCount capacity=$CAPTURE_READER_MAX_IMAGES")
@@ -907,6 +920,7 @@ class Camera2Controller(private val context: Context) {
             state = state,
             reader = reader,
             expectedFrames = frameCount,
+            hdrBracketEvOffsets = hdrBracketEvOffsets,
             characteristics = activeOutputPhysicalCameraId
                 ?.let { getCameraCharacteristicsOrNull(it, "capture snapshot") }
                 ?: getActiveOpenCameraCharacteristics(),
@@ -1447,13 +1461,16 @@ class Camera2Controller(private val context: Context) {
 
     private fun resolveImageReaderMaxImages(): Int = CAPTURE_READER_MAX_IMAGES
 
-    private fun captureImageRequestCount(state: CameraState, reader: ImageReader): Int = when {
+    private fun captureImageRequestCount(
+        state: CameraState,
+        reader: ImageReader,
+        hdrBracketEvOffsets: List<Float>,
+    ): Int = when {
         state.refocusCaptureEnabled &&
             state.captureMode == CaptureMode.PHOTO &&
             state.minimumFocusDistance > 0f &&
             !isRawCaptureReader(reader) -> state.refocusFrameCount.coerceIn(3, 8)
-        shouldUseJpgMaxHdrCapture(state, isRawCaptureReader(reader)) && !shouldUseMultiFrameTorch(state) ->
-            buildHdrBracketEvOffsets(state).size
+        hdrBracketEvOffsets.size > 1 -> hdrBracketEvOffsets.size
         state.requiresMultiFrameCaptureSequence -> state.activeMultiFrameCount
         else -> 1
     }
@@ -12844,8 +12861,9 @@ class Camera2Controller(private val context: Context) {
         playShutterSound: Boolean,
         baseExposureResult: CaptureResult?,
         currentState: CameraState,
+        evOffsets: List<Float>,
     ) {
-        val evOffsets = buildHdrBracketEvOffsets(currentState)
+        require(evOffsets.size in 2..3) { "Oppo HDR bracket must contain 2 or 3 frames" }
         val hdrFrameCount = evOffsets.size
         _state.value = _state.value.copy(
             isCapturing = true,
@@ -12909,14 +12927,6 @@ class Camera2Controller(private val context: Context) {
      * OppoCam bracket order: reference, short highlight, optional long shadow.
      * Auto HDR only brackets scenes whose live histogram shows actual highlight/shadow risk.
      */
-    private fun buildHdrBracketEvOffsets(state: CameraState): List<Float> {
-        if (state.flashMode != 0) return listOf(0f)
-        if (!state.autoHdrEnabled || state.useJpgMaxHdrComposition) {
-            return listOf(0f, -1.7f, 1.4f)
-        }
-        return resolveAutoHdrBracketEvOffsets(state)
-    }
-
     /**
      * 执行实际的拍照操作
      */
@@ -13332,20 +13342,33 @@ class Camera2Controller(private val context: Context) {
         return false
     }
 
-    private fun shouldUseJpgMaxHdrCapture(state: CameraState, isRawCapture: Boolean): Boolean {
-        val sceneNeedsHdr = state.useJpgMaxHdrComposition ||
-            (state.autoHdrEnabled && resolveAutoHdrBracketEvOffsets(state).size > 1)
-        return state.captureMode == CaptureMode.PHOTO &&
-                state.isJpgMaxEnabled &&
-                sceneNeedsHdr &&
-                state.flashMode == 0 &&
-                !isMultiFrameTorchCaptureActive &&
-                !isRawCapture &&
-                !state.burstCapturing &&
-                !state.hdrBracketCapturing &&
-                !state.refocusCaptureEnabled &&
-                !state.useMultipleExposure &&
-                !state.useLivePhoto
+    /**
+     * Resolve and freeze the OppoCam photo HDR bracket before AE precapture.
+     * This prevents a changing preview histogram from altering the number of frames
+     * after the capture has already reserved ImageReader buffers.
+     */
+    private fun resolveJpgMaxHdrBracketEvOffsets(
+        state: CameraState,
+        isRawCapture: Boolean,
+    ): List<Float> {
+        val eligible = state.captureMode == CaptureMode.PHOTO &&
+            state.isJpgMaxEnabled &&
+            state.flashMode == 0 &&
+            !isMultiFrameTorchCaptureActive &&
+            !isRawCapture &&
+            !state.burstCapturing &&
+            !state.hdrBracketCapturing &&
+            !state.refocusCaptureEnabled &&
+            !state.useMultipleExposure &&
+            !state.useLivePhoto
+        if (!eligible) return emptyList()
+
+        val offsets = when {
+            state.useJpgMaxHdrComposition -> listOf(0f, -1.7f, 1.4f)
+            state.autoHdrEnabled -> resolveAutoHdrBracketEvOffsets(state)
+            else -> emptyList()
+        }
+        return offsets.takeIf { it.size > 1 } ?: emptyList()
     }
 
     /**
@@ -13479,7 +13502,11 @@ class Camera2Controller(private val context: Context) {
                 performRefocusCapture(device, reader, session, baseExposureResult)
                 return
             }
-            if (shouldUseJpgMaxHdrCapture(currentState, isRawCapture)) {
+            val reservedHdrBracketEvOffsets = activePhotoCapture
+                ?.takeIf { it.reader === reader }
+                ?.hdrBracketEvOffsets
+                .orEmpty()
+            if (reservedHdrBracketEvOffsets.size > 1) {
                 val session = captureSession ?: run {
                     PLog.e(TAG, "Failed to capture JPGmax bracket: capture session unavailable")
                     _state.value = _state.value.copy(isCapturing = false)
@@ -13487,7 +13514,11 @@ class Camera2Controller(private val context: Context) {
                     resetPreviewAfterCapture()
                     return
                 }
-                PLog.d(TAG, "JPGmax YUV bracket capture")
+                PLog.d(
+                    TAG,
+                    "Oppo Auto HDR bracket capture: frames=${reservedHdrBracketEvOffsets.size} " +
+                        "EV=${reservedHdrBracketEvOffsets.joinToString()}",
+                )
                 performHdrBracketCapture(
                     device = device,
                     reader = reader,
@@ -13495,6 +13526,7 @@ class Camera2Controller(private val context: Context) {
                     playShutterSound = false,
                     baseExposureResult = baseExposureResult,
                     currentState = currentState,
+                    evOffsets = reservedHdrBracketEvOffsets,
                 )
                 return
             }
