@@ -2604,10 +2604,17 @@ private fun VideoDetailPlayer(
     val isUltraWideFeedRequested = spatialZoomRatio < 1f && hasSpatialUltraWide
     val isTelephotoFeedRequested = spatialZoomRatio >= 3.35f && hasSpatialTelephoto
 
-    LaunchedEffect(photo.id, mediaUri, isActive) {
+    LaunchedEffect(photo.id, mediaUri, isActive, photo.isExternalShared) {
         if (!isActive) return@LaunchedEffect
         isMainPlaybackReady = false
         mainPlaybackUri = mediaUri
+        if (photo.isExternalShared) {
+            // Keep the original content URI: Google Photos may stream it from cloud storage.
+            // Do not run Special Video's multi-track extractor on a provider-backed cloud item.
+            isMainPlaybackReady = true
+            PLog.i("VideoDetailPlayer", "Using externally shared video URI directly: $mediaUri")
+            return@LaunchedEffect
+        }
         try {
             val mainFile = withContext(Dispatchers.IO) {
                 SpatialVideoStore.restoreMainPlaybackFile(context, mediaUri)
@@ -2630,8 +2637,16 @@ private fun VideoDetailPlayer(
         }
     }
 
-    LaunchedEffect(photo.id, mediaUri, isActive) {
+    LaunchedEffect(photo.id, mediaUri, isActive, photo.isExternalShared) {
         if (!isActive) return@LaunchedEffect
+        if (photo.isExternalShared) {
+            // External shares are ordinary single-source videos, not Photon multi-lens recordings.
+            hasSpatialUltraWide = false
+            hasSpatialTelephoto = false
+            companionCallback(false)
+            telephotoCallback(false)
+            return@LaunchedEffect
+        }
         val restored = withContext(Dispatchers.IO) {
             SpatialVideoStore.restoreCompanionFiles(context, mediaUri)
         }
