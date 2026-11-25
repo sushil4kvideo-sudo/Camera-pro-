@@ -121,11 +121,6 @@ private val GalleryToolbarButton = Color(0xFF242424)
 private val GalleryToolbarContent = Color(0xFFF2F2F2)
 private val GallerySheetSurface = Color(0xFF171717)
 
-// Prepare the next lens before the visual handoff band is reached. Only one companion
-// decoder is ever kept warm alongside the 1x player.
-private const val SPECIAL_VIDEO_ULTRAWIDE_PREWARM_MAX_ZOOM = 1.25f
-private const val SPECIAL_VIDEO_TELEPHOTO_PREWARM_MIN_ZOOM = 2.90f
-
 private class VideoPreviewHandle {
     private var activeLease: Lease? = null
 
@@ -157,8 +152,7 @@ private class VideoPreviewHandle {
 
 /**
  * Wait until a seek has reached the requested timeline position and the decoder has
- * had time to present the corresponding frame. The caller keeps the previous feed
- * visible until this returns, so an unready companion can never replace a good frame.
+ * had time to present the corresponding frame.
  */
 private suspend fun awaitVideoSeekFrame(
     player: ExoPlayer,
@@ -173,8 +167,6 @@ private suspend fun awaitVideoSeekFrame(
 
         val positionDelta = abs(player.currentPosition - targetPositionMs)
         if (player.playbackState == Player.STATE_READY && positionDelta <= 100L) {
-            // The companion TextureView stays attached while prewarmed, so one
-            // display interval is enough after a completed local-file seek.
             delay(40L)
             return player.playbackState == Player.STATE_READY &&
                 abs(player.currentPosition - targetPositionMs) <= 160L
@@ -184,6 +176,28 @@ private suspend fun awaitVideoSeekFrame(
 
     return player.playbackState == Player.STATE_READY &&
         abs(player.currentPosition - targetPositionMs) <= 160L
+}
+
+/**
+ * Synchronize a companion once while it is being prewarmed. Normal lens changes do
+ * not call this: ready companion feeds follow the primary clock continuously.
+ */
+private suspend fun alignCompanionToPrimary(
+    primary: ExoPlayer,
+    companion: ExoPlayer,
+): Boolean {
+    var targetPosition = primary.currentPosition.coerceAtLeast(0L)
+    if (abs(companion.currentPosition - targetPosition) > 80L) {
+        companion.seekTo(targetPosition)
+    }
+    if (!awaitVideoSeekFrame(companion, targetPosition)) return false
+
+    targetPosition = primary.currentPosition.coerceAtLeast(0L)
+    if (abs(companion.currentPosition - targetPosition) > 80L) {
+        companion.seekTo(targetPosition)
+        if (!awaitVideoSeekFrame(companion, targetPosition)) return false
+    }
+    return true
 }
 
 @Composable
@@ -2582,23 +2596,11 @@ private fun VideoDetailPlayer(
     var isTelephotoPlayerReady by remember(photo.id, mediaUri, isActive) { mutableStateOf(false) }
     var isWideFeedSynced by remember(photo.id, mediaUri, isActive) { mutableStateOf(false) }
     var isTelephotoFeedSynced by remember(photo.id, mediaUri, isActive) { mutableStateOf(false) }
+    var isCompanionPrewarmComplete by remember(photo.id, mediaUri, isActive) { mutableStateOf(false) }
     val companionCallback by rememberUpdatedState(onSpatialCompanionAvailability)
     val telephotoCallback by rememberUpdatedState(onSpatialTelephotoAvailability)
     val isUltraWideFeedRequested = spatialZoomRatio < 1f && hasSpatialUltraWide
     val isTelephotoFeedRequested = spatialZoomRatio >= 3.35f && hasSpatialTelephoto
-    // Start loading before the visible handoff thresholds (0.94x and 3.35x). This gives
-    // local-file probing and MediaCodec startup time to finish while the 1x feed is safe.
-    val shouldPrewarmUltraWide = isActive && hasSpatialUltraWide &&
-        spatialZoomRatio <= SPECIAL_VIDEO_ULTRAWIDE_PREWARM_MAX_ZOOM
-    val shouldPrewarmTelephoto = isActive && hasSpatialTelephoto &&
-        spatialZoomRatio >= SPECIAL_VIDEO_TELEPHOTO_PREWARM_MIN_ZOOM
-    val isSelectedCompanionSynced by rememberUpdatedState(
-        (isUltraWideFeedRequested && isWideFeedSynced) ||
-            (isTelephotoFeedRequested && isTelephotoFeedSynced)
-    )
-    // Only the lens currently visible in the gallery should decode continuously.
-    // Playing both hidden companion streams wastes decoder/GPU resources and can
-    // make the third lens stutter on devices with limited video-decoder capacity.
 
     LaunchedEffect(photo.id, mediaUri, isActive) {
         if (!isActive) return@LaunchedEffect
@@ -2665,8 +2667,8 @@ private fun VideoDetailPlayer(
         }
     }
 
-    // Alternate players are created for this active page but their media/decoder resources
-    // are prepared only when the corresponding lens is requested.
+    // Keep both muted companion decoders available while this gallery page is active.
+    // They share the primary recording timeline and never take audio focus.
     val wideExoPlayer = remember(photo.id, mediaUri, isActive) {
         if (!isActive) return@remember null
         ExoPlayer.Builder(context).build().apply {
@@ -2675,6 +2677,8 @@ private fun VideoDetailPlayer(
             setVideoEffects(listOf(wideVideoLutEffect))
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    isWidePlayerReady = false
+                    isWideFeedSynced = false
                     PLog.w("VideoDetailPlayer", "Ultra-wide ExoPlayer error.", error)
                 }
             })
@@ -2689,6 +2693,8 @@ private fun VideoDetailPlayer(
             setVideoEffects(listOf(telephotoVideoLutEffect))
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    isTelephotoPlayerReady = false
+                    isTelephotoFeedSynced = false
                     PLog.w("VideoDetailPlayer", "3.5x telephoto ExoPlayer error.", error)
                 }
             })
@@ -2717,251 +2723,298 @@ private fun VideoDetailPlayer(
         primary.playWhenReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
     }
 
-    // Prewarm the next likely lens, but keep the decoder budget bounded: the main 1x
-    // player plus exactly one companion player. Release the old companion before loading
-    // the new one, so a fast 0.5x <-> 3.5x jump never briefly allocates all three decoders.
+    // Prepare every available companion before the user requests that lens.
+    // On devices with enough decoder capacity, both muted feeds stay synchronized so
+    // lens changes only switch an already-rendered TextureView.
     LaunchedEffect(
         exoPlayer,
         wideExoPlayer,
         telephotoExoPlayer,
-        shouldPrewarmUltraWide,
-        shouldPrewarmTelephoto,
+        hasSpatialUltraWide,
+        hasSpatialTelephoto,
         isActive
     ) {
-        val wide = wideExoPlayer
-        val telephoto = telephotoExoPlayer
-        if (wide == null || telephoto == null) return@LaunchedEffect
+        val primary = exoPlayer ?: return@LaunchedEffect
+        if (!isActive) return@LaunchedEffect
+        isCompanionPrewarmComplete = false
 
-        if (!shouldPrewarmUltraWide) {
-            wide.pause()
-            runCatching {
-                wide.stop()
-                wide.clearMediaItems()
-            }
-            isWidePlayerReady = false
-            isWideFeedSynced = false
-        }
-        if (!shouldPrewarmTelephoto) {
-            telephoto.pause()
-            runCatching {
-                telephoto.stop()
-                telephoto.clearMediaItems()
-            }
-            isTelephotoPlayerReady = false
-            isTelephotoFeedSynced = false
+        val companions = listOfNotNull(
+            if (hasSpatialUltraWide && ultraWideFile.isFile && ultraWideFile.length() > 0L) {
+                wideExoPlayer?.let { Triple(it, ultraWideFile, true) }
+            } else null,
+            if (hasSpatialTelephoto && telephotoFile.isFile && telephotoFile.length() > 0L) {
+                telephotoExoPlayer?.let { Triple(it, telephotoFile, false) }
+            } else null
+        )
+        if (companions.isEmpty()) {
+            isCompanionPrewarmComplete = true
+            return@LaunchedEffect
         }
 
-        val companion = when {
-            shouldPrewarmUltraWide -> wide
-            shouldPrewarmTelephoto -> telephoto
+        // Let AndroidView attach the companion TextureViews before Media3 creates decoders.
+        delay(150L)
+
+        companions.forEach { (companion, file, isWide) ->
+            val companionUri = Uri.fromFile(file)
+            val alreadyPrepared =
+                companion.currentMediaItem?.localConfiguration?.uri == companionUri &&
+                    companion.playbackState == Player.STATE_READY &&
+                    companion.playerError == null
+            if (!alreadyPrepared) {
+                if (isWide) {
+                    isWidePlayerReady = false
+                    isWideFeedSynced = false
+                } else {
+                    isTelephotoPlayerReady = false
+                    isTelephotoFeedSynced = false
+                }
+
+                try {
+                    companion.pause()
+                    companion.playWhenReady = false
+                    val currentUri = companion.currentMediaItem?.localConfiguration?.uri
+                    if (currentUri != companionUri || companion.playerError != null) {
+                        runCatching {
+                            companion.stop()
+                            companion.clearMediaItems()
+                        }
+                        companion.setMediaItem(MediaItem.fromUri(companionUri))
+                    }
+                    companion.prepare()
+                } catch (error: java.util.concurrent.CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    PLog.w(
+                        "VideoDetailPlayer",
+                        "Unable to prepare ${if (isWide) "0.5x" else "3.5x"} Special Video companion.",
+                        error
+                    )
+                }
+            }
+        }
+
+        // Issue both prepare calls before waiting, avoiding decoder startup on a lens tap.
+        var attempts = 0
+        while (
+            companions.any { (player, _, _) ->
+                player.playbackState != Player.STATE_READY &&
+                    player.playerError == null &&
+                    player.playbackState != Player.STATE_ENDED
+            } && attempts < 160
+        ) {
+            delay(25L)
+            attempts++
+        }
+
+        var primaryAttempts = 0
+        while (
+            primary.playbackState != Player.STATE_READY &&
+                primary.playerError == null &&
+                primaryAttempts < 160
+        ) {
+            delay(25L)
+            primaryAttempts++
+        }
+        if (primary.playbackState != Player.STATE_READY || primary.playerError != null) {
+            PLog.w("VideoDetailPlayer", "Primary Special Video player was not ready for companion alignment.")
+            isCompanionPrewarmComplete = true
+            return@LaunchedEffect
+        }
+
+        val readyCompanions = companions.filter { (player, _, _) ->
+            player.playbackState == Player.STATE_READY && player.playerError == null
+        }
+        companions.forEach { (player, _, isWide) ->
+            val ready = readyCompanions.any { it.first === player }
+            if (isWide) {
+                isWidePlayerReady = ready
+                if (!ready) isWideFeedSynced = false
+                PLog.i("VideoDetailPlayer", "Special Video 0.5x decoder ready=$ready")
+            } else {
+                isTelephotoPlayerReady = ready
+                if (!ready) isTelephotoFeedSynced = false
+                PLog.i("VideoDetailPlayer", "Special Video 3.5x decoder ready=$ready")
+            }
+        }
+
+        // These are initialization seeks only. Normal lens changes never seek a companion.
+        readyCompanions.forEach { (companion, _, isWide) ->
+            val aligned = alignCompanionToPrimary(primary, companion)
+            if (isWide) isWideFeedSynced = aligned else isTelephotoFeedSynced = aligned
+            if (!aligned) {
+                PLog.w(
+                    "VideoDetailPlayer",
+                    "Initial Special Video companion alignment failed: " +
+                        "feed=${if (isWide) "0.5x" else "3.5x"}, " +
+                        "primary=${primary.currentPosition}ms, companion=${companion.currentPosition}ms"
+                )
+            }
+        }
+
+        readyCompanions.forEach { (companion, _, isWide) ->
+            val aligned = if (isWide) isWideFeedSynced else isTelephotoFeedSynced
+            if (aligned && primary.isPlaying) companion.play() else companion.pause()
+        }
+
+        isCompanionPrewarmComplete = true
+        PLog.i(
+            "VideoDetailPlayer",
+            "Special Video gallery prewarm complete: " +
+                "ultraWideReady=$isWidePlayerReady, ultraWideSynced=$isWideFeedSynced, " +
+                "telephotoReady=$isTelephotoPlayerReady, telephotoSynced=$isTelephotoFeedSynced"
+        )
+    }
+
+    // Decoder-limited devices keep the same one-companion fallback as before: free the
+    // other lens decoder and prepare only the requested feed. This preserves playback
+    // compatibility when the hardware cannot hold all three video decoders at once.
+    LaunchedEffect(
+        isCompanionPrewarmComplete,
+        isUltraWideFeedRequested,
+        isTelephotoFeedRequested
+    ) {
+        val primary = exoPlayer ?: return@LaunchedEffect
+        if (!isActive || !isCompanionPrewarmComplete) return@LaunchedEffect
+
+        val requested = when {
+            isUltraWideFeedRequested && (!isWidePlayerReady || !isWideFeedSynced) ->
+                wideExoPlayer?.let { Triple(it, ultraWideFile, true) }
+            isTelephotoFeedRequested && (!isTelephotoPlayerReady || !isTelephotoFeedSynced) ->
+                telephotoExoPlayer?.let { Triple(it, telephotoFile, false) }
             else -> null
         } ?: return@LaunchedEffect
-        val companionUri = Uri.fromFile(
-            if (shouldPrewarmUltraWide) ultraWideFile else telephotoFile
-        )
-        val isWideCompanion = shouldPrewarmUltraWide
-        companion.pause()
 
-        val alreadyPrepared = companion.currentMediaItem?.localConfiguration?.uri == companionUri &&
-            companion.playbackState == Player.STATE_READY &&
-            companion.playerError == null
-        if (!alreadyPrepared) {
-            if (isWideCompanion) {
+        val (target, file, isWide) = requested
+        if (!file.isFile || file.length() <= 0L) return@LaunchedEffect
+
+        val other = if (isWide) telephotoExoPlayer else wideExoPlayer
+        if (other != null) {
+            other.pause()
+            runCatching {
+                other.stop()
+                other.clearMediaItems()
+            }
+            if (isWide) {
+                isTelephotoPlayerReady = false
+                isTelephotoFeedSynced = false
+            } else {
+                isWidePlayerReady = false
+                isWideFeedSynced = false
+            }
+        }
+
+        try {
+            target.pause()
+            target.playWhenReady = false
+            val targetUri = Uri.fromFile(file)
+            if (target.currentMediaItem?.localConfiguration?.uri != targetUri ||
+                target.playerError != null
+            ) {
+                runCatching {
+                    target.stop()
+                    target.clearMediaItems()
+                }
+                target.setMediaItem(MediaItem.fromUri(targetUri))
+            }
+            target.prepare()
+
+            var prepareAttempts = 0
+            while (
+                target.playbackState != Player.STATE_READY &&
+                    target.playbackState != Player.STATE_ENDED &&
+                    target.playerError == null &&
+                    prepareAttempts < 160
+            ) {
+                delay(25L)
+                prepareAttempts++
+            }
+
+            val ready = target.playbackState == Player.STATE_READY && target.playerError == null
+            if (isWide) isWidePlayerReady = ready else isTelephotoPlayerReady = ready
+            if (ready) {
+                val aligned = alignCompanionToPrimary(primary, target)
+                if (isWide) isWideFeedSynced = aligned else isTelephotoFeedSynced = aligned
+                if (aligned && primary.isPlaying) target.play() else target.pause()
+                PLog.i(
+                    "VideoDetailPlayer",
+                    "Special Video single-companion fallback: " +
+                        "feed=${if (isWide) "0.5x" else "3.5x"}, ready=$ready, synced=$aligned"
+                )
+            } else {
+                if (isWide) isWideFeedSynced = false else isTelephotoFeedSynced = false
+                PLog.w(
+                    "VideoDetailPlayer",
+                    "Special Video companion fallback failed: " +
+                        "feed=${if (isWide) "0.5x" else "3.5x"}, error=${target.playerError != null}"
+                )
+            }
+        } catch (error: java.util.concurrent.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (isWide) {
                 isWidePlayerReady = false
                 isWideFeedSynced = false
             } else {
                 isTelephotoPlayerReady = false
                 isTelephotoFeedSynced = false
             }
-
-            try {
-                val currentUri = companion.currentMediaItem?.localConfiguration?.uri
-                if (currentUri != companionUri || companion.playerError != null) {
-                    runCatching {
-                        companion.stop()
-                        companion.clearMediaItems()
-                    }
-                    companion.setMediaItem(MediaItem.fromUri(companionUri))
-                }
-                companion.prepare()
-
-                var attempts = 0
-                while (
-                    companion.playbackState != Player.STATE_READY &&
-                    companion.playbackState != Player.STATE_ENDED &&
-                    companion.playerError == null &&
-                    attempts < 160
-                ) {
-                    delay(25L)
-                    attempts++
-                }
-            } catch (error: java.util.concurrent.CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                PLog.w(
-                    "VideoDetailPlayer",
-                    "Unable to prewarm ${if (isWideCompanion) "0.5x" else "3.5x"} Special Video companion.",
-                    error
-                )
-            }
-        }
-
-        if (companion.playbackState == Player.STATE_READY && companion.playerError == null) {
-            if (isWideCompanion) {
-                isWidePlayerReady = true
-                companionCallback(true)
-            } else {
-                isTelephotoPlayerReady = true
-                telephotoCallback(true)
-            }
-            PLog.i(
-                "VideoDetailPlayer",
-                "Special Video companion prewarmed: feed=${if (isWideCompanion) "0.5x" else "3.5x"}, " +
-                    "readyBeforeHandoff=true"
-            )
-        } else {
-            if (isWideCompanion) {
-                isWidePlayerReady = false
-            } else {
-                isTelephotoPlayerReady = false
-            }
             PLog.w(
                 "VideoDetailPlayer",
-                "Special Video companion prewarm did not become ready: " +
-                    "feed=${if (isWideCompanion) "0.5x" else "3.5x"}, " +
-                    "state=${companion.playbackState}, error=${companion.playerError != null}"
+                "Special Video gallery fallback failed: ${if (isWide) "0.5x" else "3.5x"}",
+                error
             )
         }
     }
 
-    // Keep the current 1x picture visible until the requested companion has sought to
-    // the primary timestamp and had time to present a frame. This path also works while
-    // the primary is paused: the companion is never required to play to change lenses.
-    LaunchedEffect(
-        exoPlayer,
-        wideExoPlayer,
-        telephotoExoPlayer,
-        isUltraWideFeedRequested,
-        isTelephotoFeedRequested,
-        isWidePlayerReady,
-        isTelephotoPlayerReady,
-        isActive
-    ) {
-        val primary = exoPlayer ?: return@LaunchedEffect
-        if (!isActive) return@LaunchedEffect
-
-        val wide = wideExoPlayer
-        val telephoto = telephotoExoPlayer
-        if (!isUltraWideFeedRequested) {
-            wide?.pause()
-            isWideFeedSynced = false
-        }
-        if (!isTelephotoFeedRequested) {
-            telephoto?.pause()
-            isTelephotoFeedSynced = false
-        }
-
-        val selected = when {
-            isUltraWideFeedRequested && isWidePlayerReady -> wide
-            isTelephotoFeedRequested && isTelephotoPlayerReady -> telephoto
-            else -> null
-        } ?: return@LaunchedEffect
-
-        val feedName = if (isUltraWideFeedRequested) "0.5x" else "3.5x"
-        selected.pause()
-        var targetPosition = primary.currentPosition.coerceAtLeast(0L)
-        // A retained companion may already be close to the primary position. Avoid
-        // forcing a decoder flush/seek on a lens that was only briefly hidden.
-        if (abs(selected.currentPosition - targetPosition) > 80L) {
-            selected.seekTo(targetPosition)
-        }
-        if (!awaitVideoSeekFrame(selected, targetPosition)) {
-            PLog.w("VideoDetailPlayer", "Lens handoff timed out waiting for $feedName frame at ${targetPosition}ms.")
-            return@LaunchedEffect
-        }
-
-        // The main stream may have advanced during the seek. Align once more immediately
-        // before the handoff so playback starts with the smallest possible timestamp gap.
-        targetPosition = primary.currentPosition.coerceAtLeast(0L)
-        if (abs(selected.currentPosition - targetPosition) > 80L) {
-            selected.seekTo(targetPosition)
-            if (!awaitVideoSeekFrame(selected, targetPosition)) {
-                PLog.w("VideoDetailPlayer", "Final $feedName alignment timed out at ${targetPosition}ms.")
-                return@LaunchedEffect
-            }
-        }
-
-        if (primary.isPlaying && primary.playbackState == Player.STATE_READY) {
-            selected.play()
-            var attempts = 0
-            while (!selected.isPlaying && primary.isPlaying && attempts < 12) {
-                delay(16)
-                attempts++
-            }
-        } else {
-            selected.pause()
-        }
-
-        if (isUltraWideFeedRequested) {
-            isWideFeedSynced = true
-        } else {
-            isTelephotoFeedSynced = true
-        }
-        PLog.i(
-            "VideoDetailPlayer",
-            "Frame-aligned gallery lens handoff complete: feed=$feedName, " +
-                "position=${selected.currentPosition}ms, primary=${primary.currentPosition}ms, " +
-                "playing=${primary.isPlaying}"
-        )
-    }
-
-    // Mirror only the active companion. At EOS, pause and rewind the primary and any
-    // currently loaded companion together. This avoids relying on a later playWhenReady
-    // callback that can arrive after the player's state has already left STATE_ENDED.
+    // Keep every prewarmed companion on the primary playback clock, not just
+    // the currently visible lens. Normal lens changes therefore need no seek/decoder flush.
     DisposableEffect(
         exoPlayer,
         wideExoPlayer,
         telephotoExoPlayer,
-        isUltraWideFeedRequested,
-        isTelephotoFeedRequested,
         isWidePlayerReady,
-        isTelephotoPlayerReady
+        isTelephotoPlayerReady,
+        isWideFeedSynced,
+        isTelephotoFeedSynced
     ) {
         val primary = exoPlayer ?: return@DisposableEffect onDispose { }
-        val selected = when {
-            isUltraWideFeedRequested && isWidePlayerReady -> wideExoPlayer
-            isTelephotoFeedRequested && isTelephotoPlayerReady -> telephotoExoPlayer
-            else -> null
+        val companions = listOfNotNull(
+            wideExoPlayer?.takeIf { isWidePlayerReady && isWideFeedSynced },
+            telephotoExoPlayer?.takeIf { isTelephotoPlayerReady && isTelephotoFeedSynced }
+        )
+
+        fun mirrorCompanionPlayback(isPlaying: Boolean) {
+            companions.forEach { companion ->
+                if (isPlaying) {
+                    if (companion.playbackState == Player.STATE_ENDED ||
+                        abs(companion.currentPosition - primary.currentPosition) > 250L
+                    ) {
+                        companion.seekTo(primary.currentPosition.coerceAtLeast(0L))
+                    }
+                    companion.play()
+                } else {
+                    companion.pause()
+                }
+            }
         }
+
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                selected?.let { companion ->
-                    if (!isSelectedCompanionSynced) {
-                        companion.pause()
-                    } else if (isPlaying) {
-                        if (companion.playbackState == Player.STATE_ENDED ||
-                            abs(companion.currentPosition - primary.currentPosition) > 250L
-                        ) {
-                            companion.seekTo(primary.currentPosition.coerceAtLeast(0L))
-                        }
-                        companion.play()
-                    } else {
-                        companion.pause()
-                    }
-                }
+                mirrorCompanionPlayback(isPlaying)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) {
                     primary.pause()
-                    listOfNotNull(wideExoPlayer, telephotoExoPlayer).forEach { companion ->
+                    companions.forEach { companion ->
                         companion.pause()
-                        if (companion.mediaItemCount > 0) {
-                            companion.seekTo(0L)
-                        }
+                        if (companion.mediaItemCount > 0) companion.seekTo(0L)
                     }
                     primary.seekTo(0L)
-                    PLog.i("VideoDetailPlayer", "Gallery Special Video reached EOS; loaded timelines rewound for replay.")
+                    PLog.i(
+                        "VideoDetailPlayer",
+                        "Gallery Special Video reached EOS; all synchronized feeds rewound."
+                    )
                 }
             }
 
@@ -2970,66 +3023,58 @@ private fun VideoDetailPlayer(
                 newPosition: Player.PositionInfo,
                 reason: Int
             ) {
-                selected?.let { companion ->
-                    if (isSelectedCompanionSynced &&
-                        companion.mediaItemCount > 0 &&
-                        abs(companion.currentPosition - primary.currentPosition) > 100L
+                val targetPosition = primary.currentPosition.coerceAtLeast(0L)
+                companions.forEach { companion ->
+                    if (companion.mediaItemCount > 0 &&
+                        abs(companion.currentPosition - targetPosition) > 100L
                     ) {
-                        companion.seekTo(primary.currentPosition.coerceAtLeast(0L))
+                        companion.seekTo(targetPosition)
                     }
                 }
             }
         }
         primary.addListener(listener)
+        // A listener may be attached after the primary has already started playing.
+        mirrorCompanionPlayback(primary.isPlaying)
         onDispose { primary.removeListener(listener) }
     }
 
-    // Separate camera encoders can drift slightly on long recordings. Correct only
-    // substantial drift and temporarily show the primary feed while the companion seeks.
+    // Correct substantial timestamp drift on every active companion, not just the
+    // currently visible lens. A lens switch itself never runs this seek path.
     LaunchedEffect(
         exoPlayer,
-        isUltraWideFeedRequested,
-        isTelephotoFeedRequested,
+        wideExoPlayer,
+        telephotoExoPlayer,
         isWidePlayerReady,
         isTelephotoPlayerReady,
+        isWideFeedSynced,
+        isTelephotoFeedSynced,
         isActive
     ) {
         val primary = exoPlayer ?: return@LaunchedEffect
         if (!isActive) return@LaunchedEffect
-        val companion = when {
-            isUltraWideFeedRequested && isWidePlayerReady -> wideExoPlayer
-            isTelephotoFeedRequested && isTelephotoPlayerReady -> telephotoExoPlayer
-            else -> null
-        } ?: return@LaunchedEffect
+
+        val companions = listOfNotNull(
+            wideExoPlayer?.takeIf { isWidePlayerReady && isWideFeedSynced },
+            telephotoExoPlayer?.takeIf { isTelephotoPlayerReady && isTelephotoFeedSynced }
+        )
+        if (companions.isEmpty()) return@LaunchedEffect
 
         while (true) {
-            delay(2_500)
-            if (primary.isPlaying && companion.isPlaying &&
-                primary.playbackState == Player.STATE_READY &&
-                companion.playbackState == Player.STATE_READY
-            ) {
-                val driftMs = primary.currentPosition - companion.currentPosition
-                if (abs(driftMs) > 1_000L) {
-                    if (isUltraWideFeedRequested) {
-                        isWideFeedSynced = false
-                    } else {
-                        isTelephotoFeedSynced = false
-                    }
-                    companion.pause()
-                    val targetPosition = primary.currentPosition.coerceAtLeast(0L)
-                    companion.seekTo(targetPosition)
-                    val aligned = awaitVideoSeekFrame(companion, targetPosition)
-                    if (aligned) {
-                        if (primary.isPlaying) companion.play() else companion.pause()
-                        delay(48)
-                        if (isUltraWideFeedRequested) {
-                            isWideFeedSynced = true
-                        } else {
-                            isTelephotoFeedSynced = true
-                        }
-                        PLog.d("VideoDetailPlayer", "Corrected companion timeline drift=${driftMs}ms.")
-                    } else {
-                        PLog.w("VideoDetailPlayer", "Companion drift correction timed out; primary feed remains visible.")
+            delay(2_500L)
+            if (!primary.isPlaying || primary.playbackState != Player.STATE_READY) continue
+
+            companions.forEach { companion ->
+                if (companion.isPlaying && companion.playbackState == Player.STATE_READY) {
+                    val driftMs = primary.currentPosition - companion.currentPosition
+                    if (abs(driftMs) > 750L) {
+                        companion.pause()
+                        val aligned = alignCompanionToPrimary(primary, companion)
+                        if (aligned && primary.isPlaying) companion.play()
+                        PLog.d(
+                            "VideoDetailPlayer",
+                            "Corrected prewarmed companion drift=${driftMs}ms, aligned=$aligned."
+                        )
                     }
                 }
             }
@@ -3070,8 +3115,7 @@ private fun VideoDetailPlayer(
     if (exoPlayer != null) {
         val showWideFeed = hasSpatialUltraWide && isWidePlayerReady && wideExoPlayer != null
         val showTelephotoFeed = hasSpatialTelephoto && isTelephotoPlayerReady && telephotoExoPlayer != null
-        // Keep each available companion's TextureView attached even while its player is
-        // idle/preparing. This guarantees a real output surface exists before READY/seek.
+        // Keep both companion TextureViews attached while their muted decoders are prewarmed.
         val keepWideSurfaceAttached = hasSpatialUltraWide && wideExoPlayer != null
         val keepTelephotoSurfaceAttached = hasSpatialTelephoto && telephotoExoPlayer != null
         val wideHandoffAlpha by animateFloatAsState(
