@@ -13507,8 +13507,11 @@ class Camera2Controller(private val context: Context) {
      */
     private fun resolveAutoHdrBracketEvOffsets(state: CameraState): List<Float> {
         if (state.flashMode != 0) return emptyList()
-        val histogram = state.histogram ?: return emptyList()
-        if (histogram.size < 256) return emptyList()
+        val histogram = state.histogram
+        if (histogram == null || histogram.size < 256) {
+            PLog.w(TAG, "Oppo Auto HDR: single frame, no scene histogram yet (size=${histogram?.size})")
+            return emptyList()
+        }
 
         val total = histogram.sumOf { it.coerceAtLeast(0).toLong() }
         if (total <= 0L) return emptyList()

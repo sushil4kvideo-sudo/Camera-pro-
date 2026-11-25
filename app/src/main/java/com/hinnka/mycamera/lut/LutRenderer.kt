@@ -413,6 +413,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Volatile
     var meteringEnabled: Boolean = true
 
+    /**
+     * When true, the metering/histogram sample is taken from the un-styled camera scene
+     * (no baseline/creative LUT, grain, glass blur, post effects) instead of the final display
+     * texture. Auto HDR bracket planning needs the scene's real highlight/shadow distribution;
+     * a LUT or film look compresses percentiles and keeps the planner on "single frame".
+     */
+    @Volatile
+    var meteringFromSceneFrame: Boolean = false
+
     @Volatile
     var exposure: Float = 0f // -2.0 ~ +2.0
 
@@ -1497,7 +1506,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             )
             if (meteringEnabled) {
                 runMeteringInternal(
-                    sourceTextureId = finalDisplayTextureId,
+                    // null => runMeteringInternal() re-renders the raw scene with all looks suppressed.
+                    sourceTextureId = if (meteringFromSceneFrame) null else finalDisplayTextureId,
                     sourceWidth = finalDisplayWidth,
                     sourceHeight = finalDisplayHeight,
                     compositeWithHdf = needsHdfCompositeForSampling

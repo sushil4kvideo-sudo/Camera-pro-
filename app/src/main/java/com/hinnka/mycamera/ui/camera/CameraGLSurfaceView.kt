@@ -250,6 +250,10 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         renderer.meteringEnabled = enabled
     }
 
+    fun setMeteringFromSceneFrame(enabled: Boolean) {
+        renderer.meteringFromSceneFrame = enabled
+    }
+
     /**
      * 设置 LUT
      * 

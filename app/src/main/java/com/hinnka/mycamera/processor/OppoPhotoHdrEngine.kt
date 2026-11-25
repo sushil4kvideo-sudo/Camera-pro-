@@ -134,7 +134,13 @@ object OppoPhotoHdrEngine {
                 val bitmap = decodeCameraImage(frame.image) ?: continue
                 decoded += frame to bitmap
             }
-            if (decoded.isEmpty()) return@withContext null
+            if (decoded.isEmpty()) {
+                android.util.Log.w(
+                    "OppoPhotoHdrEngine",
+                    "No frame could be decoded; formats=${frames.map { it.image.format }} (only YUV_420_888/JPEG supported)"
+                )
+                return@withContext null
+            }
 
             val basePair = decoded.firstOrNull { it.first.role == OppoHdrFrameRole.REFERENCE_BASE }
                 ?: decoded.first()
@@ -187,7 +193,15 @@ object OppoPhotoHdrEngine {
         val long = aligned.firstOrNull { it.role == OppoHdrFrameRole.LONG_SHADOW }
             ?.takeIf { it.alignment.isAligned && it.alignment.confidence >= 0.70f }
 
-        if (short == null && long == null) return mutableBase
+        if (short == null && long == null) {
+            android.util.Log.w(
+                "OppoPhotoHdrEngine",
+                "HDR skipped, base frame kept: shortAligned=${aligned.firstOrNull { it.role == OppoHdrFrameRole.SHORT_HIGHLIGHT }?.alignment?.let { "ok=${it.isAligned} conf=${it.confidence}" }} " +
+                    "longAligned=${aligned.firstOrNull { it.role == OppoHdrFrameRole.LONG_SHADOW }?.alignment?.let { "ok=${it.isAligned} conf=${it.confidence}" }} " +
+                    "(need short>=0.65, long>=0.70; null => size mismatch)"
+            )
+            return mutableBase
+        }
 
         val coreCount = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
         val sliceHeight = (height + coreCount - 1) / coreCount

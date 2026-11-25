@@ -1491,6 +1491,10 @@ fun CameraScreen(
                             isFocusing = state.isFocusing,
                             focusSuccess = state.focusSuccess,
                             meteringMode = state.effectiveMeteringMode,
+                            // Auto HDR plans its bracket from this histogram: sample the raw scene, not the styled look.
+                            meteringFromSceneFrame = state.autoHdrEnabled &&
+                                state.captureMode == CaptureMode.PHOTO &&
+                                !state.useRaw,
                             onSurfaceTextureReady = { surfaceTexture ->
                                 previewSurfaceTexture = surfaceTexture
                             },

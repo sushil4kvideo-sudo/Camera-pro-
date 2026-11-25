@@ -69,6 +69,7 @@ fun CameraPreviewGL(
     isFocusing: Boolean,
     focusSuccess: Boolean?,
     meteringMode: MeteringMode = MeteringMode.SYSTEM_DEFAULT,
+    meteringFromSceneFrame: Boolean = false,
     onSurfaceTextureReady: (SurfaceTexture) -> Unit,
     onSurfaceDestroyed: (SurfaceTexture?) -> Unit,
     onTap: (Float, Float, Int, Int) -> Unit,
@@ -322,6 +323,7 @@ fun CameraPreviewGL(
                             )
                         })
                         glSurfaceView.setMeteringMode(meteringMode)
+                        glSurfaceView.setMeteringFromSceneFrame(meteringFromSceneFrame)
                         glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
                         glSurfaceView.setAutoFocus(isAutoFocus)
