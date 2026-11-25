@@ -354,6 +354,8 @@ fun CameraScreen(
     var captureAnimationSnapshot by remember { mutableStateOf<CaptureAnimationSnapshot?>(null) }
     val zoomStopAnimationProgress = remember { Animatable(0f) }
     var zoomStopAnimationJob by remember { mutableStateOf<Job?>(null) }
+    var normalVideoUltraWidePreviewVisible by remember { mutableStateOf(false) }
+    var normalVideoUltraWidePreviewScaleTarget by remember { mutableFloatStateOf(Float.NaN) }
     var previewTransitionActive by remember { mutableStateOf(false) }
     var previewTransitionRevealing by remember { mutableStateOf(false) }
     var previewTransitionToken by remember { mutableIntStateOf(0) }
@@ -670,6 +672,15 @@ fun CameraScreen(
         }
     }
 
+    LaunchedEffect(normalVideoUltraWideInstantSwitchActive, state.captureMode) {
+        if (!normalVideoUltraWideInstantSwitchActive ||
+            (state.captureMode != CaptureMode.VIDEO && state.captureMode != CaptureMode.PHOTO)
+        ) {
+            normalVideoUltraWidePreviewVisible = false
+            normalVideoUltraWidePreviewScaleTarget = Float.NaN
+        }
+    }
+
     suspend fun runZoomStopAnimation(startZoom: Float, targetZoom: Float) {
         if (!startZoom.isFinite() || startZoom <= 0f ||
             !targetZoom.isFinite() || targetZoom <= 0f
@@ -713,6 +724,97 @@ fun CameraScreen(
             targetCamera.cameraId != currentCamera?.cameraId
 
         zoomStopAnimationJob?.cancel()
+
+        val currentIntrinsic = currentCamera?.intrinsicZoomRatio
+        val targetIntrinsic = targetCamera?.intrinsicZoomRatio
+        val currentIsUltraWide = currentIntrinsic?.let { it.isFinite() && it in 0.2f..0.85f } == true
+        val currentIsMain = currentIntrinsic?.let { it.isFinite() && abs(it - 1f) <= 0.15f } == true
+        val targetIsUltraWide = targetIntrinsic?.let { it.isFinite() && it in 0.2f..0.85f } == true
+        val targetIsMain = targetIntrinsic?.let { it.isFinite() && abs(it - 1f) <= 0.15f } == true
+        val normalInstantPairHandoff = normalVideoUltraWideInstantSwitchActive &&
+            !spatialVideoEnabled &&
+            (state.captureMode == CaptureMode.VIDEO || state.captureMode == CaptureMode.PHOTO) &&
+            shouldSwitchLens &&
+            targetCamera != null &&
+            viewModel.canSwitchLensWithoutReopen(targetCamera.cameraId)
+        val ultraWideIntrinsic = state.availableCameras.asSequence()
+            .filter {
+                it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                    it.intrinsicZoomRatio.isFinite() &&
+                    it.intrinsicZoomRatio in 0.2f..0.85f
+            }
+            .minByOrNull {
+                abs(it.intrinsicZoomRatio - NormalVideoUltraWideHandoffZoomRatio)
+            }
+            ?.intrinsicZoomRatio
+
+        // Main -> ultra-wide: promote the already-running wide preview and animate its
+        // scale. No alpha cross-fade is used, so the two live camera images never blend.
+        if (normalInstantPairHandoff && currentIsMain && targetIsUltraWide && targetCamera != null &&
+            shouldUseNormalVideoUltraWideHandoffAnimation(
+                currentLensIntrinsicZoomRatio = currentIntrinsic,
+                targetLensIntrinsicZoomRatio = targetIntrinsic,
+                targetZoomRatio = targetZoom,
+            )
+        ) {
+            normalVideoUltraWidePreviewVisible = true
+            normalVideoUltraWidePreviewScaleTarget =
+                normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, targetZoom)
+            viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, targetZoom)
+            return
+        }
+
+        // Ultra-wide -> main at 1x keeps the wide frame opaque while its field of view
+        // scales to 1x, then reveals the primary preview. This preserves the working
+        // 400 ms movement without the old overlapping fade.
+        if (normalInstantPairHandoff && currentIsUltraWide && targetIsMain && targetCamera != null &&
+            targetZoom <= 1.05f &&
+            shouldUseNormalVideoUltraWideHandoffAnimation(
+                currentLensIntrinsicZoomRatio = currentIntrinsic,
+                targetLensIntrinsicZoomRatio = targetIntrinsic,
+                targetZoomRatio = targetZoom,
+            )
+        ) {
+            normalVideoUltraWidePreviewVisible = true
+            normalVideoUltraWidePreviewScaleTarget =
+                normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, targetZoom)
+            viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, targetZoom)
+            zoomStopAnimationJob = scope.launch {
+                delay(ZoomStopAnimationDurationMillis.toLong())
+                val latestCamera = viewModel.state.value.getCurrentCameraInfo()
+                val latestIsUltraWide = latestCamera?.intrinsicZoomRatio
+                    ?.let { it.isFinite() && it in 0.2f..0.85f } == true
+                if (!latestIsUltraWide) {
+                    normalVideoUltraWidePreviewVisible = false
+                    normalVideoUltraWidePreviewScaleTarget = Float.NaN
+                }
+            }
+            return
+        }
+
+        // Ultra-wide -> main 2x/3x: keep the same opaque wide frame through the entire
+        // 400 ms logarithmic zoom. Its scale reaches the exact target FOV before switching
+        // the selected camera, preventing the visible stop at the 1x boundary.
+        if (normalInstantPairHandoff && currentIsUltraWide && targetIsMain &&
+            targetCamera != null &&
+            shouldUseNormalVideoUltraWideExtendedZoomHandoff(
+                currentLensIntrinsicZoomRatio = currentIntrinsic,
+                targetLensIntrinsicZoomRatio = targetIntrinsic,
+                targetZoomRatio = targetZoom,
+            )
+        ) {
+            normalVideoUltraWidePreviewVisible = true
+            normalVideoUltraWidePreviewScaleTarget =
+                normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsic, targetZoom)
+            zoomStopAnimationJob = scope.launch {
+                runZoomStopAnimation(startZoom, targetZoom)
+                viewModel.switchToLensAndSetZoomRatio(targetCamera.cameraId, targetZoom)
+                delay(32L)
+                normalVideoUltraWidePreviewVisible = false
+                normalVideoUltraWidePreviewScaleTarget = Float.NaN
+            }
+            return
+        }
 
         // The normal-video instant-switch path has both sensors streaming already.
         // Swap the selected source immediately and animate only the visible standby
@@ -1600,7 +1702,7 @@ fun CameraScreen(
 
 
                     if (
-                        state.captureMode == CaptureMode.VIDEO &&
+                        (state.captureMode == CaptureMode.VIDEO || state.captureMode == CaptureMode.PHOTO) &&
                         (spatialVideoEnabled || normalVideoUltraWideInstantSwitchActive)
                     ) {
                         val specialPreviewShape = RoundedCornerShape(12.dp)
@@ -1615,7 +1717,7 @@ fun CameraScreen(
                         val showUltraWideFullScreen = isSpatialVideoUltraWideSelected
                         val normalVideoUltraWideHandoffPreviewActive =
                             normalVideoUltraWideInstantSwitchActive && !spatialVideoEnabled
-                        val normalVideoUltraWidePreviewScaleTarget = remember(state.availableCameras) {
+                        val normalVideoUltraWidePreviewScaleDefault = remember(state.availableCameras) {
                             val ultraWideIntrinsicZoom = state.availableCameras.asSequence()
                                 .filter {
                                     it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
@@ -1628,24 +1730,14 @@ fun CameraScreen(
                                 ?.intrinsicZoomRatio
                             normalVideoUltraWideHandoffPreviewScale(ultraWideIntrinsicZoom)
                         }
-                        val normalVideoUltraWidePreviewAlpha by animateFloatAsState(
-                            targetValue = if (
-                                normalVideoUltraWideHandoffPreviewActive && isSpatialVideoUltraWideSelected
-                            ) 1f else 0f,
-                            animationSpec = if (normalVideoUltraWideHandoffPreviewActive) {
-                                tween(
-                                    durationMillis = ZoomStopAnimationDurationMillis,
-                                    easing = ZoomStopAnimationEasing
-                                )
-                            } else {
-                                snap()
-                            },
-                            label = "normalVideoUltraWidePreviewAlpha"
-                        )
+                        val normalVideoUltraWidePreviewAlpha =
+                            if (normalVideoUltraWideHandoffPreviewActive &&
+                                normalVideoUltraWidePreviewVisible
+                            ) 1f else 0f
                         val normalVideoUltraWidePreviewScale by animateFloatAsState(
-                            targetValue = if (
-                                normalVideoUltraWideHandoffPreviewActive && isSpatialVideoUltraWideSelected
-                            ) 1f else normalVideoUltraWidePreviewScaleTarget,
+                            targetValue = normalVideoUltraWidePreviewScaleTarget
+                                .takeIf { it.isFinite() && it > 0f }
+                                ?: normalVideoUltraWidePreviewScaleDefault,
                             animationSpec = if (normalVideoUltraWideHandoffPreviewActive) {
                                 tween(
                                     durationMillis = ZoomStopAnimationDurationMillis,
