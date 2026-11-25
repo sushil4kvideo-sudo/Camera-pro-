@@ -359,6 +359,9 @@ class Camera2Controller(private val context: Context) {
     private var spatialVideoStandbyOpeningCameraId: String? = null
     private var spatialVideoStandbySession: CameraCaptureSession? = null
     private var spatialVideoStandbyRepeatingRequest: CaptureRequest? = null
+    private var spatialVideoStandbyRequestBuilder: CaptureRequest.Builder? = null
+    private var spatialVideoStandbyEdgeModes: IntArray = intArrayOf()
+    private var spatialVideoStandbyNoiseReductionModes: IntArray = intArrayOf()
     private var spatialVideoPrimarySessionAwaitingStandby = false
     private var spatialVideoStandbySessionGeneration = 0L
     private val specialVideoRecordingTimeline = SpecialVideoRecordingTimeline()
@@ -6927,7 +6930,12 @@ class Camera2Controller(private val context: Context) {
      * @param builder 需要配置的 Builder
      * @param currentState 当前拍摄模式及多帧配置
      */
-    private fun applyImageQualitySettings(builder: CaptureRequest.Builder, currentState: CameraState) {
+    private fun applyImageQualitySettings(
+        builder: CaptureRequest.Builder,
+        currentState: CameraState,
+        supportedEdgeModes: IntArray = availableEdgeModes,
+        supportedNoiseReductionModes: IntArray = availableNoiseReductionModes,
+    ) {
         try {
             val isVideo = currentState.captureMode == CaptureMode.VIDEO
             val selectedEdgeLevel = if (isVideo) videoEdgeLevel else edgeLevel
@@ -6938,7 +6946,7 @@ class Camera2Controller(private val context: Context) {
                 0 -> CaptureRequest.EDGE_MODE_OFF
                 1 -> CaptureRequest.EDGE_MODE_FAST
                 2 -> CaptureRequest.EDGE_MODE_HIGH_QUALITY
-                3 -> if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG)) {
+                3 -> if (supportedEdgeModes.contains(CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG)) {
                     CaptureRequest.EDGE_MODE_ZERO_SHUTTER_LAG
                 } else {
                     CaptureRequest.EDGE_MODE_FAST
@@ -6946,9 +6954,9 @@ class Camera2Controller(private val context: Context) {
 
                 else -> CaptureRequest.EDGE_MODE_FAST
             }
-            if (availableEdgeModes.contains(edgeMode)) {
+            if (supportedEdgeModes.contains(edgeMode)) {
                 builder.set(CaptureRequest.EDGE_MODE, edgeMode)
-            } else if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_FAST)) {
+            } else if (supportedEdgeModes.contains(CaptureRequest.EDGE_MODE_FAST)) {
                 builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
             }
             val effectiveNrLevel = if (
@@ -6960,7 +6968,7 @@ class Camera2Controller(private val context: Context) {
             }
             val noiseReductionMode = when (effectiveNrLevel) {
                 NoiseReductionLevel.OFF -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
-                NoiseReductionLevel.MINIMAL -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL)) {
+                NoiseReductionLevel.MINIMAL -> if (supportedNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL)) {
                     CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL
                 } else {
                     CaptureRequest.NOISE_REDUCTION_MODE_FAST
@@ -6968,7 +6976,7 @@ class Camera2Controller(private val context: Context) {
 
                 NoiseReductionLevel.FAST -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
                 NoiseReductionLevel.HIGH_QUALITY -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
-                NoiseReductionLevel.ZERO_SHUTTER_LAG -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) {
+                NoiseReductionLevel.ZERO_SHUTTER_LAG -> if (supportedNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) {
                     CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG
                 } else {
                     CaptureRequest.NOISE_REDUCTION_MODE_FAST
@@ -6977,9 +6985,9 @@ class Camera2Controller(private val context: Context) {
                 else -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
             }
 
-            if (availableNoiseReductionModes.contains(noiseReductionMode)) {
+            if (supportedNoiseReductionModes.contains(noiseReductionMode)) {
                 builder.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReductionMode)
-            } else if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST)) {
+            } else if (supportedNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST)) {
                 builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
             }
         } catch (e: Exception) {
@@ -7093,6 +7101,37 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(nrLevel = normalizedLevel)
     }
 
+    private fun refreshSpatialVideoStandbyImageQualitySettings() {
+        if (!spatialVideoEnabled) return
+        val state = _state.value
+        if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing ||
+            videoRecorder.isRecording()
+        ) return
+        val builder = spatialVideoStandbyRequestBuilder ?: return
+        val handler = cameraHandler ?: return
+
+        try {
+            applyImageQualitySettings(
+                builder = builder,
+                currentState = state,
+                supportedEdgeModes = spatialVideoStandbyEdgeModes,
+                supportedNoiseReductionModes = spatialVideoStandbyNoiseReductionModes,
+            )
+            val updatedRequest = builder.build()
+            spatialVideoStandbyRepeatingRequest = updatedRequest
+            val session = spatialVideoStandbySession
+            if (session != null && !spatialVideoPrimarySessionAwaitingStandby) {
+                session.setRepeatingRequest(updatedRequest, null, handler)
+            }
+            PLog.d(
+                TAG,
+                "Special Video ultra-wide image quality updated: nr=$videoNrLevel, edge=$videoEdgeLevel"
+            )
+        } catch (error: Exception) {
+            PLog.e(TAG, "Could not update Special Video ultra-wide image quality", error)
+        }
+    }
+
     fun setVideoImageQualitySettings(nrLevel: Int, edgeLevel: Int) {
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
@@ -7112,6 +7151,9 @@ class Camera2Controller(private val context: Context) {
                 applyImageQualitySettings(builder, currentState)
                 updatePreview()
             }
+            // Special Video's 0.5x camera has its own Camera2 session. Apply the same
+            // video NR/sharpness preferences to that sensor without touching normal Video.
+            refreshSpatialVideoStandbyImageQualitySettings()
         }
     }
 
@@ -10361,6 +10403,10 @@ class Camera2Controller(private val context: Context) {
                         if (spatialVideoStandbyCameraDevice === camera) {
                             spatialVideoStandbyCameraDevice = null
                             spatialVideoStandbySession = null
+                            spatialVideoStandbyRepeatingRequest = null
+                            spatialVideoStandbyRequestBuilder = null
+                            spatialVideoStandbyEdgeModes = intArrayOf()
+                            spatialVideoStandbyNoiseReductionModes = intArrayOf()
                         }
                     }
                 },
@@ -10468,6 +10514,9 @@ class Camera2Controller(private val context: Context) {
             val idleSession = spatialVideoStandbySession
             spatialVideoStandbySession = null
             spatialVideoStandbyRepeatingRequest = null
+            spatialVideoStandbyRequestBuilder = null
+            spatialVideoStandbyEdgeModes = intArrayOf()
+            spatialVideoStandbyNoiseReductionModes = intArrayOf()
             runCatching { idleSession?.stopRepeating() }
             runCatching { idleSession?.abortCaptures() }
             runCatching { idleSession?.close() }
@@ -10483,6 +10532,9 @@ class Camera2Controller(private val context: Context) {
         val oldSession = spatialVideoStandbySession
         spatialVideoStandbySession = null
         spatialVideoStandbyRepeatingRequest = null
+        spatialVideoStandbyRequestBuilder = null
+        spatialVideoStandbyEdgeModes = intArrayOf()
+        spatialVideoStandbyNoiseReductionModes = intArrayOf()
         runCatching { oldSession?.stopRepeating() }
         runCatching { oldSession?.abortCaptures() }
         runCatching { oldSession?.close() }
@@ -10491,6 +10543,11 @@ class Camera2Controller(private val context: Context) {
             val characteristics = cameraManager.getCameraCharacteristics(device.id)
             val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
             val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+            val wideEdgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+                ?: intArrayOf()
+            val wideNoiseReductionModes = characteristics.get(
+                CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES
+            ) ?: intArrayOf()
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 outputSurfaces.forEach(::addTarget)
                 set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
@@ -10503,7 +10560,19 @@ class Camera2Controller(private val context: Context) {
                 // Match VCamera's resolveSpecialVideoStandbyCropRatio(...)=1.0:
                 // the separate 0.5x file keeps the native, uncropped sensor field of view.
                 if (activeArray != null) set(CaptureRequest.SCALER_CROP_REGION, activeArray)
+                if (spatialVideoEnabled) {
+                    applyImageQualitySettings(
+                        builder = this,
+                        currentState = _state.value,
+                        supportedEdgeModes = wideEdgeModes,
+                        supportedNoiseReductionModes = wideNoiseReductionModes,
+                    )
+                }
             }
+            spatialVideoStandbyRequestBuilder = request.takeIf { spatialVideoEnabled }
+            spatialVideoStandbyEdgeModes = wideEdgeModes.takeIf { spatialVideoEnabled } ?: intArrayOf()
+            spatialVideoStandbyNoiseReductionModes =
+                wideNoiseReductionModes.takeIf { spatialVideoEnabled } ?: intArrayOf()
             PLog.i(
                 TAG,
                 "Special Video configuring standby session: id=${device.id}, mode=$spatialVideoStreamingMode, " +
@@ -10640,6 +10709,9 @@ class Camera2Controller(private val context: Context) {
         spatialVideoStandbySessionGeneration++
         spatialVideoStandbyOpeningCameraId = null
         spatialVideoStandbyRepeatingRequest = null
+        spatialVideoStandbyRequestBuilder = null
+        spatialVideoStandbyEdgeModes = intArrayOf()
+        spatialVideoStandbyNoiseReductionModes = intArrayOf()
         spatialVideoPrimarySessionAwaitingStandby = false
         val session = spatialVideoStandbySession
         spatialVideoStandbySession = null
