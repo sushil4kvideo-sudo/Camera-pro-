@@ -9189,11 +9189,6 @@ class Camera2Controller(private val context: Context) {
                 livePhotoRecorder.startRecording()
             }
         }
-        if (mode == CaptureMode.PHOTO && normalVideoUltraWideInstantSwitchEnabled) {
-            activateNormalVideoUltraWideInstantSwitch(
-                reopenPrimaryIfNeeded = cameraDeviceLifecycle != CameraDeviceLifecycle.OPENING,
-            )
-        }
     }
 
     fun setVideoResolution(resolution: VideoResolutionPreset) {
