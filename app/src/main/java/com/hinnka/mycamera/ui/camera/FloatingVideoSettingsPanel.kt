@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
@@ -400,7 +401,6 @@ private fun TopOffZoomCropEditor(
     val density = LocalDensity.current
     val currentPanX by rememberUpdatedState(panX.coerceIn(-1f, 1f))
     val currentPanY by rememberUpdatedState(panY.coerceIn(-1f, 1f))
-    val currentFactor by rememberUpdatedState(zoomFactor.coerceIn(1f, 4f))
     val currentOnPanChange by rememberUpdatedState(onPanChange)
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
