@@ -112,6 +112,7 @@ class VideoRecorder(
     private val realtimeFrameLock = Any()
     private val videoCodecLock = Any()
     private val audioCodecLock = Any()
+    private val encodedStatsLock = Any()
 
     @Volatile
     private var isRecording = false
@@ -226,6 +227,9 @@ class VideoRecorder(
     private var statsRenderedFrames: Int = 0
     private var statsRenderTimeTotalMs: Long = 0L
     private var statsRenderTimeMaxMs: Long = 0L
+    private var statsEncodedVideoFrames: Int = 0
+    private var statsEncodedFirstPtsUs: Long = UNSET_TIMESTAMP
+    private var statsEncodedLastPtsUs: Long = UNSET_TIMESTAMP
 
     private var videoDrainJob: Job? = null
     private var audioDrainJob: Job? = null
@@ -386,6 +390,11 @@ class VideoRecorder(
         statsRenderedFrames = 0
         statsRenderTimeTotalMs = 0L
         statsRenderTimeMaxMs = 0L
+        synchronized(encodedStatsLock) {
+            statsEncodedVideoFrames = 0
+            statsEncodedFirstPtsUs = UNSET_TIMESTAMP
+            statsEncodedLastPtsUs = UNSET_TIMESTAMP
+        }
         stopRequested = false
         cameraInputStarted = false
         var rendererInitialized = false
@@ -1578,10 +1587,33 @@ class VideoRecorder(
         } else {
             0f
         }
+        val encodedStats = synchronized(encodedStatsLock) {
+            val snapshot = Triple(
+                statsEncodedVideoFrames,
+                statsEncodedFirstPtsUs,
+                statsEncodedLastPtsUs,
+            )
+            statsEncodedVideoFrames = 0
+            statsEncodedFirstPtsUs = UNSET_TIMESTAMP
+            statsEncodedLastPtsUs = UNSET_TIMESTAMP
+            snapshot
+        }
+        val encodedFps = if (
+            encodedStats.first > 1 &&
+            encodedStats.second != UNSET_TIMESTAMP &&
+            encodedStats.third > encodedStats.second
+        ) {
+            (encodedStats.first - 1) * 1_000_000f /
+                (encodedStats.third - encodedStats.second).toFloat()
+        } else {
+            0f
+        }
         PLog.i(
             TAG,
-            "Video encoder stats: requested=${requestedFps}, incomingFps=${"%.1f".format(incomingFps)}, " +
+            "Video encoder stats: stream=${sharedTimelineStreamName ?: "single"}, " +
+                "requested=${requestedFps}, incomingFps=${"%.1f".format(incomingFps)}, " +
                 "acceptedFps=${"%.1f".format(acceptedFps)}, renderedFps=${"%.1f".format(renderedFps)}, " +
+                "encodedSampleFps=${"%.1f".format(encodedFps)}, encodedFrames=${encodedStats.first}, " +
                 "pendingDrops=$statsReplacedPendingFrames, avgRenderMs=${"%.1f".format(avgRenderMs)}, " +
                 "maxRenderMs=$statsRenderTimeMaxMs"
         )
@@ -1593,6 +1625,16 @@ class VideoRecorder(
         statsRenderedFrames = 0
         statsRenderTimeTotalMs = 0L
         statsRenderTimeMaxMs = 0L
+    }
+
+    private fun recordEncodedVideoFrame(presentationTimeUs: Long) {
+        synchronized(encodedStatsLock) {
+            if (statsEncodedVideoFrames == 0) {
+                statsEncodedFirstPtsUs = presentationTimeUs
+            }
+            statsEncodedLastPtsUs = presentationTimeUs
+            statsEncodedVideoFrames += 1
+        }
     }
 
     private fun startDrains() {
@@ -1675,6 +1717,9 @@ class VideoRecorder(
                     return false
                 }
                 if (outputBuffer != null && bufferInfo.size > 0) {
+                    if (isVideo && bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                        recordEncodedVideoFrame(bufferInfo.presentationTimeUs)
+                    }
                     writeSample(
                         isVideo = isVideo,
                         buffer = outputBuffer,
