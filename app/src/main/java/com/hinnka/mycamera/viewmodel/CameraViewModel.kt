@@ -599,6 +599,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     private val cameraController = Camera2Controller(application)
+    // Keep the regular Video resolution intact while Special Video uses its lens-based default.
+    private var normalVideoResolutionBeforeSpecialVideo: VideoResolutionPreset? = null
     // 内容仓库（单例，与 GalleryViewModel 共享）
     private val contentRepository = ContentRepository.getInstance(application)
     private val presetPackageManager = PresetPackageManager(application, contentRepository)
@@ -3588,7 +3590,40 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun isSpatialVideoSupported(): Boolean = cameraController.isSpatialVideoSupported()
 
-    fun setSpatialVideoEnabled(enabled: Boolean) = cameraController.setSpatialVideoEnabled(enabled)
+    fun setSpatialVideoEnabled(enabled: Boolean) {
+        val canEnterSpecialVideo = enabled &&
+            !spatialVideoEnabled.value &&
+            state.value.captureMode == CaptureMode.VIDEO &&
+            !state.value.videoRecordingState.isRecording &&
+            !state.value.videoRecordingState.isProcessing &&
+            isSpatialVideoSupported()
+
+        if (canEnterSpecialVideo) {
+            normalVideoResolutionBeforeSpecialVideo = state.value.videoConfig.resolution
+            applySpecialVideoDefaultResolution(spatialVideoVirtualTelephotoEnabled.value)
+        } else if (
+            !enabled &&
+            spatialVideoEnabled.value &&
+            !state.value.videoRecordingState.isRecording &&
+            !state.value.videoRecordingState.isProcessing
+        ) {
+            normalVideoResolutionBeforeSpecialVideo?.let(cameraController::setVideoResolution)
+            normalVideoResolutionBeforeSpecialVideo = null
+        }
+
+        cameraController.setSpatialVideoEnabled(enabled)
+    }
+
+    private fun applySpecialVideoDefaultResolution(virtualTelephotoEnabled: Boolean): Boolean {
+        val defaultResolution = if (virtualTelephotoEnabled) {
+            VideoResolutionPreset.HD_720P
+        } else {
+            VideoResolutionPreset.FHD_1080P
+        }
+        if (state.value.videoConfig.resolution == defaultResolution) return false
+        cameraController.setVideoResolution(defaultResolution)
+        return true
+    }
 
     fun setNormalVideoUltraWideInstantSwitchEnabled(enabled: Boolean) {
         cameraController.setNormalVideoUltraWideInstantSwitchEnabled(enabled)
@@ -3600,8 +3635,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) =
         cameraController.setSpatialVideoShowUltraWidePreview(enabled)
 
-    fun setSpatialVideoVirtualTelephotoEnabled(enabled: Boolean) =
+    fun setSpatialVideoVirtualTelephotoEnabled(enabled: Boolean) {
         cameraController.setSpatialVideoVirtualTelephotoEnabled(enabled)
+        if (spatialVideoEnabled.value && applySpecialVideoDefaultResolution(enabled)) {
+            // Apply the new recording size to the active Special Video camera session.
+            reopenCamera()
+        }
+    }
 
     fun setSpatialVideoPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) =
         cameraController.setSpatialVideoPreviewSurfaceTexture(surfaceTexture)
@@ -4288,12 +4328,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setVideoResolution(resolution)
         val resolvedConfig = state.value.videoConfig
         reopenCamera()
-        viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationConfig(
-                mode = resolvedConfig.stabilizationMode,
-                resolution = resolvedConfig.resolution,
-                fps = resolvedConfig.fps,
-            )
+        if (!spatialVideoEnabled.value) {
+            viewModelScope.launch {
+                userPreferencesRepository.saveVideoStabilizationConfig(
+                    mode = resolvedConfig.stabilizationMode,
+                    resolution = resolvedConfig.resolution,
+                    fps = resolvedConfig.fps,
+                )
+            }
         }
     }
 
@@ -4304,7 +4346,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveVideoStabilizationConfig(
                 mode = resolvedConfig.stabilizationMode,
-                resolution = resolvedConfig.resolution,
+                resolution = videoResolutionForPreferenceSave(resolvedConfig.resolution),
                 fps = resolvedConfig.fps,
             )
         }
@@ -4335,9 +4377,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveVideoStabilizationConfig(
                 mode = resolvedConfig.stabilizationMode,
-                resolution = resolvedConfig.resolution,
+                resolution = videoResolutionForPreferenceSave(resolvedConfig.resolution),
                 fps = resolvedConfig.fps,
             )
+        }
+    }
+
+    private fun videoResolutionForPreferenceSave(currentResolution: VideoResolutionPreset): VideoResolutionPreset {
+        return if (spatialVideoEnabled.value) {
+            normalVideoResolutionBeforeSpecialVideo ?: currentResolution
+        } else {
+            currentResolution
         }
     }
 
