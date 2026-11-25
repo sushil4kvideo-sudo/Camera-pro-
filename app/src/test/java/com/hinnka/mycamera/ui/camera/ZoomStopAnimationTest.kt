@@ -70,6 +70,41 @@ class ZoomStopAnimationTest {
             normalVideoUltraWideHandoffPreviewScale(0.5f),
             0.0001f,
         )
+        assertEquals(
+            2f / 0.6f,
+            normalVideoUltraWideHandoffPreviewScale(0.6f, 2f),
+            0.0001f,
+        )
+        assertEquals(
+            5f,
+            normalVideoUltraWideHandoffPreviewScale(0.6f, 3f),
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun ultraWideToMainTwoAndThreeXUseContinuousHandoff() {
+        assertTrue(
+            shouldUseNormalVideoUltraWideExtendedZoomHandoff(
+                currentLensIntrinsicZoomRatio = 0.6f,
+                targetLensIntrinsicZoomRatio = 1f,
+                targetZoomRatio = 2f,
+            )
+        )
+        assertTrue(
+            shouldUseNormalVideoUltraWideExtendedZoomHandoff(
+                currentLensIntrinsicZoomRatio = 0.6f,
+                targetLensIntrinsicZoomRatio = 1f,
+                targetZoomRatio = 3f,
+            )
+        )
+        assertFalse(
+            shouldUseNormalVideoUltraWideExtendedZoomHandoff(
+                currentLensIntrinsicZoomRatio = 1f,
+                targetLensIntrinsicZoomRatio = 0.6f,
+                targetZoomRatio = 2f,
+            )
+        )
     }
 
     @Test
