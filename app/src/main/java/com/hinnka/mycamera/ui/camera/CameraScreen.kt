@@ -1922,7 +1922,7 @@ fun CameraScreen(
                                 topOffZoomEnabled &&
                                 topOffZoomAvailable
                         val ultraWideTopOffCropScale = if (applyTopOffCropToUltraWideTexture) {
-                            topOffZoomFactor.coerceIn(1f, 4f)
+                            topOffZoomFactor.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
                         } else {
                             1f
                         }
