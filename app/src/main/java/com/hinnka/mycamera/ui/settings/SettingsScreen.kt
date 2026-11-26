@@ -161,6 +161,7 @@ import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.DepthModelDownloadDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
+import com.hinnka.mycamera.ui.settings.TopOffPanPresetSettings
 
 import com.hinnka.mycamera.ui.components.RawDngMetadataCorrectionSettings
 import com.hinnka.mycamera.ui.components.rawDcpLensOptions
@@ -1913,6 +1914,18 @@ fun SettingsScreen(
                                     null -> Unit
                                 }
                             }
+                        )
+                    }
+
+                    SettingsSection(
+                        title = "Top-Off pan controls",
+                    ) {
+                        val activeCameraInfo = state.getCurrentCameraInfo()
+                        TopOffPanPresetSettings(
+                            viewModel = viewModel,
+                            activeArrayWidth = activeCameraInfo?.activeArraySize?.width() ?: 0,
+                            activeArrayHeight = activeCameraInfo?.activeArraySize?.height() ?: 0,
+                            sensorOrientationDegrees = activeCameraInfo?.sensorOrientation ?: 0,
                         )
                     }
                 }

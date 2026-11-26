@@ -3,6 +3,7 @@ package com.hinnka.mycamera.ui.camera
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
@@ -40,6 +41,8 @@ import kotlin.math.roundToInt
 internal fun ZoomPanJoystick(
     modifier: Modifier = Modifier,
     onPanBy: (Float, Float) -> Unit,
+    speedMultiplier: Float = 1f,
+    onLongPress: (() -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     val maxTravelPx = with(density) { 19.dp.toPx() }
@@ -49,6 +52,8 @@ internal fun ZoomPanJoystick(
     var knobOffset by remember { mutableStateOf(Offset.Zero) }
     var isDragging by remember { mutableStateOf(false) }
     val currentOnPanBy by rememberUpdatedState(onPanBy)
+    val currentSpeedMultiplier by rememberUpdatedState(speedMultiplier.coerceIn(0.25f, 4f))
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
 
     // Keep panning while the thumb is held off-centre, rather than only while the finger moves.
     LaunchedEffect(isDragging) {
@@ -56,7 +61,7 @@ internal fun ZoomPanJoystick(
             val x = (knobOffset.x / maxTravelPx).coerceIn(-1f, 1f)
             val y = (knobOffset.y / maxTravelPx).coerceIn(-1f, 1f)
             if (abs(x) > 0.04f || abs(y) > 0.04f) {
-                currentOnPanBy(x * 0.006f, y * 0.006f)
+                currentOnPanBy(x * 0.006f * currentSpeedMultiplier, y * 0.006f * currentSpeedMultiplier)
             }
             delay(16L)
         }
@@ -122,6 +127,11 @@ internal fun ZoomPanJoystick(
                 }
             }
             .border(1.dp, Color.White.copy(alpha = 0.46f), padShape)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = { currentOnLongPress?.invoke() },
+                )
+            }
             .pointerInput(maxTravelPx) {
                 fun clampOffset(offset: Offset): Offset {
                     val distance = hypot(offset.x, offset.y)

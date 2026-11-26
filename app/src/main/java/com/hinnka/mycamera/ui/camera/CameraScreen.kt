@@ -86,6 +86,8 @@ import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
+import com.hinnka.mycamera.camera.TopOffPanPreset
+import com.hinnka.mycamera.camera.TopOffPanWaypoint
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.DevelopAnimationStyle
 import com.hinnka.mycamera.model.CameraPreset
@@ -2609,6 +2611,7 @@ fun CameraScreen(
                     onGalleryClick()
                 },
                 showTrackingPad = canShowZoomJoystick,
+                showTopOffPanPresetControls = topOffZoomJoystickSupported,
                 onTrackingPadPan = if (topOffZoomJoystickSupported) {
                     { deltaX, deltaY ->
                         val nextPanX = (joystickTopOffPanX + deltaX).coerceIn(-1f, 1f)
@@ -3314,6 +3317,7 @@ private fun Controls(
     onCaptureTap: () -> Unit,
     onGalleryClick: () -> Unit,
     showTrackingPad: Boolean,
+    showTopOffPanPresetControls: Boolean,
     onTrackingPadPan: (Float, Float) -> Unit,
     sideControlInset: Dp?,
     modifier: Modifier = Modifier.fillMaxSize()
@@ -3323,6 +3327,61 @@ private fun Controls(
     val captureButtonImagePath by viewModel.captureButtonImagePath.collectAsState()
     val captureProcessingState by viewModel.captureProcessingState.collectAsState()
     val capturedThumbnail by viewModel.capturedThumbnail.collectAsState()
+    val topOffJoystickSpeed by viewModel.topOffJoystickSpeed.collectAsState()
+    val topOffShowLatency by viewModel.topOffShowLatency.collectAsState()
+    val topOffPanLatencyMs by viewModel.topOffPanLatencyMs.collectAsState()
+    val customTopOffPanPresets by viewModel.topOffPanPresets.collectAsState()
+    val availableTopOffPanPresets = remember(customTopOffPanPresets) {
+        TopOffPanPreset.builtInPresets() + customTopOffPanPresets
+    }
+    var selectedTopOffPanPresetId by rememberSaveable {
+        mutableStateOf(TopOffPanPreset.BUILTIN_LEFT_RIGHT_ID)
+    }
+    var showTopOffPanPresetPicker by remember { mutableStateOf(false) }
+    var runningTopOffPanPreset by remember { mutableStateOf<TopOffPanPreset?>(null) }
+    val selectedTopOffPanPreset = availableTopOffPanPresets.firstOrNull {
+        it.id == selectedTopOffPanPresetId
+    } ?: availableTopOffPanPresets.firstOrNull()
+
+    LaunchedEffect(runningTopOffPanPreset) {
+        val preset = runningTopOffPanPreset ?: return@LaunchedEffect
+        val points = preset.points
+        if (points.size < 2) {
+            runningTopOffPanPreset = null
+            return@LaunchedEffect
+        }
+
+        val speed = topOffJoystickSpeed.coerceIn(0.25f, 4f)
+        val durationNs = (preset.segmentDurationMs.toDouble() / speed * 1_000_000.0)
+            .toLong()
+            .coerceAtLeast(0L)
+        val first = points.first()
+        viewModel.setTopOffZoomPresetPoint(first.zoomRatio, first.panX, first.panY)
+
+        for (pointIndex in 1 until points.size) {
+            val start = points[pointIndex - 1]
+            val end = points[pointIndex]
+            if (durationNs == 0L) {
+                viewModel.setTopOffZoomPresetPoint(end.zoomRatio, end.panX, end.panY)
+                continue
+            }
+
+            val segmentStartNs = withFrameNanos { it }
+            while (true) {
+                val frameNs = withFrameNanos { it }
+                val linearProgress = ((frameNs - segmentStartNs).toDouble() / durationNs)
+                    .toFloat()
+                    .coerceIn(0f, 1f)
+                val easedProgress = linearProgress * linearProgress * (3f - 2f * linearProgress)
+                val zoom = start.zoomRatio + (end.zoomRatio - start.zoomRatio) * easedProgress
+                val panX = start.panX + (end.panX - start.panX) * easedProgress
+                val panY = start.panY + (end.panY - start.panY) * easedProgress
+                viewModel.setTopOffZoomPresetPoint(zoom, panX, panY)
+                if (linearProgress >= 1f) break
+            }
+        }
+        runningTopOffPanPreset = null
+    }
 
     Box(
         modifier = modifier,
@@ -3377,12 +3436,137 @@ private fun Controls(
                 )
 
                 if (showTrackingPad) {
-                    ZoomPanJoystick(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = 24.dp),
-                        onPanBy = onTrackingPadPan,
-                    )
+                    if (showTopOffPanPresetControls) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .padding(end = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    IconButton(
+                                        onClick = {
+                                            if (runningTopOffPanPreset != null) {
+                                                runningTopOffPanPreset = null
+                                            } else {
+                                                runningTopOffPanPreset = selectedTopOffPanPreset
+                                            }
+                                        },
+                                        enabled = selectedTopOffPanPreset != null &&
+                                            !state.videoRecordingState.isRecording &&
+                                            !state.videoRecordingState.isProcessing,
+                                        modifier = Modifier
+                                            .size(42.dp)
+                                            .background(
+                                                Color.White.copy(alpha = 0.16f),
+                                                CircleShape,
+                                            ),
+                                    ) {
+                                        Icon(
+                                            imageVector = if (runningTopOffPanPreset != null) {
+                                                Icons.Default.Close
+                                            } else {
+                                                Icons.Default.PlayArrow
+                                            },
+                                            contentDescription = if (runningTopOffPanPreset != null) {
+                                                "Stop pan preset"
+                                            } else {
+                                                "Run pan preset"
+                                            },
+                                            tint = Color.White,
+                                            modifier = Modifier.size(25.dp),
+                                        )
+                                    }
+                                    Text(
+                                        text = if (runningTopOffPanPreset != null) "Stop" else "Run",
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                }
+                                ZoomPanJoystick(
+                                    modifier = Modifier,
+                                    onPanBy = onTrackingPadPan,
+                                    speedMultiplier = topOffJoystickSpeed,
+                                    onLongPress = { showTopOffPanPresetPicker = true },
+                                )
+                            }
+                            if (topOffShowLatency) {
+                                Text(
+                                    text = "Latency ${String.format("%.1f", topOffPanLatencyMs)} ms",
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
+                            selectedTopOffPanPreset?.let { preset ->
+                                Text(
+                                    text = preset.name,
+                                    color = Color.White.copy(alpha = 0.72f),
+                                    fontSize = 9.sp,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                        if (showTopOffPanPresetPicker) {
+                            AlertDialog(
+                                onDismissRequest = { showTopOffPanPresetPicker = false },
+                                title = { Text("Select pan preset") },
+                                text = {
+                                    Column(
+                                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                                    ) {
+                                        availableTopOffPanPresets.forEach { preset ->
+                                            TextButton(
+                                                onClick = {
+                                                    selectedTopOffPanPresetId = preset.id
+                                                    showTopOffPanPresetPicker = false
+                                                    if (runningTopOffPanPreset != null) {
+                                                        runningTopOffPanPreset = preset
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalAlignment = Alignment.Start,
+                                                ) {
+                                                    Text(
+                                                        text = if (preset.id == selectedTopOffPanPresetId) {
+                                                            "✓ ${preset.name}"
+                                                        } else {
+                                                            preset.name
+                                                        },
+                                                    )
+                                                    Text(
+                                                        text = "${preset.points.size} points · ${preset.segmentDurationMs} ms per segment",
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = { showTopOffPanPresetPicker = false }) {
+                                        Text("Done")
+                                    }
+                                },
+                            )
+                        }
+                    } else {
+                        ZoomPanJoystick(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .padding(end = 24.dp),
+                            onPanBy = onTrackingPadPan,
+                        )
+                    }
                 }
 
                 if (state.videoRecordingState.isRecording) {

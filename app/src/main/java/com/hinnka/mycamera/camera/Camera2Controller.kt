@@ -397,6 +397,20 @@ class Camera2Controller(private val context: Context) {
         specialVideoPreferences.getFloat("top_off_zoom_pan_y", 0f).coerceIn(-1f, 1f)
     )
     val topOffZoomPanYFlow: StateFlow<Float> = _topOffZoomPanY.asStateFlow()
+    private val _topOffJoystickSpeed = MutableStateFlow(
+        specialVideoPreferences.getFloat("top_off_joystick_speed", 1f).coerceIn(0.25f, 4f)
+    )
+    val topOffJoystickSpeedFlow: StateFlow<Float> = _topOffJoystickSpeed.asStateFlow()
+    private val _topOffShowLatency = MutableStateFlow(
+        specialVideoPreferences.getBoolean("top_off_show_latency", false)
+    )
+    val topOffShowLatencyFlow: StateFlow<Boolean> = _topOffShowLatency.asStateFlow()
+    private val _topOffPanLatencyMs = MutableStateFlow(0f)
+    val topOffPanLatencyMsFlow: StateFlow<Float> = _topOffPanLatencyMs.asStateFlow()
+    private val _topOffPanPresets = MutableStateFlow(
+        TopOffPanPresetCodec.decode(specialVideoPreferences.getString("top_off_pan_presets", null))
+    )
+    val topOffPanPresetsFlow: StateFlow<List<TopOffPanPreset>> = _topOffPanPresets.asStateFlow()
     private val _spatialVideoEnabled = MutableStateFlow(false)
     val spatialVideoEnabledFlow: StateFlow<Boolean> = _spatialVideoEnabled.asStateFlow()
     private val _spatialVideoShowUltraWidePreview = MutableStateFlow(
@@ -10548,11 +10562,16 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setTopOffZoomPan(panX: Float, panY: Float) {
+        val requestedAtNs = SystemClock.elapsedRealtimeNanos()
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
-            handler.post { setTopOffZoomPan(panX, panY) }
+            handler.post { applyTopOffZoomPan(panX, panY, requestedAtNs) }
             return
         }
+        applyTopOffZoomPan(panX, panY, requestedAtNs)
+    }
+
+    private fun applyTopOffZoomPan(panX: Float, panY: Float, requestedAtNs: Long) {
         if (
             videoRecorder.isRecording() ||
             spatialVideoRecorder.isRecording() ||
@@ -10582,6 +10601,88 @@ class Camera2Controller(private val context: Context) {
             )
         }
         reapplyTopOffZoomRequest()
+        _topOffPanLatencyMs.value =
+            ((SystemClock.elapsedRealtimeNanos() - requestedAtNs).coerceAtLeast(0L) / 1_000_000f)
+    }
+
+    /** Apply one animated preset waypoint using the existing Top-Off crop pipeline. */
+    fun setTopOffZoomPresetPoint(zoomRatio: Float, panX: Float, panY: Float) {
+        val requestedAtNs = SystemClock.elapsedRealtimeNanos()
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { applyTopOffZoomPresetPoint(zoomRatio, panX, panY, requestedAtNs) }
+            return
+        }
+        applyTopOffZoomPresetPoint(zoomRatio, panX, panY, requestedAtNs)
+    }
+
+    private fun applyTopOffZoomPresetPoint(
+        zoomRatio: Float,
+        panX: Float,
+        panY: Float,
+        requestedAtNs: Long,
+    ) {
+        if (!_topOffZoomEnabled.value || !isTopOffZoomAvailable()) return
+        if (
+            videoRecorder.isRecording() ||
+            spatialVideoRecorder.isRecording() ||
+            spatialVideoTelephotoRecorder.isRecording() ||
+            _state.value.videoRecordingState.isRecording ||
+            _state.value.videoRecordingState.isProcessing
+        ) {
+            PLog.w("TopOffZoom", "PRESET_FRAME rejected: recording/processing is active")
+            return
+        }
+
+        val baseZoom = _state.value.zoomRatio.coerceAtLeast(1f)
+        val requestedZoom = zoomRatio.takeIf { it.isFinite() }?.coerceAtLeast(baseZoom)
+            ?: (baseZoom * 2f)
+        val safeFactor = (requestedZoom / baseZoom).coerceIn(1f, 4f)
+        _topOffZoomFactor.value = safeFactor
+        specialVideoPreferences.edit().putFloat("top_off_zoom_factor", safeFactor).apply()
+        updateTopOffZoomLockedRatio(baseZoom * safeFactor, "pan-preset")
+
+        val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        _topOffZoomPanX.value = safePanX
+        _topOffZoomPanY.value = safePanY
+        specialVideoPreferences.edit()
+            .putFloat("top_off_zoom_pan_x", safePanX)
+            .putFloat("top_off_zoom_pan_y", safePanY)
+            .apply()
+        reapplyTopOffZoomRequest()
+        _topOffPanLatencyMs.value =
+            ((SystemClock.elapsedRealtimeNanos() - requestedAtNs).coerceAtLeast(0L) / 1_000_000f)
+    }
+
+    fun setTopOffJoystickSpeed(speed: Float) {
+        val safeSpeed = speed.takeIf { it.isFinite() }?.coerceIn(0.25f, 4f) ?: 1f
+        _topOffJoystickSpeed.value = safeSpeed
+        specialVideoPreferences.edit().putFloat("top_off_joystick_speed", safeSpeed).apply()
+    }
+
+    fun setTopOffShowLatency(show: Boolean) {
+        _topOffShowLatency.value = show
+        specialVideoPreferences.edit().putBoolean("top_off_show_latency", show).apply()
+    }
+
+    fun saveTopOffPanPreset(preset: TopOffPanPreset) {
+        val normalized = preset.normalized()
+        if (normalized.points.size < 2) return
+        val updated = (_topOffPanPresets.value.filterNot { it.id == normalized.id } + normalized)
+            .takeLast(64)
+        _topOffPanPresets.value = updated
+        specialVideoPreferences.edit()
+            .putString("top_off_pan_presets", TopOffPanPresetCodec.encode(updated))
+            .apply()
+    }
+
+    fun deleteTopOffPanPreset(id: String) {
+        val updated = _topOffPanPresets.value.filterNot { it.id == id }
+        _topOffPanPresets.value = updated
+        specialVideoPreferences.edit()
+            .putString("top_off_pan_presets", TopOffPanPresetCodec.encode(updated))
+            .apply()
     }
 
     private fun reapplyTopOffZoomRequest() {

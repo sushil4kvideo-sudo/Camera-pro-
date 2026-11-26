@@ -3585,6 +3585,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val topOffZoomLockedRatio = cameraController.topOffZoomLockedRatioFlow
     val topOffZoomPanX = cameraController.topOffZoomPanXFlow
     val topOffZoomPanY = cameraController.topOffZoomPanYFlow
+    val topOffJoystickSpeed = cameraController.topOffJoystickSpeedFlow
+    val topOffShowLatency = cameraController.topOffShowLatencyFlow
+    val topOffPanLatencyMs = cameraController.topOffPanLatencyMsFlow
+    val topOffPanPresets = cameraController.topOffPanPresetsFlow
     val normalVideoUltraWideInstantSwitchActive =
         cameraController.normalVideoUltraWideInstantSwitchActiveFlow
     val spatialVideoPreviewStreamSize = cameraController.spatialVideoPreviewStreamSize
@@ -3658,6 +3662,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setTopOffZoomPan(panX: Float, panY: Float) =
         cameraController.setTopOffZoomPan(panX, panY)
+
+    fun setTopOffZoomPresetPoint(zoomRatio: Float, panX: Float, panY: Float) =
+        cameraController.setTopOffZoomPresetPoint(zoomRatio, panX, panY)
+
+    fun setTopOffJoystickSpeed(speed: Float) =
+        cameraController.setTopOffJoystickSpeed(speed)
+
+    fun setTopOffShowLatency(show: Boolean) =
+        cameraController.setTopOffShowLatency(show)
+
+    fun saveTopOffPanPreset(preset: TopOffPanPreset) =
+        cameraController.saveTopOffPanPreset(preset)
+
+    fun deleteTopOffPanPreset(id: String) =
+        cameraController.deleteTopOffPanPreset(id)
 
     fun setSpatialVideoPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) =
         cameraController.setSpatialVideoPreviewSurfaceTexture(surfaceTexture)
