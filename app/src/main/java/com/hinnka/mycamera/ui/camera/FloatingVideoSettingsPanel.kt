@@ -77,8 +77,13 @@ fun FloatingVideoSettingsPanel(
     onFpsSelected: (VideoFpsPreset) -> Unit,
     virtualTelephotoEnabled: Boolean,
     onVirtualTelephotoEnabledChange: (Boolean) -> Unit,
+    topOffZoomAvailable: Boolean,
     topOffZoomEnabled: Boolean,
     topOffZoomFactor: Float,
+    effectiveZoomRatio: Float,
+    baseZoomRatio: Float,
+    sensorAspectRatio: Float,
+    cropAspectRatio: Float,
     topOffZoomPanX: Float,
     topOffZoomPanY: Float,
     onTopOffZoomEnabledChange: (Boolean) -> Unit,
@@ -311,77 +316,96 @@ fun FloatingVideoSettingsPanel(
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("top_off_zoom_row"),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                        if (topOffZoomAvailable) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("top_off_zoom_row"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
-                                Text(
-                                    text = "Top Off Zoom",
-                                    color = VideoSelectorText,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                Text(
-                                    text = "Move the crop window to choose the zoom centre",
-                                    color = VideoSelectorDescription,
-                                    fontSize = 11.5.sp,
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = "Top Off Zoom",
+                                        color = VideoSelectorText,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        text = "Move the sensor crop without changing magnification",
+                                        color = VideoSelectorDescription,
+                                        fontSize = 11.5.sp,
+                                    )
+                                }
+                                Switch(
+                                    checked = topOffZoomEnabled,
+                                    onCheckedChange = onTopOffZoomEnabledChange,
+                                    modifier = Modifier.testTag("top_off_zoom_toggle"),
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = VideoSelectorGold,
+                                        checkedTrackColor = VideoSelectorGold.copy(alpha = 0.34f),
+                                        uncheckedThumbColor = Color.White.copy(alpha = 0.78f),
+                                        uncheckedTrackColor = Color.White.copy(alpha = 0.18f),
+                                    ),
                                 )
                             }
-                            Switch(
-                                checked = topOffZoomEnabled,
-                                onCheckedChange = onTopOffZoomEnabledChange,
-                                modifier = Modifier.testTag("top_off_zoom_toggle"),
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = VideoSelectorGold,
-                                    checkedTrackColor = VideoSelectorGold.copy(alpha = 0.34f),
-                                    uncheckedThumbColor = Color.White.copy(alpha = 0.78f),
-                                    uncheckedTrackColor = Color.White.copy(alpha = 0.18f),
-                                ),
-                            )
-                        }
-                        if (topOffZoomEnabled) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
+                            if (topOffZoomEnabled) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "Zoom value",
+                                        color = VideoSelectorLabel,
+                                        fontSize = 12.5.sp,
+                                    )
+                                    Text(
+                                        text = String.format(java.util.Locale.US, "%.1fx", topOffZoomFactor),
+                                        color = VideoSelectorGold,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                                Slider(
+                                    value = topOffZoomFactor.coerceIn(1f, 4f),
+                                    onValueChange = onTopOffZoomFactorChange,
+                                    valueRange = 1f..4f,
+                                    steps = 5,
+                                    modifier = Modifier.testTag("top_off_zoom_factor_slider"),
+                                )
                                 Text(
-                                    text = "Zoom value",
+                                    text = "Sensor crop position",
                                     color = VideoSelectorLabel,
                                     fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Medium,
                                 )
-                                Text(
-                                    text = String.format(java.util.Locale.US, "%.1fx", topOffZoomFactor),
-                                    color = VideoSelectorGold,
-                                    fontSize = 12.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
+                                if (baseZoomRatio >= 1f) {
+                                    TopOffZoomCropEditor(
+                                        zoomFactor = effectiveZoomRatio,
+                                        panX = topOffZoomPanX,
+                                        panY = topOffZoomPanY,
+                                        sensorAspectRatio = sensorAspectRatio,
+                                        cropAspectRatio = cropAspectRatio,
+                                        onPanChange = onTopOffZoomPanChange,
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Crop positioning is available from 1x and above.",
+                                        color = VideoSelectorDescription,
+                                        fontSize = 11.sp,
+                                    )
+                                }
                             }
-                            Slider(
-                                value = topOffZoomFactor.coerceIn(1f, 4f),
-                                onValueChange = onTopOffZoomFactorChange,
-                                valueRange = 1f..4f,
-                                steps = 5,
-                                modifier = Modifier.testTag("top_off_zoom_factor_slider"),
-                            )
+                        } else {
                             Text(
-                                text = "Crop position",
-                                color = VideoSelectorLabel,
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            TopOffZoomCropEditor(
-                                zoomFactor = topOffZoomFactor,
-                                panX = topOffZoomPanX,
-                                panY = topOffZoomPanY,
-                                onPanChange = onTopOffZoomPanChange,
+                                text = "Top Off Zoom is unavailable while logical multi-camera, Special Video, or Dual Capture is active.",
+                                color = VideoSelectorDescription,
+                                fontSize = 11.5.sp,
+                                modifier = Modifier.testTag("top_off_zoom_unavailable"),
                             )
                         }
                     }
@@ -397,6 +421,8 @@ private fun TopOffZoomCropEditor(
     zoomFactor: Float,
     panX: Float,
     panY: Float,
+    sensorAspectRatio: Float,
+    cropAspectRatio: Float,
     onPanChange: (Float, Float) -> Unit,
 ) {
     val density = LocalDensity.current
@@ -408,19 +434,26 @@ private fun TopOffZoomCropEditor(
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(16f / 9f)
+                .aspectRatio(sensorAspectRatio.coerceIn(0.1f, 1f))
                 .clip(RoundedCornerShape(9.dp))
                 .background(Color(0xFF11151B))
                 .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(9.dp))
                 .testTag("top_off_zoom_crop_frame"),
         ) {
-            val factor = zoomFactor.coerceIn(1f, 4f)
-            val cropWidth = maxWidth / factor
-            val cropHeight = maxHeight / factor
-            val maxTravelX = (maxWidth - cropWidth) / 2f
-            val maxTravelY = (maxHeight - cropHeight) / 2f
-            val cropOffsetX = maxTravelX * (1f + panX.coerceIn(-1f, 1f))
-            val cropOffsetY = maxTravelY * (1f + panY.coerceIn(-1f, 1f))
+            val crop = ZoomCropGeometry.calculate(
+                sourceWidth = maxWidth.value,
+                sourceHeight = maxHeight.value,
+                outputAspectRatio = cropAspectRatio,
+                zoomRatio = zoomFactor,
+                panX = panX,
+                panY = panY,
+            )
+            val cropWidth = maxWidth * crop.width
+            val cropHeight = maxHeight * crop.height
+            val cropOffsetX = maxWidth * crop.left
+            val cropOffsetY = maxHeight * crop.top
+            val maxTravelX = maxWidth * ((1f - crop.width).coerceAtLeast(0f) / 2f)
+            val maxTravelY = maxHeight * ((1f - crop.height).coerceAtLeast(0f) / 2f)
             val latestTravelX = rememberUpdatedState(maxTravelX)
             val latestTravelY = rememberUpdatedState(maxTravelY)
 
@@ -460,7 +493,7 @@ private fun TopOffZoomCropEditor(
             }
         }
         Text(
-            text = "Drag the small box to move the actual sensor crop. Resize it with the zoom slider.",
+            text = "3:4 sensor area · inner box follows the selected video aspect ratio.",
             color = VideoSelectorDescription,
             fontSize = 11.sp,
             textAlign = TextAlign.Start,

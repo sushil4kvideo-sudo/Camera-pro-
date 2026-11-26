@@ -6693,8 +6693,9 @@ class Camera2Controller(private val context: Context) {
         cameraInfo: CameraInfo?,
         displayPanX: Float,
         displayPanY: Float,
+        sensorOrientation: Int = cameraInfo?.sensorOrientation ?: 0,
     ): Pair<Float, Float> {
-        val sensorPan = when (Math.floorMod(cameraInfo?.sensorOrientation ?: 0, 360)) {
+        val sensorPan = when (Math.floorMod(sensorOrientation, 360)) {
             90 -> displayPanY to -displayPanX
             180 -> -displayPanX to -displayPanY
             270 -> -displayPanY to displayPanX
@@ -6740,8 +6741,19 @@ class Camera2Controller(private val context: Context) {
             val zoomMultiplier = if (topOffZoomActive) _topOffZoomFactor.value else 1f
             val zoomRatio = (userZoomRatio * zoomMultiplier).coerceIn(minZoom, maxSupportedZoom)
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)
+                ?: cameraInfo?.sensorOrientation ?: 0
+            val cropAspectRatio = ZoomCropGeometry.sensorCoordinateAspectRatio(
+                state.getPreviewAspectRatio(),
+                sensorOrientation,
+            )
             val topOffPan = if (topOffZoomActive) {
-                resolveTopOffZoomPan(cameraInfo, _topOffZoomPanX.value, _topOffZoomPanY.value)
+                resolveTopOffZoomPan(
+                    cameraInfo,
+                    _topOffZoomPanX.value,
+                    _topOffZoomPanY.value,
+                    sensorOrientation,
+                )
             } else {
                 null
             }
@@ -6760,6 +6772,7 @@ class Camera2Controller(private val context: Context) {
                     !logicalAutoSwitch && state.zoomPanEnabled &&
                         cameraInfo?.supportsFreeformZoomPan == true
                 ),
+                cropAspectRatio = cropAspectRatio,
             )
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply zoom settings", e)
@@ -6785,6 +6798,7 @@ class Camera2Controller(private val context: Context) {
         panX: Float = 0f,
         panY: Float = 0f,
         useFreeformPan: Boolean = false,
+        cropAspectRatio: Float? = null,
     ) {
         // Freeform SCALER_CROP_REGION must not be combined with CONTROL_ZOOM_RATIO != 1.
         // While joystick pan is active, express zoom as a non-centred sensor crop instead.
@@ -6794,7 +6808,13 @@ class Camera2Controller(private val context: Context) {
             }
             builder.set(
                 CaptureRequest.SCALER_CROP_REGION,
-                buildZoomPanCropRegion(activeRect, zoomRatio, panX, panY)
+                buildZoomPanCropRegion(
+                    activeRect,
+                    zoomRatio,
+                    panX,
+                    panY,
+                    cropAspectRatio ?: (activeRect.width().toFloat() / activeRect.height().coerceAtLeast(1)),
+                )
             )
             return
         }
@@ -6817,21 +6837,28 @@ class Camera2Controller(private val context: Context) {
         builder.set(CaptureRequest.SCALER_CROP_REGION, buildCenteredCropRegion(activeRect, zoomRatio))
     }
 
-    private fun buildZoomPanCropRegion(activeRect: Rect, zoomRatio: Float, panX: Float, panY: Float): Rect {
-        val safeZoom = zoomRatio.coerceAtLeast(1f)
-        val cropWidth = (activeRect.width() / safeZoom).roundToInt()
-            .coerceIn(1, activeRect.width())
-        val cropHeight = (activeRect.height() / safeZoom).roundToInt()
-            .coerceIn(1, activeRect.height())
-        val travelX = (activeRect.width() - cropWidth) / 2f
-        val travelY = (activeRect.height() - cropHeight) / 2f
-        val centeredLeft = activeRect.left + (activeRect.width() - cropWidth) / 2f
-        val centeredTop = activeRect.top + (activeRect.height() - cropHeight) / 2f
-        val cropLeft = (centeredLeft + panX.coerceIn(-1f, 1f) * travelX)
-            .roundToInt().coerceIn(activeRect.left, activeRect.right - cropWidth)
-        val cropTop = (centeredTop + panY.coerceIn(-1f, 1f) * travelY)
-            .roundToInt().coerceIn(activeRect.top, activeRect.bottom - cropHeight)
-        return Rect(cropLeft, cropTop, cropLeft + cropWidth, cropTop + cropHeight)
+    private fun buildZoomPanCropRegion(
+        activeRect: Rect,
+        zoomRatio: Float,
+        panX: Float,
+        panY: Float,
+        cropAspectRatio: Float,
+    ): Rect {
+        val geometry = ZoomCropGeometry.calculate(
+            sourceWidth = activeRect.width().toFloat(),
+            sourceHeight = activeRect.height().toFloat(),
+            outputAspectRatio = cropAspectRatio,
+            zoomRatio = zoomRatio,
+            panX = panX,
+            panY = panY,
+        )
+        val cropLeft = activeRect.left + (geometry.left * activeRect.width()).roundToInt()
+        val cropTop = activeRect.top + (geometry.top * activeRect.height()).roundToInt()
+        val cropRight = (activeRect.left + (geometry.right * activeRect.width()).roundToInt())
+            .coerceIn(cropLeft + 1, activeRect.right)
+        val cropBottom = (activeRect.top + (geometry.bottom * activeRect.height()).roundToInt())
+            .coerceIn(cropTop + 1, activeRect.bottom)
+        return Rect(cropLeft, cropTop, cropRight, cropBottom)
     }
 
     private fun shouldUseControlZoomRatio(zoomRatioRange: android.util.Range<Float>?): Boolean {
@@ -8456,7 +8483,22 @@ class Camera2Controller(private val context: Context) {
             val requestZoomRatio = (
                 clampedDeviceZoomRatio * if (topOffZoomActive) _topOffZoomFactor.value else 1f
             ).coerceIn(minZoom, maxSupportedZoom)
-            val topOffPan = if (topOffZoomActive) resolveTopOffZoomPan(selectedCamera, _topOffZoomPanX.value, _topOffZoomPanY.value) else null
+            val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)
+                ?: selectedCamera?.sensorOrientation ?: 0
+            val cropAspectRatio = ZoomCropGeometry.sensorCoordinateAspectRatio(
+                _state.value.getPreviewAspectRatio(),
+                sensorOrientation,
+            )
+            val topOffPan = if (topOffZoomActive) {
+                resolveTopOffZoomPan(
+                    selectedCamera,
+                    _topOffZoomPanX.value,
+                    _topOffZoomPanY.value,
+                    sensorOrientation,
+                )
+            } else {
+                null
+            }
             val intrinsicZoomRatio = selectedCamera?.intrinsicZoomRatio
                 ?.takeIf { it.isFinite() && it > 0f } ?: 1f
             val clampedStateZoomRatio = if (logicalAutoSwitch) {
@@ -8492,6 +8534,7 @@ class Camera2Controller(private val context: Context) {
                         !logicalAutoSwitch && _state.value.zoomPanEnabled &&
                             _state.value.getCurrentCameraInfo()?.supportsFreeformZoomPan == true
                     ),
+                    cropAspectRatio = cropAspectRatio,
                 )
             }
             if (logicalAutoSwitch && previousLogicalZoomRatio > 0.85f &&
@@ -10242,6 +10285,17 @@ class Camera2Controller(private val context: Context) {
         PLog.i(TAG, "Special Video 3.5x virtual telephoto ${if (enabled) "enabled" else "disabled"}")
     }
 
+    fun isTopOffZoomAvailable(): Boolean {
+        val currentState = _state.value
+        if (currentState.captureMode != CaptureMode.VIDEO || spatialVideoEnabled || dualCaptureEnabled) {
+            return false
+        }
+        val cameraInfo = currentState.getCurrentCameraInfo() ?: return false
+        if (shouldUseLogicalMultiCameraZoom(currentState, cameraInfo)) return false
+        val activeArray = cameraInfo.activeArraySize ?: return false
+        return activeArray.width() > 0 && activeArray.height() > 0
+    }
+
     fun setTopOffZoomEnabled(enabled: Boolean) {
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
@@ -10255,6 +10309,7 @@ class Camera2Controller(private val context: Context) {
             _state.value.videoRecordingState.isRecording ||
             _state.value.videoRecordingState.isProcessing
         ) return
+        if (enabled && !isTopOffZoomAvailable()) return
 
         _topOffZoomEnabled.value = enabled
         specialVideoPreferences.edit().putBoolean("top_off_zoom_enabled", enabled).apply()

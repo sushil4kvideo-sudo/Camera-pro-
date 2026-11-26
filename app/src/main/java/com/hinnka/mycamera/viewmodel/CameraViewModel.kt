@@ -3647,6 +3647,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun isTopOffZoomAvailable(): Boolean = cameraController.isTopOffZoomAvailable()
+
     fun setTopOffZoomEnabled(enabled: Boolean) =
         cameraController.setTopOffZoomEnabled(enabled)
 

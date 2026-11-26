@@ -82,6 +82,7 @@ import com.hinnka.mycamera.ui.theme.accentContentColor
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
@@ -1247,6 +1248,21 @@ fun CameraScreen(
         }
         val isOpenGateVideo =
             isVideoMode && state.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE
+        val currentCameraInfo = state.getCurrentCameraInfo()
+        val sensorAspectRatio = currentCameraInfo?.activeArraySize?.let { activeArray ->
+            ZoomCropGeometry.portraitSensorAspectRatio(activeArray.width(), activeArray.height())
+        } ?: (3f / 4f)
+        val topOffZoomAvailable = remember(
+            state.currentCameraId,
+            state.captureMode,
+            spatialVideoEnabled,
+            dualCaptureEnabled,
+        ) {
+            viewModel.isTopOffZoomAvailable()
+        }
+        val effectiveTopOffZoomRatio = (
+            state.zoomRatio * topOffZoomFactor
+        ).coerceIn(1f, (currentCameraInfo?.maxZoom ?: 10f).coerceAtLeast(1f))
 
         val density = LocalDensity.current
 
@@ -2673,8 +2689,13 @@ fun CameraScreen(
                 onFpsSelected = viewModel::setVideoFps,
                 virtualTelephotoEnabled = spatialVideoVirtualTelephotoEnabled,
                 onVirtualTelephotoEnabledChange = viewModel::setSpatialVideoVirtualTelephotoEnabled,
+                topOffZoomAvailable = topOffZoomAvailable,
                 topOffZoomEnabled = topOffZoomEnabled,
                 topOffZoomFactor = topOffZoomFactor,
+                effectiveZoomRatio = effectiveTopOffZoomRatio,
+                baseZoomRatio = state.zoomRatio,
+                sensorAspectRatio = sensorAspectRatio,
+                cropAspectRatio = state.getPreviewAspectRatio(),
                 topOffZoomPanX = topOffZoomPanX,
                 topOffZoomPanY = topOffZoomPanY,
                 onTopOffZoomEnabledChange = viewModel::setTopOffZoomEnabled,
