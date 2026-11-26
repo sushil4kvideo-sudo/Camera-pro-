@@ -44,7 +44,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Size as ComposeSize
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.TransformOrigin
@@ -4562,7 +4562,7 @@ private fun AiSubjectTrackingOverlay(
                     drawRoundRect(
                         color = Color(0xFF55E69B),
                         topLeft = Offset(left, top),
-                        size = Size(right - left, bottom - top),
+                        size = ComposeSize(right - left, bottom - top),
                         cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx()),
                         style = Stroke(width = 2.5.dp.toPx()),
                     )
