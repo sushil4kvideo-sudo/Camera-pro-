@@ -261,6 +261,13 @@ fun CameraScreen(
         onDispose { subjectTrackingProcessor?.close() }
     }
     var aiTrackingLastPanAtMs by remember { mutableLongStateOf(0L) }
+    // AI tracking temporarily creates crop headroom when the selected lens supports it.
+    // Restore the user's previous zoom/crop settings after tracking is stopped.
+    var aiTrackingOwnsTopOffZoom by remember { mutableStateOf(false) }
+    var aiTrackingChangedTopOffFactor by remember { mutableStateOf(false) }
+    var aiTrackingPreviousTopOffFactor by remember { mutableFloatStateOf(Float.NaN) }
+    var aiTrackingOriginalZoom by remember { mutableFloatStateOf(Float.NaN) }
+    var aiTrackingAssistZoom by remember { mutableFloatStateOf(Float.NaN) }
     val pendingPhotoCrashReport by PhotoCaptureCrashLogger.pendingCrashReport.collectAsState()
     pendingPhotoCrashReport?.let { report ->
         PhotoCaptureCrashDialog(
@@ -1321,10 +1328,47 @@ fun CameraScreen(
             (zoomJoystickSupported || topOffZoomJoystickSupported)
         val aiSubjectTrackingActive = aiSubjectTrackingEnabled &&
             isVideoMode && state.isPreviewActive && !state.isCapturing
+        val aiSubjectFreeformPanSupported = !state.useRaw &&
+            isVideoMode &&
+            state.zoomRatio > 1.001f &&
+            state.getCurrentCameraInfo()?.supportsFreeformZoomPan == true
         val aiSubjectAutoPanMode = when {
             topOffZoomJoystickSupported -> 1
-            zoomJoystickSupported -> 2
+            aiSubjectFreeformPanSupported -> 2
             else -> 0
+        }
+
+        // Top-Off cannot be toggled while the encoder is recording. Defer cleanup until
+        // recording/processing ends, then restore only settings that AI changed itself.
+        LaunchedEffect(
+            aiSubjectTrackingEnabled,
+            state.videoRecordingState.isRecording,
+            state.videoRecordingState.isProcessing,
+            state.captureMode,
+        ) {
+            val shouldStopTracking = !aiSubjectTrackingEnabled || state.captureMode != CaptureMode.VIDEO
+            val cameraIdle = !state.videoRecordingState.isRecording &&
+                !state.videoRecordingState.isProcessing
+            if (shouldStopTracking && cameraIdle) {
+                if (aiTrackingOwnsTopOffZoom) {
+                    viewModel.setTopOffZoomEnabled(false)
+                    aiTrackingOwnsTopOffZoom = false
+                }
+                if (aiTrackingChangedTopOffFactor &&
+                    aiTrackingPreviousTopOffFactor.isFinite()
+                ) {
+                    viewModel.setTopOffZoomFactor(aiTrackingPreviousTopOffFactor)
+                    aiTrackingChangedTopOffFactor = false
+                    aiTrackingPreviousTopOffFactor = Float.NaN
+                }
+                if (aiTrackingOriginalZoom.isFinite() && aiTrackingAssistZoom.isFinite() &&
+                    kotlin.math.abs(state.zoomRatio - aiTrackingAssistZoom) <= 0.18f
+                ) {
+                    viewModel.setZoomRatio(aiTrackingOriginalZoom)
+                }
+                aiTrackingOriginalZoom = Float.NaN
+                aiTrackingAssistZoom = Float.NaN
+            }
         }
 
         LaunchedEffect(subjectTrackingProcessor, aiSubjectTrackingActive) {
@@ -1335,17 +1379,17 @@ fun CameraScreen(
             }
         }
 
-        // Object detection results are already smoothed by the tracker. Apply a small,
-        // rate-limited crop correction only when the normal or Top-Off joystick path is valid.
+        // The detector smooths its box; this controller supplies a faster proportional
+        // crop response with a small dead zone to prevent visible hunting around centre.
         SideEffect {
             subjectTrackingProcessor?.onTargetChanged = { target ->
                 aiSubjectTarget = target
                 if (target != null && aiSubjectTrackingActive && aiSubjectAutoPanMode != 0) {
                     val now = SystemClock.elapsedRealtime()
-                    if (now - aiTrackingLastPanAtMs >= 65L) {
+                    if (now - aiTrackingLastPanAtMs >= 50L) {
                         fun correction(error: Float): Float {
-                            if (kotlin.math.abs(error) <= 0.045f) return 0f
-                            return (error * 0.035f).coerceIn(-0.012f, 0.012f)
+                            if (kotlin.math.abs(error) <= 0.025f) return 0f
+                            return (error * 0.14f).coerceIn(-0.035f, 0.035f)
                         }
                         val panDeltaX = correction(target.centerX - 0.5f)
                         val panDeltaY = correction(target.centerY - 0.5f)
@@ -2855,7 +2899,30 @@ fun CameraScreen(
                         enabled = aiSubjectTrackingEnabled,
                         hasTarget = aiSubjectTarget != null,
                         onClick = {
-                            aiSubjectTrackingEnabled = !aiSubjectTrackingEnabled
+                            if (!aiSubjectTrackingEnabled) {
+                                val recordingActive = state.videoRecordingState.isRecording ||
+                                    state.videoRecordingState.isProcessing
+                                val cameraInfo = state.getCurrentCameraInfo()
+                                if (topOffZoomAvailable && !topOffZoomEnabled && !recordingActive) {
+                                    aiTrackingPreviousTopOffFactor = topOffZoomFactor
+                                    aiTrackingChangedTopOffFactor = true
+                                    viewModel.setTopOffZoomFactor(maxOf(2f, topOffZoomFactor))
+                                    aiTrackingOwnsTopOffZoom = true
+                                    viewModel.setTopOffZoomEnabled(true)
+                                } else if (
+                                    !topOffZoomEnabled &&
+                                    !state.useRaw &&
+                                    cameraInfo?.supportsFreeformZoomPan == true &&
+                                    state.zoomRatio <= 2f
+                                ) {
+                                    aiTrackingOriginalZoom = state.zoomRatio
+                                    aiTrackingAssistZoom = maxOf(2.1f, state.zoomRatio)
+                                    viewModel.setZoomRatio(aiTrackingAssistZoom)
+                                }
+                                aiSubjectTrackingEnabled = true
+                            } else {
+                                aiSubjectTrackingEnabled = false
+                            }
                             aiSubjectTarget = null
                             aiTrackingLastPanAtMs = 0L
                             subjectTrackingProcessor?.resetTracking()
