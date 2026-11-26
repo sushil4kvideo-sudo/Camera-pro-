@@ -2649,7 +2649,6 @@ fun CameraScreen(
                 aiSubjectTrackingEnabled = aiSubjectTrackingEnabled,
                 aiSubjectTrackingMode = aiSubjectTrackingMode,
                 onAiTrackingToggle = {
-                    if (!aiSubjectTrackingEnabled) runningTopOffPanPreset = null
                     viewModel.setAiSubjectTrackingEnabled(!aiSubjectTrackingEnabled)
                 },
                 onAiTrackingModeCycle = {
@@ -3656,7 +3655,10 @@ private fun Controls(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
                                 Button(
-                                    onClick = onAiTrackingToggle,
+                                    onClick = {
+                                        if (!aiSubjectTrackingEnabled) runningTopOffPanPreset = null
+                                        onAiTrackingToggle()
+                                    },
                                     modifier = Modifier.height(30.dp),
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                                     colors = ButtonDefaults.buttonColors(

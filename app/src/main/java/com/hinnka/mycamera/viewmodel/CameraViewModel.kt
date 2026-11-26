@@ -2168,8 +2168,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             PLog.e(TAG, "Human eye autofocus inference failed", error)
         }
         viewModelScope.launch {
-            eyeFocusEnabled.collect { enabled ->
-        viewModelScope.launch {
             aiSubjectTrackingEnabled.collect { enabled ->
                 if (enabled && isAiSubjectTrackingRuntimeAvailable) {
                     previewAiSubjectTrackingProcessor.setMode(aiSubjectTrackingMode.value)
@@ -2197,6 +2195,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
         }
+        viewModelScope.launch {
+            eyeFocusEnabled.collect { enabled ->
                 if (enabled && isEyeFocusRuntimeAvailable) {
                     previewEyeFocusProcessor.prewarm()
                 } else if (!enabled) {

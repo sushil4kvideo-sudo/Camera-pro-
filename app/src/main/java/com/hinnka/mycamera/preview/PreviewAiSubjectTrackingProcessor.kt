@@ -128,7 +128,11 @@ class PreviewAiSubjectTrackingProcessor(context: Context) : Closeable {
         ) return false
 
         val selected = synchronized(stateLock) {
-            val candidates = latestDetections
+            val candidates = if (mode == AiSubjectTrackingMode.HUMAN) {
+                latestDetections.filter { it.target.category.equals("person", ignoreCase = true) }
+            } else {
+                latestDetections
+            }
             val containing = candidates.filter { candidate ->
                 val box = candidate.target
                 normalizedX in box.left..box.right && normalizedY in box.top..box.bottom

@@ -10610,7 +10610,6 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
-    fun setTopOffZoomEnabled(enabled: Boolean) {
     fun setAiSubjectTrackingEnabled(enabled: Boolean) {
         _aiSubjectTrackingEnabled.value = enabled && _topOffZoomEnabled.value
         specialVideoPreferences.edit()
@@ -10672,6 +10671,7 @@ class Camera2Controller(private val context: Context) {
             .apply()
     }
 
+    fun setTopOffZoomEnabled(enabled: Boolean) {
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
             handler.post { setTopOffZoomEnabled(enabled) }
