@@ -457,15 +457,38 @@ private fun TopOffZoomCropEditor(
             val maxTravelY = maxHeight * ((1f - crop.height).coerceAtLeast(0f) / 2f)
             val latestTravelX = rememberUpdatedState(maxTravelX)
             val latestTravelY = rememberUpdatedState(maxTravelY)
+            // Keep drag coordinates in the stationary sensor-frame coordinate space.
+            // The crop box itself is offset every time pan state changes; attaching
+            // pointerInput to that moving child rebases pointer coordinates during the
+            // same gesture and can cancel/undo the requested pan.
+            val currentCropBounds = rememberUpdatedState(
+                Rect(
+                    left = with(density) { cropOffsetX.toPx() },
+                    top = with(density) { cropOffsetY.toPx() },
+                    right = with(density) { (cropOffsetX + cropWidth).toPx() },
+                    bottom = with(density) { (cropOffsetY + cropHeight).toPx() },
+                )
+            )
+            var isCropDragging by remember { androidx.compose.runtime.mutableStateOf(false) }
 
             Box(
                 modifier = Modifier
-                    .offset(x = cropOffsetX, y = cropOffsetY)
-                    .size(width = cropWidth, height = cropHeight)
-                    .background(VideoSelectorGold.copy(alpha = 0.12f))
-                    .border(2.dp, VideoSelectorGold, RoundedCornerShape(3.dp))
+                    .fillMaxSize()
                     .pointerInput(maxWidth, maxHeight) {
-                        detectDragGestures { change, dragAmount ->
+                        detectDragGestures(
+                            onDragStart = { start ->
+                                val bounds = currentCropBounds.value
+                                val hitSlop = with(density) { 16.dp.toPx() }
+                                isCropDragging =
+                                    start.x >= bounds.left - hitSlop &&
+                                    start.x <= bounds.right + hitSlop &&
+                                    start.y >= bounds.top - hitSlop &&
+                                    start.y <= bounds.bottom + hitSlop
+                            },
+                            onDragEnd = { isCropDragging = false },
+                            onDragCancel = { isCropDragging = false },
+                        ) { change, dragAmount ->
+                            if (!isCropDragging) return@detectDragGestures
                             change.consume()
                             val travelXpx = with(density) { latestTravelX.value.toPx() }
                             val travelYpx = with(density) { latestTravelY.value.toPx() }
@@ -481,16 +504,25 @@ private fun TopOffZoomCropEditor(
                             }
                             currentOnPanChange.value(nextPanX, nextPanY)
                         }
-                    }
-                    .testTag("top_off_zoom_crop_box"),
-                contentAlignment = Alignment.Center,
+                    },
+                contentAlignment = Alignment.TopStart,
             ) {
-                Text(
-                    text = "CROP",
-                    color = VideoSelectorGold,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                )
+                Box(
+                    modifier = Modifier
+                        .offset(x = cropOffsetX, y = cropOffsetY)
+                        .size(width = cropWidth, height = cropHeight)
+                        .background(VideoSelectorGold.copy(alpha = 0.12f))
+                        .border(2.dp, VideoSelectorGold, RoundedCornerShape(3.dp))
+                        .testTag("top_off_zoom_crop_box"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "CROP",
+                        color = VideoSelectorGold,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
         Text(
