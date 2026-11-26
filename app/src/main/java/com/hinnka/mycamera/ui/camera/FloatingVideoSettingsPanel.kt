@@ -400,9 +400,9 @@ private fun TopOffZoomCropEditor(
     onPanChange: (Float, Float) -> Unit,
 ) {
     val density = LocalDensity.current
-    val currentPanX by rememberUpdatedState(panX.coerceIn(-1f, 1f))
-    val currentPanY by rememberUpdatedState(panY.coerceIn(-1f, 1f))
-    val currentOnPanChange by rememberUpdatedState(onPanChange)
+    val currentPanX = rememberUpdatedState(panX.coerceIn(-1f, 1f))
+    val currentPanY = rememberUpdatedState(panY.coerceIn(-1f, 1f))
+    val currentOnPanChange = rememberUpdatedState(onPanChange)
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BoxWithConstraints(
@@ -421,8 +421,8 @@ private fun TopOffZoomCropEditor(
             val maxTravelY = (maxHeight - cropHeight) / 2f
             val cropOffsetX = maxTravelX * (1f + panX.coerceIn(-1f, 1f))
             val cropOffsetY = maxTravelY * (1f + panY.coerceIn(-1f, 1f))
-            val latestTravelX by rememberUpdatedState(maxTravelX)
-            val latestTravelY by rememberUpdatedState(maxTravelY)
+            val latestTravelX = rememberUpdatedState(maxTravelX)
+            val latestTravelY = rememberUpdatedState(maxTravelY)
 
             Box(
                 modifier = Modifier
@@ -433,19 +433,19 @@ private fun TopOffZoomCropEditor(
                     .pointerInput(maxWidth, maxHeight) {
                         detectDragGestures { change, dragAmount ->
                             change.consume()
-                            val travelXpx = with(density) { latestTravelX.toPx() }
-                            val travelYpx = with(density) { latestTravelY.toPx() }
+                            val travelXpx = with(density) { latestTravelX.value.toPx() }
+                            val travelYpx = with(density) { latestTravelY.value.toPx() }
                             val nextPanX = if (travelXpx > 0f) {
-                                (currentPanX + dragAmount.x / travelXpx).coerceIn(-1f, 1f)
+                                (currentPanX.value + dragAmount.x / travelXpx).coerceIn(-1f, 1f)
                             } else {
                                 0f
                             }
                             val nextPanY = if (travelYpx > 0f) {
-                                (currentPanY + dragAmount.y / travelYpx).coerceIn(-1f, 1f)
+                                (currentPanY.value + dragAmount.y / travelYpx).coerceIn(-1f, 1f)
                             } else {
                                 0f
                             }
-                            currentOnPanChange(nextPanX, nextPanY)
+                            currentOnPanChange.value(nextPanX, nextPanY)
                         }
                     }
                     .testTag("top_off_zoom_crop_box"),
