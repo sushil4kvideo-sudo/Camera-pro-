@@ -403,6 +403,7 @@ fun CameraScreen(
         val glView = cameraGLSurfaceView ?: return@LaunchedEffect
         val active = topOffZoomEnabled &&
             state.captureMode == CaptureMode.VIDEO &&
+            state.zoomRatio >= 1f &&
             !spatialVideoEnabled && !dualCaptureEnabled
         val lockedZoom = topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
             ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
