@@ -2858,11 +2858,7 @@ fun CameraScreen(
                             aiSubjectTrackingEnabled = !aiSubjectTrackingEnabled
                             aiSubjectTarget = null
                             aiTrackingLastPanAtMs = 0L
-                            if (aiSubjectTrackingEnabled) {
-                                subjectTrackingProcessor?.resetTracking()
-                            } else {
-                                subjectTrackingProcessor?.resetTracking()
-                            }
+                            subjectTrackingProcessor?.resetTracking()
                         },
                         modifier = Modifier.align(Alignment.CenterEnd),
                     )
