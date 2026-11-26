@@ -21,9 +21,9 @@ data class GyroPanCorrection(
 /**
  * Relative-orientation controller for Top-Off gyro presets.
  *
- * Rotation deltas are calculated in one stable sensor coordinate system first, then remapped
- * into the current display axes. This avoids multiplying matrices expressed in different
- * coordinate systems when the device changes between portrait and landscape.
+ * Both absolute sensor orientations are remapped into the same display coordinate frame before
+ * their relative rotation is calculated. The resulting rotation is decomposed as an axis-angle
+ * vector rather than Euler angles, so simultaneous pitch and yaw do not hide the horizontal axis.
  */
 class GyroPanPresetController(
     context: Context,
@@ -44,7 +44,7 @@ class GyroPanPresetController(
     private val inverseReferenceScreenRotation = FloatArray(9)
     private val relativeScreenRotation = FloatArray(9)
     private val screenRotation = FloatArray(9)
-    private val orientationAngles = FloatArray(3)
+    private val relativeRotationVector = FloatArray(3)
 
     private var hasReference = false
     private var screenRotationBucket = -1
@@ -158,12 +158,24 @@ class GyroPanPresetController(
                 screenRotation,
                 relativeScreenRotation,
             )
-            SensorManager.getOrientation(relativeScreenRotation, orientationAngles)
+            // Extract axis-angle components in the display frame. Euler-angle extraction
+            // can couple yaw into pitch/roll when the phone is already tilted; the rotation
+            // vector retains the independent screen X/Y/Z components.
+            if (!GyroPanFilterMath.rotationVectorFromMatrix(
+                    relativeScreenRotation,
+                    relativeRotationVector,
+                )
+            ) {
+                PLog.w(TAG, "Could not extract relative gyro rotation vector for mode=$mode")
+                return
+            }
 
             val deltaSeconds = resolveDeltaSeconds(event.timestamp)
-            val opticalRoll = deadZone(wrapRadians(orientationAngles[0]))
-            val verticalAngle = deadZone(wrapRadians(orientationAngles[1]))
-            val horizontalAngle = deadZone(wrapRadians(orientationAngles[2]))
+            // SensorManager's historical orientation convention is negative X pitch,
+            // positive Y roll, and negative Z azimuth for a positive matrix rotation.
+            val opticalRoll = deadZone(-relativeRotationVector[2])
+            val verticalAngle = deadZone(-relativeRotationVector[0])
+            val horizontalAngle = deadZone(relativeRotationVector[1])
             val correction = calculateCorrection(
                 horizontalAngle = horizontalAngle,
                 verticalAngle = verticalAngle,
@@ -323,13 +335,6 @@ class GyroPanPresetController(
                 output[row * 3 + column] = value
             }
         }
-    }
-
-    private fun wrapRadians(value: Float): Float {
-        val twoPi = (2.0 * PI).toFloat()
-        var wrapped = (value + PI.toFloat()) % twoPi
-        if (wrapped < 0f) wrapped += twoPi
-        return wrapped - PI.toFloat()
     }
 
     private fun deadZone(value: Float): Float =
