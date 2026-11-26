@@ -257,6 +257,14 @@ class PreviewAiSubjectTrackingProcessor(context: Context) : Closeable {
             onInitializationError?.invoke(error)
             null
         }
+        catch (error: LinkageError) {
+            // MediaPipe can fail while loading its JNI/runtime libraries on a device.
+            // Treat that as an unavailable optional feature instead of crashing the app.
+            detectorInitializationFailed = true
+            PLog.e(TAG, "MediaPipe native runtime is unavailable for AI subject tracking", error)
+            onInitializationError?.invoke(error)
+            null
+        }
     }
 
     private fun handleResult(result: ObjectDetectorResult, input: MPImage) {
