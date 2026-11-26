@@ -9,13 +9,19 @@ import android.os.Handler
 import android.os.HandlerThread
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
-import kotlin.math.PI
 import kotlin.math.abs
 
 data class GyroPanCorrection(
     val panX: Float,
     val panY: Float,
     val rollDegrees: Float,
+)
+
+/** Camera optics used to map gyro angles into the active Top-Off crop. */
+data class GyroPanOptics(
+    val horizontalFieldOfViewDegrees: Float,
+    val verticalFieldOfViewDegrees: Float,
+    val zoomRatio: Float,
 )
 
 /**
@@ -30,6 +36,9 @@ class GyroPanPresetController(
     private val mode: GyroPanMode,
     initialPanX: Float,
     initialPanY: Float,
+    initialHorizontalFieldOfViewDegrees: Float = DEFAULT_HORIZONTAL_FOV_DEGREES,
+    initialVerticalFieldOfViewDegrees: Float = DEFAULT_VERTICAL_FOV_DEGREES,
+    initialZoomRatio: Float = 2f,
     private val onCorrection: (GyroPanCorrection) -> Unit,
 ) : SensorEventListener {
     private val sensorManager =
@@ -55,6 +64,9 @@ class GyroPanPresetController(
 
     private var basePanX = initialPanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
     private var basePanY = initialPanY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+    @Volatile private var horizontalFieldOfViewDegrees = sanitizeFieldOfView(initialHorizontalFieldOfViewDegrees)
+    @Volatile private var verticalFieldOfViewDegrees = sanitizeFieldOfView(initialVerticalFieldOfViewDegrees)
+    @Volatile private var zoomRatio = sanitizeZoom(initialZoomRatio)
     private var lowPassHorizontal = 0f
     private var lowPassVertical = 0f
     private var lowPassRoll = 0f
@@ -65,6 +77,20 @@ class GyroPanPresetController(
 
     val currentCorrection: GyroPanCorrection
         get() = lastCorrection
+
+    /** Update optical gain without unregistering or re-anchoring the orientation sensor. */
+    fun updateOptics(optics: GyroPanOptics) {
+        horizontalFieldOfViewDegrees = sanitizeFieldOfView(optics.horizontalFieldOfViewDegrees)
+        verticalFieldOfViewDegrees = sanitizeFieldOfView(optics.verticalFieldOfViewDegrees)
+        zoomRatio = sanitizeZoom(optics.zoomRatio)
+    }
+
+    private fun sanitizeFieldOfView(value: Float): Float =
+        value.takeIf { it.isFinite() && it > 0f }?.coerceIn(1f, 179f)
+            ?: DEFAULT_HORIZONTAL_FOV_DEGREES
+
+    private fun sanitizeZoom(value: Float): Float =
+        value.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
 
     fun start(): Boolean {
         val sensor = orientationSensor
@@ -225,12 +251,19 @@ class GyroPanPresetController(
         opticalRoll: Float,
         deltaSeconds: Float,
     ): GyroPanCorrection {
-        val maxPanRadians = MAX_PAN_ANGLE_DEGREES * DEG_TO_RAD
         return when (mode) {
             GyroPanMode.POSITION_LOCK,
             GyroPanMode.AUTO_AXIS_BALANCE -> GyroPanCorrection(
-                panX = (basePanX - horizontalAngle / maxPanRadians).coerceIn(-1f, 1f),
-                panY = (basePanY + verticalAngle / maxPanRadians).coerceIn(-1f, 1f),
+                panX = (
+                    basePanX - GyroPanFilterMath.normalizedPanForAngle(
+                        horizontalAngle, horizontalFieldOfViewDegrees, zoomRatio
+                    )
+                ).coerceIn(-1f, 1f),
+                panY = (
+                    basePanY + GyroPanFilterMath.normalizedPanForAngle(
+                        verticalAngle, verticalFieldOfViewDegrees, zoomRatio
+                    )
+                ).coerceIn(-1f, 1f),
                 rollDegrees = 0f,
             )
 
@@ -244,12 +277,21 @@ class GyroPanPresetController(
                 lowPassRoll = GyroPanFilterMath.lowPass(
                     lowPassRoll, opticalRoll, deltaSeconds, ANTI_SHAKE_TIME_CONSTANT_SECONDS
                 )
+                // Retain the established high-pass correction: remove only the fast residual.
                 val shakeX = horizontalAngle - lowPassHorizontal
                 val shakeY = verticalAngle - lowPassVertical
                 val shakeRoll = opticalRoll - lowPassRoll
                 GyroPanCorrection(
-                    panX = (basePanX - shakeX / maxPanRadians).coerceIn(-1f, 1f),
-                    panY = (basePanY + shakeY / maxPanRadians).coerceIn(-1f, 1f),
+                    panX = (
+                        basePanX - GyroPanFilterMath.normalizedPanForAngle(
+                            shakeX, horizontalFieldOfViewDegrees, zoomRatio
+                        )
+                    ).coerceIn(-1f, 1f),
+                    panY = (
+                        basePanY + GyroPanFilterMath.normalizedPanForAngle(
+                            shakeY, verticalFieldOfViewDegrees, zoomRatio
+                        )
+                    ).coerceIn(-1f, 1f),
                     rollDegrees = (-shakeRoll / DEG_TO_RAD)
                         .coerceIn(-MAX_ANTI_SHAKE_ROLL, MAX_ANTI_SHAKE_ROLL),
                 )
@@ -272,10 +314,23 @@ class GyroPanPresetController(
                 smoothRoll = GyroPanFilterMath.lowPass(
                     smoothRoll, opticalRoll, deltaSeconds, SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS
                 )
+                // The virtual camera follows lowPass(orientation). The crop-window offset
+                // relative to the physical camera is lowPass(angle) - angle, not lowPass(angle).
+                val followHorizontalOffset = smoothHorizontal - horizontalAngle
+                val followVerticalOffset = smoothVertical - verticalAngle
+                val followRollOffset = smoothRoll - opticalRoll
                 GyroPanCorrection(
-                    panX = (basePanX - smoothHorizontal / maxPanRadians).coerceIn(-1f, 1f),
-                    panY = (basePanY + smoothVertical / maxPanRadians).coerceIn(-1f, 1f),
-                    rollDegrees = (-smoothRoll / DEG_TO_RAD)
+                    panX = (
+                        basePanX + GyroPanFilterMath.normalizedPanForAngle(
+                            followHorizontalOffset, horizontalFieldOfViewDegrees, zoomRatio
+                        )
+                    ).coerceIn(-1f, 1f),
+                    panY = (
+                        basePanY - GyroPanFilterMath.normalizedPanForAngle(
+                            followVerticalOffset, verticalFieldOfViewDegrees, zoomRatio
+                        )
+                    ).coerceIn(-1f, 1f),
+                    rollDegrees = (followRollOffset / DEG_TO_RAD)
                         .coerceIn(-MAX_HORIZON_CORRECTION_DEGREES, MAX_HORIZON_CORRECTION_DEGREES),
                 )
             }
@@ -343,7 +398,8 @@ class GyroPanPresetController(
     private companion object {
         const val TAG = "GyroPan"
         const val DEG_TO_RAD = 0.017453292519943295f
-        const val MAX_PAN_ANGLE_DEGREES = 18f
+        const val DEFAULT_HORIZONTAL_FOV_DEGREES = 60f
+        const val DEFAULT_VERTICAL_FOV_DEGREES = 45f
         const val MAX_HORIZON_CORRECTION_DEGREES = 15f
         const val MAX_ANTI_SHAKE_ROLL = 6f
         const val ANTI_SHAKE_TIME_CONSTANT_SECONDS = 0.18f
