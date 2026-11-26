@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">光子相機</string>
+    <string name="app_name">Camera Pro</string>
 
     <!-- Camera Controls -->
     <string name="switch_camera">切換攝像頭</string>
@@ -73,7 +73,7 @@
     <!-- Zoom -->
 
     <!-- Gallery -->
-    <string name="gallery_photon">光子相簿</string>
+    <string name="gallery_photon">Camera Pro</string>
     <string name="gallery_system">系統相簿</string>
     <string name="gallery_prepare_edit_failed">無法準備這張相片用于編輯</string>
     <string name="gallery_group_today">今天</string>
@@ -347,7 +347,7 @@
     <string name="settings_storage_path_video_description_arg">影片</string>
     <string name="settings_storage_path_title">%1$s儲存路徑</string>
     <string name="settings_storage_path_description">選擇%1$s的儲存位置</string>
-    <string name="settings_storage_path_dcim">預設（DCIM/PhotonCamera）</string>
+    <string name="settings_storage_path_dcim">預設（DCIM）</string>
     <string name="settings_storage_path_external_tree">資料夾...</string>
     <string name="settings_storage_path_external_selected">資料夾：%1$s</string>
     <string name="settings_storage_path_permission_failed">無法儲存資料夾權限</string>
@@ -458,8 +458,8 @@
     <string name="billing_feature_lifetime">一次購買，永久使用</string>
     <string name="billing_premium_get_access">獲取 Pro 權益</string>
     <string name="billing_price_region_notice">具體價格以所在地區為準</string>
-    <string name="settings_premium_title">PhotonCamera Pro</string>
-    <string name="settings_premium_description">解鎖全部高級濾鏡并支援我們的開發工作</string>
+    <string name="settings_premium_title">Camera Pro Premium</string>
+    <string name="settings_premium_description">Unlock all premium LUTs and support Camera Pro's continued development.</string>
 
     <!-- Custom Import -->
     <string name="custom_tag">自訂</string>
@@ -811,11 +811,11 @@
     <string name="current_camera">當前攝像頭</string>
 
     <!-- 關于與捐贈 -->
-    <string name="settings_community_group">交流群</string>
-    <string name="settings_community_group_telegram_description">Telegram 群：https://t.me/photoncameraapp</string>
-    <string name="settings_community_group_qq_description">QQ 群：569605452</string>
-    <string name="settings_donation">捐贈</string>
-    <string name="settings_donation_description">支援 Photon Camera 的持續開發</string>
+    <string name="settings_community_group">Camera Pro GitHub 社群</string>
+    <string name="settings_community_group_telegram_description">在 GitHub 查看 Camera Pro 原始碼、更新和問題追蹤。</string>
+    <string name="settings_community_group_qq_description">回報問題並為 Camera Pro 提出功能建議。</string>
+    <string name="settings_donation">支持 Camera Pro</string>
+    <string name="settings_donation_description">支援 Camera Pro 的持續開發。</string>
     <string name="settings_check_update">檢查更新</string>
     <string name="settings_check_update_description">當前版本：%1$s</string>
     <string name="settings_check_update_running">正在檢查并下載更新...</string>
