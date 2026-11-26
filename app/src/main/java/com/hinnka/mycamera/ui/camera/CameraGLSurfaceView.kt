@@ -198,6 +198,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setTopOffZoomCrop(enabled: Boolean, zoomRatio: Float, panX: Float, panY: Float) {
+        queueEvent {
+            renderer.setTopOffZoomCrop(enabled, zoomRatio, panX, panY)
+            requestRender()
+        }
+    }
+
     fun setModeSwitchPreviewAspectRatio(aspectRatio: Float) {
         queueEvent {
             renderer.setModeSwitchPreviewAspectRatio(aspectRatio)
