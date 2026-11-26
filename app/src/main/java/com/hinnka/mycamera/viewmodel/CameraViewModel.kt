@@ -3656,6 +3656,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun isTopOffZoomAvailable(): Boolean = cameraController.isTopOffZoomAvailable()
 
+    fun getTopOffGyroPanOptics(): GyroPanOptics = cameraController.getTopOffGyroPanOptics()
+
     fun setTopOffZoomEnabled(enabled: Boolean) =
         cameraController.setTopOffZoomEnabled(enabled)
 
