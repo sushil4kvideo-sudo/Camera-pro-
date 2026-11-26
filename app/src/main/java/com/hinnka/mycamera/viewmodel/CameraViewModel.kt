@@ -2175,7 +2175,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         cameraController.topOffZoomPanXFlow.value,
                         cameraController.topOffZoomPanYFlow.value,
                     )
-                    previewAiSubjectTrackingProcessor.prewarm()
                 } else {
                     previewAiSubjectTrackingProcessor.resetTracking()
                     _aiSubjectTrackingTarget.value = null
@@ -2193,6 +2192,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     cameraController.topOffZoomPanXFlow.value,
                     cameraController.topOffZoomPanYFlow.value,
                 )
+            }
+        }
+        // Do not initialize MediaPipe while the Activity is still starting.
+        // Wait until the first camera preview is active; an AI model startup problem
+        // must never hold up or prevent the camera from opening.
+        viewModelScope.launch {
+            combine(cameraController.state, aiSubjectTrackingEnabled) { cameraState, enabled ->
+                enabled && cameraState.isPreviewActive
+            }.distinctUntilChanged().collect { shouldPrewarm ->
+                if (shouldPrewarm && isAiSubjectTrackingRuntimeAvailable) {
+                    previewAiSubjectTrackingProcessor.prewarm()
+                }
             }
         }
         viewModelScope.launch {
