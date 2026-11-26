@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.camera.TopOffPanPreset
 import com.hinnka.mycamera.ui.components.OppoCameraGlassSurface
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoCapabilities
@@ -354,10 +355,10 @@ fun FloatingVideoSettingsPanel(
                                     )
                                 }
                                 Slider(
-                                    value = topOffZoomFactor.coerceIn(1f, 4f),
+                                    value = topOffZoomFactor.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO),
                                     onValueChange = onTopOffZoomFactorChange,
-                                    valueRange = 1f..4f,
-                                    steps = 5,
+                                    valueRange = 1f..TopOffPanPreset.MAX_ZOOM_RATIO,
+                                    steps = 17,
                                     modifier = Modifier.testTag("top_off_zoom_factor_slider"),
                                 )
                             }
