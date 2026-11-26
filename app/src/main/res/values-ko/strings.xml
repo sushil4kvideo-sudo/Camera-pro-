@@ -159,7 +159,7 @@
     <string name="billing_premium_get_access">프리미엄 액세스 권한 얻기</string>
     <string name="billing_price_region_notice">가격은 지역에 따라 다를 수 있습니다</string>
     <string name="settings_premium_title">Camera Pro Premium</string>
-    <string name="settings_premium_description">Unlock all premium LUTs and support Camera Pro's continued development.</string>
+    <string name="settings_premium_description">Unlock all premium LUTs and support the continued development of Camera Pro.</string>
     
     <!-- Custom Import -->
     <string name="custom_tag">사용자 정의</string>

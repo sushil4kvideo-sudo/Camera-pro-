@@ -511,7 +511,7 @@
     <string name="billing_premium_get_access">Get Premium Access</string>
     <string name="billing_price_region_notice">Price varies by region</string>
     <string name="settings_premium_title">Camera Pro Premium</string>
-    <string name="settings_premium_description">Unlock all premium LUTs and support Camera Pro's continued development.</string>
+    <string name="settings_premium_description">Unlock all premium LUTs and support the continued development of Camera Pro.</string>
 
     <!-- Custom Import -->
     <string name="custom_tag">CUSTOM</string>
@@ -869,7 +869,7 @@
 
     <!-- About & Donation -->
     <string name="settings_community_group">Camera Pro on GitHub</string>
-    <string name="settings_community_group_telegram_description">Open Camera Pro's source code, updates, and issue tracker on GitHub.</string>
+    <string name="settings_community_group_telegram_description">View Camera Pro source code, updates, and the issue tracker on GitHub.</string>
     <string name="settings_community_group_qq_description">Report bugs and suggest features for Camera Pro.</string>
     <string name="settings_donation">Support Camera Pro</string>
     <string name="settings_donation_description">Support the continued development of Camera Pro.</string>

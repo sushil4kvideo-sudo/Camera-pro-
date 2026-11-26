@@ -159,7 +159,7 @@
     <string name="billing_premium_get_access">Obter Acesso Premium</string>
     <string name="billing_price_region_notice">O preço varia de acordo com a região</string>
     <string name="settings_premium_title">Camera Pro Premium</string>
-    <string name="settings_premium_description">Unlock all premium LUTs and support Camera Pro's continued development.</string>
+    <string name="settings_premium_description">Unlock all premium LUTs and support the continued development of Camera Pro.</string>
     
     <!-- Custom Import -->
     <string name="custom_tag">PERS.</string>

@@ -279,7 +279,7 @@
     <string name="billing_premium_get_access">รับสิทธิ์เข้าถึงพรีเมียม</string>
     <string name="billing_price_region_notice">ราคาแตกต่างกันไปตามภูมิภาค</string>
     <string name="settings_premium_title">Camera Pro Premium</string>
-    <string name="settings_premium_description">Unlock all premium LUTs and support Camera Pro's continued development.</string>
+    <string name="settings_premium_description">Unlock all premium LUTs and support the continued development of Camera Pro.</string>
 
     <!-- Custom Import -->
     <string name="custom_tag">กำหนดเอง</string>
