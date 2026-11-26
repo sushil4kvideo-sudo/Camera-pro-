@@ -2027,6 +2027,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private set
     var isEyeFocusRuntimeAvailable by mutableStateOf(true)
         private set
+    var aiSubjectTrackingEnabled by mutableStateOf(false)
+        private set
+    var aiSubjectTrackingTarget by mutableStateOf<PreviewEyeFocusProcessor.EyeTarget?>(null)
+        private set
+    private val aiSubjectTrackingController = AiSubjectTrackingController()
     private var lastEyeFocusTriggerPoint: Pair<Float, Float>? = null
     private var lastEyeFocusTriggerElapsedMs = 0L
     @Volatile
@@ -2096,6 +2101,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         previewEyeFocusProcessor.onEyeTarget = { target ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
+                handleAiSubjectTrackingTarget(target)
                 handleEyeFocusTarget(target)
             }
         }
@@ -2114,6 +2120,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         previewEyeFocusProcessor.onTargetLost = {
             viewModelScope.launch(Dispatchers.Main.immediate) {
+                if (aiSubjectTrackingEnabled) {
+                    aiSubjectTrackingTarget = null
+                    aiSubjectTrackingController.reset()
+                }
                 if (eyeFocusEnabled.value) {
                     resetEyeFocusTracking(cancelCameraFocus = true, reason = "target_lost")
                 }
@@ -4249,6 +4259,75 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         setCameraControllerZoomRatio(ratio, cameraInfo)
     }
 
+    /**
+     * Enables a dedicated human-face tracking mode for video.
+     * The tracker needs a movable crop, so it prepares a 2x Top-Off crop before
+     * recording when the user has not enabled Top-Off manually.
+     */
+    fun setAiSubjectTrackingEnabled(enabled: Boolean): Boolean {
+        if (!enabled) {
+            aiSubjectTrackingEnabled = false
+            aiSubjectTrackingTarget = null
+            aiSubjectTrackingController.reset()
+            return true
+        }
+
+        val cameraState = state.value
+        if (
+            cameraState.captureMode != CaptureMode.VIDEO ||
+            !isEyeFocusRuntimeAvailable ||
+            !cameraController.isTopOffZoomAvailable()
+        ) {
+            return false
+        }
+
+        if (!topOffZoomEnabled.value) {
+            if (cameraState.videoRecordingState.isRecording ||
+                cameraState.videoRecordingState.isProcessing
+            ) {
+                return false
+            }
+            cameraController.setTopOffZoomFactor(2f)
+            cameraController.setTopOffZoomEnabled(true)
+        }
+
+        aiSubjectTrackingController.reset()
+        aiSubjectTrackingTarget = null
+        aiSubjectTrackingEnabled = true
+        previewEyeFocusProcessor.prewarm()
+        PLog.i(TAG, "AI human subject tracking enabled")
+        return true
+    }
+
+    private fun handleAiSubjectTrackingTarget(target: PreviewEyeFocusProcessor.EyeTarget) {
+        if (!aiSubjectTrackingEnabled) return
+        val cameraState = state.value
+        if (
+            cameraState.captureMode != CaptureMode.VIDEO ||
+            !cameraState.isPreviewActive ||
+            cameraState.videoRecordingState.isProcessing ||
+            !topOffZoomEnabled.value
+        ) {
+            aiSubjectTrackingTarget = null
+            return
+        }
+
+        aiSubjectTrackingTarget = target
+        // The face box is expressed in the displayed preview. Shifting the crop in the
+        // same direction brings an off-centre subject back toward the viewfinder centre.
+        val faceCenterX = (target.faceLeft + target.faceRight) * 0.5f
+        val faceCenterY = (target.faceTop + target.faceBottom) * 0.5f
+        val pan = aiSubjectTrackingController.update(
+            subjectCenterX = faceCenterX,
+            subjectCenterY = faceCenterY,
+            currentPanX = topOffZoomPanX.value,
+            currentPanY = topOffZoomPanY.value,
+        )
+        if (pan.changed) {
+            cameraController.setTopOffZoomPan(pan.panX, pan.panY)
+        }
+    }
+
     /** Apply a normalized delta from the on-screen joystick to the camera crop. */
     fun panZoomBy(deltaX: Float, deltaY: Float) {
         cameraController.panZoomBy(deltaX, deltaY)
@@ -5243,7 +5322,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             !cameraState.isHyperfocalFocusEnabled &&
             !cameraState.isCapturing &&
             (cameraState.focusPoint == null || cameraState.focusPointSource == FocusPointSource.EYE)
-        if (!acceptsEyeFocus && !acceptsPortraitMask) {
+        val acceptsAiSubjectTracking = aiSubjectTrackingEnabled &&
+            isEyeFocusRuntimeAvailable &&
+            cameraState.captureMode == CaptureMode.VIDEO &&
+            cameraState.isPreviewActive &&
+            !cameraState.isCapturing &&
+            !cameraState.videoRecordingState.isProcessing
+        if (!acceptsEyeFocus && !acceptsPortraitMask && !acceptsAiSubjectTracking) {
             frame.bitmap.recycle()
             completeEyeFocusInput()
             return
@@ -5252,7 +5337,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (
             !previewEyeFocusProcessor.processFrame(
                 frame = frame,
-                detectEyeTarget = acceptsEyeFocus,
+                detectEyeTarget = acceptsEyeFocus || acceptsAiSubjectTracking,
                 createFaceMask = acceptsPortraitMask,
             )
         ) {
