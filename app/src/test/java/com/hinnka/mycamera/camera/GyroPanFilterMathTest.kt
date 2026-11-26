@@ -1,6 +1,10 @@
 package com.hinnka.mycamera.camera
 
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.abs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GyroPanFilterMathTest {
@@ -40,6 +44,58 @@ class GyroPanFilterMathTest {
         )
     }
 
+    @Test
+    fun rotationVectorExtractsAllThreeIndependentDisplayAxes() {
+        val angle = 18f * Math.PI.toFloat() / 180f
+        val output = FloatArray(3)
+
+        assertTrue(GyroPanFilterMath.rotationVectorFromMatrix(rotationX(angle), output))
+        assertEquals(angle, output[0], 0.0001f)
+        assertEquals(0f, output[1], 0.0001f)
+        assertEquals(0f, output[2], 0.0001f)
+
+        assertTrue(GyroPanFilterMath.rotationVectorFromMatrix(rotationY(angle), output))
+        assertEquals(0f, output[0], 0.0001f)
+        assertEquals(angle, output[1], 0.0001f)
+        assertEquals(0f, output[2], 0.0001f)
+
+        assertTrue(GyroPanFilterMath.rotationVectorFromMatrix(rotationZ(angle), output))
+        assertEquals(0f, output[0], 0.0001f)
+        assertEquals(0f, output[1], 0.0001f)
+        assertEquals(angle, output[2], 0.0001f)
+    }
+
+    @Test
+    fun horizontalAxisIsPreservedWhenPitchAndYawOccurTogether() {
+        val pitch = -0.12f
+        val yaw = 0.20f
+        val combined = multiply3x3(rotationY(yaw), rotationX(pitch))
+        val output = FloatArray(3)
+
+        assertTrue(GyroPanFilterMath.rotationVectorFromMatrix(combined, output))
+        assertTrue("vertical component was lost: ${output[0]}", abs(output[0]) > 0.10f)
+        assertTrue("horizontal component was lost: ${output[1]}", abs(output[1]) > 0.18f)
+    }
+
+    @Test
+    fun nearIdentityRotationReturnsFiniteSmallAngles() {
+        val output = FloatArray(3)
+
+        assertTrue(GyroPanFilterMath.rotationVectorFromMatrix(rotationY(0.00001f), output))
+        assertTrue(output.all { it.isFinite() })
+        assertEquals(0.00001f, output[1], 0.000001f)
+    }
+
+    @Test
+    fun invalidRotationMatrixIsRejected() {
+        assertTrue(
+            !GyroPanFilterMath.rotationVectorFromMatrix(
+                floatArrayOf(Float.NaN, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f),
+                FloatArray(3),
+            )
+        )
+    }
+
     private fun runFilter(sampleCount: Int, deltaSeconds: Float): Float {
         var value = 0f
         repeat(sampleCount) {
@@ -51,5 +107,48 @@ class GyroPanFilterMathTest {
             )
         }
         return value
+    }
+
+    private fun rotationX(angle: Float): FloatArray {
+        val c = cos(angle)
+        val s = sin(angle)
+        return floatArrayOf(
+            1f, 0f, 0f,
+            0f, c, -s,
+            0f, s, c,
+        )
+    }
+
+    private fun rotationY(angle: Float): FloatArray {
+        val c = cos(angle)
+        val s = sin(angle)
+        return floatArrayOf(
+            c, 0f, s,
+            0f, 1f, 0f,
+            -s, 0f, c,
+        )
+    }
+
+    private fun rotationZ(angle: Float): FloatArray {
+        val c = cos(angle)
+        val s = sin(angle)
+        return floatArrayOf(
+            c, -s, 0f,
+            s, c, 0f,
+            0f, 0f, 1f,
+        )
+    }
+
+    private fun multiply3x3(left: FloatArray, right: FloatArray): FloatArray {
+        val result = FloatArray(9)
+        for (row in 0..2) {
+            for (column in 0..2) {
+                for (index in 0..2) {
+                    result[row * 3 + column] +=
+                        left[row * 3 + index] * right[index * 3 + column]
+                }
+            }
+        }
+        return result
     }
 }
