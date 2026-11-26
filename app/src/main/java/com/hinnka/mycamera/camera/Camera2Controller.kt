@@ -8703,16 +8703,31 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        // Joystick deltas are expressed in the displayed viewfinder's axes, while
-        // SCALER_CROP_REGION uses unrotated sensor coordinates.
-        val (sensorDeltaX, sensorDeltaY) = when (Math.floorMod(cameraInfo.sensorOrientation, 360)) {
+        // Use the orientation/facing of the sensor that actually receives the
+        // SCALER_CROP_REGION request. On logical multi-camera devices this can differ
+        // from CameraInfo's logical-camera metadata (notably on the 1x main sensor),
+        // which otherwise rotates or reverses the joystick's vertical movement.
+        val openCameraId = getActiveOpenCameraId()
+        val cropCharacteristics = openCameraId.takeIf { it.isNotEmpty() }?.let { id ->
+            runCatching { resolveZoomRequestCharacteristics(id) }.getOrNull()
+        }
+        val cropSensorOrientation = cropCharacteristics
+            ?.get(CameraCharacteristics.SENSOR_ORIENTATION)
+            ?: cameraInfo.sensorOrientation
+        val cropLensFacing = cropCharacteristics
+            ?.get(CameraCharacteristics.LENS_FACING)
+            ?: cameraInfo.lensFacing
+
+        // Joystick deltas are expressed in displayed viewfinder axes, whereas
+        // SCALER_CROP_REGION uses the active sensor's unrotated coordinates.
+        val (sensorDeltaX, sensorDeltaY) = when (Math.floorMod(cropSensorOrientation, 360)) {
             90 -> deltaY to -deltaX
             180 -> -deltaX to -deltaY
             270 -> -deltaY to deltaX
             else -> deltaX to deltaY
         }
         val sensorDeltaXForFacing = if (
-            cameraInfo.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
+            cropLensFacing == CameraCharacteristics.LENS_FACING_FRONT
         ) -sensorDeltaX else sensorDeltaX
 
         val next = current.copy(
