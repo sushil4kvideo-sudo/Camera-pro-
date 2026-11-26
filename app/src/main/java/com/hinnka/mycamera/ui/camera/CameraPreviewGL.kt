@@ -14,8 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Size as ComposeSize
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
@@ -370,7 +371,7 @@ fun CameraPreviewGL(
                         drawRect(
                             color = color,
                             topLeft = Offset(left, top),
-                            size = Size(boxWidth, boxHeight),
+                            size = ComposeSize(boxWidth, boxHeight),
                             style = Stroke(width = strokeWidth),
                         )
                         // Brighter corner brackets keep the subject box visible on busy scenes.
