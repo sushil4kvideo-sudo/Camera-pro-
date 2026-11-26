@@ -44,7 +44,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
@@ -276,6 +278,9 @@ fun CameraScreen(
         if (state.captureMode != CaptureMode.VIDEO && spatialVideoEnabled) {
             viewModel.setSpatialVideoEnabled(false)
         }
+        if (state.captureMode != CaptureMode.VIDEO && viewModel.aiSubjectTrackingEnabled) {
+            viewModel.setAiSubjectTrackingEnabled(false)
+        }
     }
 
     val uiStyle by viewModel.uiStyle.collectAsState()
@@ -284,6 +289,8 @@ fun CameraScreen(
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
     val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
+    val aiSubjectTrackingEnabled = viewModel.aiSubjectTrackingEnabled
+    val aiSubjectTrackingTarget = viewModel.aiSubjectTrackingTarget
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
     val cameraMenuBlurRadius by viewModel.cameraMenuBlurRadius.collectAsState()
     val cameraMenuTransparency by viewModel.cameraMenuTransparency.collectAsState()
@@ -1768,6 +1775,9 @@ fun CameraScreen(
                         state.isAutoFocus &&
                         !state.isHyperfocalFocusEnabled &&
                         (state.focusPoint == null || state.focusPointSource == FocusPointSource.EYE)
+                    val aiSubjectTrackingActive = aiSubjectTrackingEnabled &&
+                        state.captureMode == CaptureMode.VIDEO &&
+                        viewModel.isEyeFocusRuntimeAvailable
                     val portraitMaskActive = state.captureMode == CaptureMode.PHOTO &&
                         state.useRaw &&
                         state.isRawSupported
@@ -1840,7 +1850,7 @@ fun CameraScreen(
                                 )
                             },
                             onEyeFocusInputAvailable = if (
-                                eyeFocusActive || portraitMaskActive
+                                eyeFocusActive || portraitMaskActive || aiSubjectTrackingActive
                             ) {
                                 viewModel::handleEyeFocusInputUpdate
                             } else {
@@ -2687,6 +2697,22 @@ fun CameraScreen(
                             .requiredSize(cardWidth, cardHeight)
                     ) {
                         viewfinder()
+                        if (isVideoMode && activePanel == ActivePanel.NONE) {
+                            AiSubjectTrackingOverlay(
+                                enabled = aiSubjectTrackingEnabled,
+                                target = aiSubjectTrackingTarget,
+                                onToggle = {
+                                    val requestedEnabled = !aiSubjectTrackingEnabled
+                                    if (!viewModel.setAiSubjectTrackingEnabled(requestedEnabled)) {
+                                        Toast.makeText(
+                                            context,
+                                            "AI Human Tracking needs a supported Normal Video camera. Enable it before recording.",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                },
+                            )
+                        }
                     }
                     if (uiStyle == "OPPO" && activePanel == ActivePanel.NONE && !isXpan) {
                         Box(
@@ -4516,4 +4542,76 @@ private fun TextureView.updateDualCaptureTextureTransform(
         setScale(scaleX, scaleY, viewWidth / 2f, viewHeight / 2f)
     }
     setTransform(transform)
+}
+
+
+@Composable
+private fun AiSubjectTrackingOverlay(
+    enabled: Boolean,
+    target: com.hinnka.mycamera.preview.PreviewEyeFocusProcessor.EyeTarget?,
+    onToggle: () -> Unit,
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (enabled && target != null) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val left = target.faceLeft.coerceIn(0f, 1f) * size.width
+                val top = target.faceTop.coerceIn(0f, 1f) * size.height
+                val right = target.faceRight.coerceIn(0f, 1f) * size.width
+                val bottom = target.faceBottom.coerceIn(0f, 1f) * size.height
+                if (right > left && bottom > top) {
+                    drawRoundRect(
+                        color = Color(0xFF55E69B),
+                        topLeft = Offset(left, top),
+                        size = Size(right - left, bottom - top),
+                        cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx()),
+                        style = Stroke(width = 2.5.dp.toPx()),
+                    )
+                    drawCircle(
+                        color = Color(0xFF55E69B),
+                        radius = 3.dp.toPx(),
+                        center = Offset((left + right) * 0.5f, (top + bottom) * 0.5f),
+                    )
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(12.dp)
+                .clickable(onClick = onToggle),
+            shape = RoundedCornerShape(50),
+            color = if (enabled) Color(0xDD145A3B) else Color(0xAA101010),
+            border = BorderStroke(
+                width = 1.dp,
+                color = if (enabled) Color(0xFF6EF0A7) else Color.White.copy(alpha = 0.55f),
+            ),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 13.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .background(
+                            color = if (enabled) Color(0xFF70F2A7) else Color.White.copy(alpha = 0.75f),
+                            shape = CircleShape,
+                        ),
+                )
+                Text(
+                    text = when {
+                        !enabled -> "AI TRACK"
+                        target != null -> "AI TRACKING"
+                        else -> "AI SEARCHING"
+                    },
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.7.sp,
+                )
+            }
+        }
+    }
 }
