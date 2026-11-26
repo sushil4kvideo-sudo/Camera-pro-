@@ -84,8 +84,6 @@ import com.hinnka.mycamera.ui.theme.accentContentColor
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.camera.AiSubjectTrackingMode
-import com.hinnka.mycamera.camera.AiTrackingFollowSpeed
 import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
@@ -265,10 +263,6 @@ fun CameraScreen(
     val topOffZoomPanX by viewModel.topOffZoomPanX.collectAsState()
     val topOffZoomPanY by viewModel.topOffZoomPanY.collectAsState()
     val topOffZoomRollDegrees by viewModel.topOffZoomRollDegrees.collectAsState()
-    val aiSubjectTrackingEnabled by viewModel.aiSubjectTrackingEnabled.collectAsState()
-    val aiSubjectTrackingMode by viewModel.aiSubjectTrackingMode.collectAsState()
-    val aiTrackingFollowSpeed by viewModel.aiTrackingFollowSpeed.collectAsState()
-    val aiSubjectTrackingTarget by viewModel.aiSubjectTrackingTarget.collectAsState()
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
     val spatialVideoPreviewSensorOrientation by
@@ -1824,11 +1818,6 @@ fun CameraScreen(
                             onTap = { x, y, w, h ->
                                 if (activePanel != ActivePanel.NONE) {
                                     activePanel = ActivePanel.NONE
-                                } else if (aiSubjectTrackingEnabled && topOffZoomJoystickSupported) {
-                                    viewModel.selectAiSubjectTrackingTarget(
-                                        (x / w.coerceAtLeast(1)).coerceIn(0f, 1f),
-                                        (y / h.coerceAtLeast(1)).coerceIn(0f, 1f),
-                                    )
                                 } else if (state.isFocusLocked) {
                                     viewModel.unlockFocus()
                                 } else {
@@ -1850,11 +1839,8 @@ fun CameraScreen(
                                     hy
                                 )
                             },
-                            subjectTrackingTarget = aiSubjectTrackingTarget.takeIf {
-                                aiSubjectTrackingEnabled
-                            },
                             onEyeFocusInputAvailable = if (
-                                eyeFocusActive || portraitMaskActive || aiSubjectTrackingEnabled
+                                eyeFocusActive || portraitMaskActive
                             ) {
                                 viewModel::handleEyeFocusInputUpdate
                             } else {
@@ -2647,34 +2633,8 @@ fun CameraScreen(
                 },
                 showTrackingPad = canShowZoomJoystick,
                 showTopOffPanPresetControls = topOffZoomJoystickSupported,
-                showAiTrackingControls = topOffZoomJoystickSupported,
-                aiSubjectTrackingEnabled = aiSubjectTrackingEnabled,
-                aiSubjectTrackingMode = aiSubjectTrackingMode,
-                aiTrackingFollowSpeed = aiTrackingFollowSpeed,
-                onAiTrackingToggle = {
-                    viewModel.setAiSubjectTrackingEnabled(!aiSubjectTrackingEnabled)
-                },
-                onAiTrackingModeCycle = {
-                    viewModel.setAiSubjectTrackingMode(
-                        if (aiSubjectTrackingMode == AiSubjectTrackingMode.HUMAN) {
-                            AiSubjectTrackingMode.ANY_OBJECT
-                        } else {
-                            AiSubjectTrackingMode.HUMAN
-                        }
-                    )
-                },
-                onAiTrackingSpeedCycle = {
-                    viewModel.setAiTrackingFollowSpeed(
-                        when (aiTrackingFollowSpeed) {
-                            AiTrackingFollowSpeed.SLOW -> AiTrackingFollowSpeed.NORMAL
-                            AiTrackingFollowSpeed.NORMAL -> AiTrackingFollowSpeed.FAST
-                            AiTrackingFollowSpeed.FAST -> AiTrackingFollowSpeed.SLOW
-                        }
-                    )
-                },
                 onTrackingPadPan = if (topOffZoomJoystickSupported) {
                     { deltaX, deltaY ->
-                        if (aiSubjectTrackingEnabled) viewModel.setAiSubjectTrackingEnabled(false)
                         val nextPanX = (joystickTopOffPanX + deltaX).coerceIn(-1f, 1f)
                         val nextPanY = (joystickTopOffPanY + deltaY).coerceIn(-1f, 1f)
                         joystickTopOffPanX = nextPanX
@@ -3384,13 +3344,6 @@ private fun Controls(
     onGalleryClick: () -> Unit,
     showTrackingPad: Boolean,
     showTopOffPanPresetControls: Boolean,
-    showAiTrackingControls: Boolean,
-    aiSubjectTrackingEnabled: Boolean,
-    aiSubjectTrackingMode: AiSubjectTrackingMode,
-    aiTrackingFollowSpeed: AiTrackingFollowSpeed,
-    onAiTrackingToggle: () -> Unit,
-    onAiTrackingModeCycle: () -> Unit,
-    onAiTrackingSpeedCycle: () -> Unit,
     onTrackingPadPan: (Float, Float) -> Unit,
     onGyroPanUpdate: (Float, Float, Float) -> Unit,
     sideControlInset: Dp?,
@@ -3615,7 +3568,6 @@ private fun Controls(
                                         if (runningTopOffPanPreset != null) {
                                             runningTopOffPanPreset = null
                                         } else {
-                                            if (aiSubjectTrackingEnabled) onAiTrackingToggle()
                                             runningTopOffPanPreset = selectedTopOffPanPreset
                                         }
                                     },
@@ -3660,60 +3612,6 @@ private fun Controls(
                             onLongPress = { showTopOffPanPresetPicker = true },
                         )
 
-                        if (showAiTrackingControls) {
-                            Column(
-                                modifier = Modifier
-                                    .align(Alignment.CenterEnd)
-                                    .offset(y = (-88).dp)
-                                    .padding(end = 24.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Button(
-                                    onClick = {
-                                        if (!aiSubjectTrackingEnabled) runningTopOffPanPreset = null
-                                        onAiTrackingToggle()
-                                    },
-                                    modifier = Modifier.height(30.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (aiSubjectTrackingEnabled) {
-                                            AccentColor
-                                        } else {
-                                            Color.White.copy(alpha = 0.18f)
-                                        },
-                                        contentColor = Color.White,
-                                    ),
-                                ) {
-                                    Text(
-                                        text = if (aiSubjectTrackingEnabled) "AI ON" else "AI TRACK",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                }
-                                TextButton(
-                                    onClick = onAiTrackingModeCycle,
-                                    modifier = Modifier.height(26.dp),
-                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-                                ) {
-                                    Text(
-                                        text = aiSubjectTrackingMode.title,
-                                        color = Color.White.copy(alpha = 0.9f),
-                                        fontSize = 9.sp,
-                                    )
-                                }
-                                TextButton(
-                                    onClick = onAiTrackingSpeedCycle,
-                                    modifier = Modifier.height(26.dp),
-                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-                                ) {
-                                    Text(
-                                        text = "Follow · ${aiTrackingFollowSpeed.title}",
-                                        color = Color.White.copy(alpha = 0.9f),
-                                        fontSize = 9.sp,
-                                    )
-                                }
-                            }
-                        }
                         Column(
                             modifier = Modifier
                                 .align(Alignment.CenterEnd)

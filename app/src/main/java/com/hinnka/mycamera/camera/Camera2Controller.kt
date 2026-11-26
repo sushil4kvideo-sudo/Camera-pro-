@@ -378,28 +378,6 @@ class Camera2Controller(private val context: Context) {
     )
     val topOffZoomEnabledFlow: StateFlow<Boolean> = _topOffZoomEnabled.asStateFlow()
 
-    private val _aiSubjectTrackingEnabled = MutableStateFlow(
-        specialVideoPreferences.getBoolean("ai_subject_tracking_enabled", false)
-    )
-    val aiSubjectTrackingEnabledFlow: StateFlow<Boolean> = _aiSubjectTrackingEnabled.asStateFlow()
-    private val _aiSubjectTrackingMode = MutableStateFlow(
-        runCatching {
-            AiSubjectTrackingMode.valueOf(
-                specialVideoPreferences.getString("ai_subject_tracking_mode", AiSubjectTrackingMode.HUMAN.name)
-                    ?: AiSubjectTrackingMode.HUMAN.name
-            )
-        }.getOrDefault(AiSubjectTrackingMode.HUMAN)
-    )
-    val aiSubjectTrackingModeFlow: StateFlow<AiSubjectTrackingMode> = _aiSubjectTrackingMode.asStateFlow()
-    private val _aiTrackingFollowSpeed = MutableStateFlow(
-        runCatching {
-            AiTrackingFollowSpeed.valueOf(
-                specialVideoPreferences.getString("ai_tracking_follow_speed", AiTrackingFollowSpeed.NORMAL.name)
-                    ?: AiTrackingFollowSpeed.NORMAL.name
-            )
-        }.getOrDefault(AiTrackingFollowSpeed.NORMAL)
-    )
-    val aiTrackingFollowSpeedFlow: StateFlow<AiTrackingFollowSpeed> = _aiTrackingFollowSpeed.asStateFlow()
     private val _topOffZoomFactor = MutableStateFlow(
         specialVideoPreferences.getFloat("top_off_zoom_factor", 2f).coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
     )
@@ -10610,67 +10588,6 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
-    fun setAiSubjectTrackingEnabled(enabled: Boolean) {
-        _aiSubjectTrackingEnabled.value = enabled && _topOffZoomEnabled.value
-        specialVideoPreferences.edit()
-            .putBoolean("ai_subject_tracking_enabled", _aiSubjectTrackingEnabled.value)
-            .apply()
-        if (!_aiSubjectTrackingEnabled.value) finishTopOffAiTracking()
-    }
-
-    fun setAiSubjectTrackingMode(mode: AiSubjectTrackingMode) {
-        _aiSubjectTrackingMode.value = mode
-        specialVideoPreferences.edit().putString("ai_subject_tracking_mode", mode.name).apply()
-    }
-
-    fun setAiTrackingFollowSpeed(speed: AiTrackingFollowSpeed) {
-        _aiTrackingFollowSpeed.value = speed
-        specialVideoPreferences.edit().putString("ai_tracking_follow_speed", speed.name).apply()
-    }
-
-    /**
-     * AI pan updates share the Top-Off preview crop and the live encoder crop.
-     * They are deliberately separate from the manual joystick and gyro callbacks:
-     * neither preset controller is re-anchored or changed by AI tracking.
-     */
-    fun setTopOffAiTrackingPan(panX: Float, panY: Float) {
-        val current = _state.value
-        if (
-            !_aiSubjectTrackingEnabled.value ||
-            !_topOffZoomEnabled.value ||
-            current.captureMode != CaptureMode.VIDEO ||
-            spatialVideoEnabled ||
-            dualCaptureEnabled
-        ) return
-
-        val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        val zoom = (
-            _topOffZoomLockedRatio.value.takeIf { it.isFinite() && it >= 1f }
-                ?: (current.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value)
-            ).coerceIn(1f, 20f)
-        if (zoom <= 1.001f) return
-
-        _topOffZoomPanX.value = safePanX
-        _topOffZoomPanY.value = safePanY
-        _topOffZoomRollDegrees.value = 0f
-
-        // The preview GL renderer observes the StateFlows; update the encoder directly
-        // so subject tracking remains active while a normal video is being recorded.
-        if (videoRecorder.isRecording()) {
-            videoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, 0f)
-        }
-        _topOffPanLatencyMs.value = 0f
-    }
-
-    fun finishTopOffAiTracking() {
-        specialVideoPreferences.edit()
-            .putFloat("top_off_zoom_pan_x", _topOffZoomPanX.value)
-            .putFloat("top_off_zoom_pan_y", _topOffZoomPanY.value)
-            .putFloat("top_off_zoom_roll_degrees", 0f)
-            .apply()
-    }
-
     fun setTopOffZoomEnabled(enabled: Boolean) {
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
@@ -10690,9 +10607,6 @@ class Camera2Controller(private val context: Context) {
         if (enabled && !isTopOffZoomAvailable()) {
             PLog.w("TopOffZoom", "ENABLE rejected: feature unavailable for current camera/mode")
             return
-        }
-        if (!enabled) {
-            setAiSubjectTrackingEnabled(false)
         }
         if (enabled) {
             updateTopOffZoomLockedRatio(

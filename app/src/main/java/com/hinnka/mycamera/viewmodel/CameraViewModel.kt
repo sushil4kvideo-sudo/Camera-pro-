@@ -63,7 +63,6 @@ import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 import com.hinnka.mycamera.preview.PreviewEyeFocusProcessor
-import com.hinnka.mycamera.preview.PreviewAiSubjectTrackingProcessor
 import com.hinnka.mycamera.processor.CaptureProcessingQueue
 import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
@@ -610,10 +609,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val oppoPhotoSettingsRepository = OppoPhotoSettingsRepository(application)
     val oppoPhotoSettings: StateFlow<OppoPhotoSettings> = oppoPhotoSettingsRepository.settings
     private val previewEyeFocusProcessor = PreviewEyeFocusProcessor(application)
-    private val previewAiSubjectTrackingProcessor = PreviewAiSubjectTrackingProcessor(application)
-    private val aiSubjectTrackingPanController = AiSubjectTrackingPanController()
-    private val _aiSubjectTrackingTarget = MutableStateFlow<AiSubjectTrackingTarget?>(null)
-    val aiSubjectTrackingTarget: StateFlow<AiSubjectTrackingTarget?> = _aiSubjectTrackingTarget.asStateFlow()
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
     val isPurchased = billingManager.isPurchased
@@ -2030,11 +2025,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var glSurfaceView by mutableStateOf<CameraGLSurfaceView?>(null)
     var isEyeFocusBusy by mutableStateOf(false)
         private set
-    private var eyeFocusInferenceBusy = false
-    private var aiSubjectTrackingInferenceBusy = false
     var isEyeFocusRuntimeAvailable by mutableStateOf(true)
-        private set
-    var isAiSubjectTrackingRuntimeAvailable by mutableStateOf(true)
         private set
     private var lastEyeFocusTriggerPoint: Pair<Float, Float>? = null
     private var lastEyeFocusTriggerElapsedMs = 0L
@@ -2094,36 +2085,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         previewEyeFocusProcessor.onBusyStateChanged = { busy ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
-                eyeFocusInferenceBusy = busy
-                updatePreviewInferenceBusyState()
+                isEyeFocusBusy = busy
+                glSurfaceView?.setEyeFocusBusy(busy)
             }
-        }
-        previewAiSubjectTrackingProcessor.onBusyStateChanged = { busy ->
-            viewModelScope.launch(Dispatchers.Main.immediate) {
-                aiSubjectTrackingInferenceBusy = busy
-                updatePreviewInferenceBusyState()
-            }
-        }
-        previewAiSubjectTrackingProcessor.onFrameProcessed = { timing ->
-            viewModelScope.launch(Dispatchers.Main.immediate) {
-                glSurfaceView?.updateEyeFocusTiming(timing)
-            }
-        }
-        previewAiSubjectTrackingProcessor.onTargetUpdated = { target ->
-            viewModelScope.launch(Dispatchers.Main.immediate) {
-                _aiSubjectTrackingTarget.value = target
-                if (target?.isFresh == true) handleAiSubjectTrackingTarget(target)
-            }
-        }
-        previewAiSubjectTrackingProcessor.onInitializationError = { error ->
-            viewModelScope.launch(Dispatchers.Main.immediate) {
-                isAiSubjectTrackingRuntimeAvailable = false
-                cameraController.setAiSubjectTrackingEnabled(false)
-                PLog.e(TAG, "AI subject tracking is unavailable", error)
-            }
-        }
-        previewAiSubjectTrackingProcessor.onError = { error ->
-            PLog.e(TAG, "AI subject tracking inference failed", error)
         }
         previewEyeFocusProcessor.onFrameProcessed = { timing ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -2166,45 +2130,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         previewEyeFocusProcessor.onError = { error ->
             PLog.e(TAG, "Human eye autofocus inference failed", error)
-        }
-        viewModelScope.launch {
-            aiSubjectTrackingEnabled.collect { enabled ->
-                if (enabled && isAiSubjectTrackingRuntimeAvailable) {
-                    previewAiSubjectTrackingProcessor.setMode(aiSubjectTrackingMode.value)
-                    aiSubjectTrackingPanController.reset(
-                        cameraController.topOffZoomPanXFlow.value,
-                        cameraController.topOffZoomPanYFlow.value,
-                    )
-                } else {
-                    previewAiSubjectTrackingProcessor.resetTracking()
-                    _aiSubjectTrackingTarget.value = null
-                    aiSubjectTrackingPanController.reset(
-                        cameraController.topOffZoomPanXFlow.value,
-                        cameraController.topOffZoomPanYFlow.value,
-                    )
-                }
-            }
-        }
-        viewModelScope.launch {
-            aiSubjectTrackingMode.collect { mode ->
-                previewAiSubjectTrackingProcessor.setMode(mode)
-                aiSubjectTrackingPanController.reset(
-                    cameraController.topOffZoomPanXFlow.value,
-                    cameraController.topOffZoomPanYFlow.value,
-                )
-            }
-        }
-        // Do not initialize MediaPipe while the Activity is still starting.
-        // Wait until the first camera preview is active; an AI model startup problem
-        // must never hold up or prevent the camera from opening.
-        viewModelScope.launch {
-            combine(cameraController.state, aiSubjectTrackingEnabled) { cameraState, enabled ->
-                enabled && cameraState.isPreviewActive
-            }.distinctUntilChanged().collect { shouldPrewarm ->
-                if (shouldPrewarm && isAiSubjectTrackingRuntimeAvailable) {
-                    previewAiSubjectTrackingProcessor.prewarm()
-                }
-            }
         }
         viewModelScope.launch {
             eyeFocusEnabled.collect { enabled ->
@@ -3666,9 +3591,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val topOffShowLatency = cameraController.topOffShowLatencyFlow
     val topOffPanLatencyMs = cameraController.topOffPanLatencyMsFlow
     val topOffPanPresets = cameraController.topOffPanPresetsFlow
-    val aiSubjectTrackingEnabled = cameraController.aiSubjectTrackingEnabledFlow
-    val aiSubjectTrackingMode = cameraController.aiSubjectTrackingModeFlow
-    val aiTrackingFollowSpeed = cameraController.aiTrackingFollowSpeedFlow
     val normalVideoUltraWideInstantSwitchActive =
         cameraController.normalVideoUltraWideInstantSwitchActiveFlow
     val spatialVideoPreviewStreamSize = cameraController.spatialVideoPreviewStreamSize
@@ -5321,111 +5243,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             !cameraState.isHyperfocalFocusEnabled &&
             !cameraState.isCapturing &&
             (cameraState.focusPoint == null || cameraState.focusPointSource == FocusPointSource.EYE)
-        val acceptsAiTracking = aiSubjectTrackingEnabled.value &&
-            isAiSubjectTrackingRuntimeAvailable &&
-            cameraState.captureMode == CaptureMode.VIDEO &&
-            cameraState.isPreviewActive &&
-            !cameraState.isCapturing &&
-            !cameraState.videoRecordingState.isProcessing &&
-            cameraController.isTopOffZoomAvailable() &&
-            cameraController.topOffZoomEnabledFlow.value
-
-        var acceptedAnyProcessor = false
-        if (acceptsAiTracking) {
-            val trackingBitmap = runCatching {
-                frame.bitmap.copy(Bitmap.Config.ARGB_8888, false)
-            }.getOrNull()
-            if (trackingBitmap != null) {
-                acceptedAnyProcessor = previewAiSubjectTrackingProcessor.processFrame(
-                    EyeFocusPreviewFrame(
-                        bitmap = trackingBitmap,
-                        sampleStartedAtNanos = frame.sampleStartedAtNanos,
-                        captureDurationNanos = frame.captureDurationNanos,
-                    )
-                ) || acceptedAnyProcessor
-            }
+        if (!acceptsEyeFocus && !acceptsPortraitMask) {
+            frame.bitmap.recycle()
+            completeEyeFocusInput()
+            return
         }
 
-        if (acceptsEyeFocus || acceptsPortraitMask) {
-            val accepted = previewEyeFocusProcessor.processFrame(
+        if (
+            !previewEyeFocusProcessor.processFrame(
                 frame = frame,
                 detectEyeTarget = acceptsEyeFocus,
                 createFaceMask = acceptsPortraitMask,
             )
-            acceptedAnyProcessor = accepted || acceptedAnyProcessor
-            if (!accepted && !frame.bitmap.isRecycled) frame.bitmap.recycle()
-        } else if (!frame.bitmap.isRecycled) {
-            frame.bitmap.recycle()
-        }
-
-        // LutRenderer gates the next preview sample until every accepted inference finishes.
-        if (!acceptedAnyProcessor) completeEyeFocusInput()
-    }
-
-    private fun handleAiSubjectTrackingTarget(target: AiSubjectTrackingTarget) {
-        if (
-            !aiSubjectTrackingEnabled.value ||
-            !isAiSubjectTrackingRuntimeAvailable ||
-            !cameraController.topOffZoomEnabledFlow.value ||
-            state.value.captureMode != CaptureMode.VIDEO ||
-            !state.value.isPreviewActive
-        ) return
-
-        val lockedZoom = cameraController.topOffZoomLockedRatioFlow.value.takeIf {
-            it.isFinite() && it > 1.001f
-        } ?: (state.value.zoomRatio.coerceAtLeast(1f) *
-            cameraController.topOffZoomFactorFlow.value).coerceAtLeast(1f)
-        val correction = aiSubjectTrackingPanController.update(
-            target = target,
-            zoomRatio = lockedZoom,
-            followSpeed = aiTrackingFollowSpeed.value,
-        ) ?: return
-        cameraController.setTopOffAiTrackingPan(correction.panX, correction.panY)
-    }
-
-    fun selectAiSubjectTrackingTarget(normalizedX: Float, normalizedY: Float): Boolean =
-        previewAiSubjectTrackingProcessor.selectTargetAt(normalizedX, normalizedY)
-
-    fun setAiSubjectTrackingEnabled(enabled: Boolean) {
-        if (
-            enabled &&
-            (!isAiSubjectTrackingRuntimeAvailable ||
-                !cameraController.topOffZoomEnabledFlow.value ||
-                !cameraController.isTopOffZoomAvailable())
         ) {
-            PLog.w(TAG, "AI tracking could not start: enable an available Top-Off Zoom crop first")
-            return
+            frame.bitmap.recycle()
+            completeEyeFocusInput()
         }
-        cameraController.setAiSubjectTrackingEnabled(enabled)
-        if (!enabled) {
-            previewAiSubjectTrackingProcessor.resetTracking()
-            _aiSubjectTrackingTarget.value = null
-            cameraController.finishTopOffAiTracking()
-        }
-    }
-
-    fun setAiSubjectTrackingMode(mode: AiSubjectTrackingMode) {
-        cameraController.setAiSubjectTrackingMode(mode)
-        previewAiSubjectTrackingProcessor.setMode(mode)
-        _aiSubjectTrackingTarget.value = null
-        aiSubjectTrackingPanController.reset(
-            cameraController.topOffZoomPanXFlow.value,
-            cameraController.topOffZoomPanYFlow.value,
-        )
-    }
-
-    fun setAiTrackingFollowSpeed(speed: AiTrackingFollowSpeed) {
-        cameraController.setAiTrackingFollowSpeed(speed)
-        aiSubjectTrackingPanController.reset(
-            cameraController.topOffZoomPanXFlow.value,
-            cameraController.topOffZoomPanYFlow.value,
-        )
-    }
-
-    private fun updatePreviewInferenceBusyState() {
-        val busy = eyeFocusInferenceBusy || aiSubjectTrackingInferenceBusy
-        isEyeFocusBusy = busy
-        glSurfaceView?.setEyeFocusBusy(busy)
     }
 
     private fun handleEyeFocusTarget(target: PreviewEyeFocusProcessor.EyeTarget) {
@@ -5470,9 +5303,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun completeEyeFocusInput() {
-        eyeFocusInferenceBusy = false
-        aiSubjectTrackingInferenceBusy = false
-        updatePreviewInferenceBusyState()
+        isEyeFocusBusy = false
+        glSurfaceView?.setEyeFocusBusy(false)
     }
 
     private fun resetEyeFocusTracking(cancelCameraFocus: Boolean, reason: String) {
@@ -7829,7 +7661,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraReopenJob?.cancel()
         cameraErrorRecoveryJob?.cancel()
         previewEyeFocusProcessor.close()
-        previewAiSubjectTrackingProcessor.close()
         cameraController.release()
         contentRepository.lutManager.clearCache()
         contentRepository.frameManager.clearCache()
