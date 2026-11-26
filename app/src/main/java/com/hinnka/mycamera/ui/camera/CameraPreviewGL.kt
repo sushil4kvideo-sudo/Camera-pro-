@@ -4,6 +4,7 @@ import android.graphics.SurfaceTexture
 import android.os.SystemClock
 import android.util.Size
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import com.hinnka.mycamera.utils.PLog
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -12,6 +13,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
@@ -24,6 +28,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.AiSubjectTrackingTarget
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.raw.RawEnginePreviewPlan
 import kotlinx.coroutines.flow.StateFlow
@@ -84,6 +89,7 @@ fun CameraPreviewGL(
     isEyeFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     onPreviewBoundsChanged: (Rect) -> Unit = {},
+    subjectTrackingTarget: AiSubjectTrackingTarget? = null,
     isAutoFocus: Boolean = true,
     focusPeakingEnabled: Boolean = true,
     stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
@@ -347,6 +353,42 @@ fun CameraPreviewGL(
                 focusSuccess = focusSuccess,
                 modifier = Modifier.fillMaxSize()
             )
+
+            subjectTrackingTarget?.let { target ->
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val left = target.left.coerceIn(0f, 1f) * size.width
+                    val top = target.top.coerceIn(0f, 1f) * size.height
+                    val right = target.right.coerceIn(0f, 1f) * size.width
+                    val bottom = target.bottom.coerceIn(0f, 1f) * size.height
+                    val boxWidth = right - left
+                    val boxHeight = bottom - top
+                    if (boxWidth > 1f && boxHeight > 1f) {
+                        val alpha = if (target.isFresh) 0.96f else 0.42f
+                        val strokeWidth = 2.dp.toPx()
+                        val cornerLength = minOf(18.dp.toPx(), boxWidth * 0.28f, boxHeight * 0.28f)
+                        val color = Color(0xFF62E6A4).copy(alpha = alpha)
+                        drawRect(
+                            color = color,
+                            topLeft = Offset(left, top),
+                            size = Size(boxWidth, boxHeight),
+                            style = Stroke(width = strokeWidth),
+                        )
+                        // Brighter corner brackets keep the subject box visible on busy scenes.
+                        listOf(
+                            Offset(left, top) to Offset(left + cornerLength, top),
+                            Offset(left, top) to Offset(left, top + cornerLength),
+                            Offset(right, top) to Offset(right - cornerLength, top),
+                            Offset(right, top) to Offset(right, top + cornerLength),
+                            Offset(left, bottom) to Offset(left + cornerLength, bottom),
+                            Offset(left, bottom) to Offset(left, bottom - cornerLength),
+                            Offset(right, bottom) to Offset(right - cornerLength, bottom),
+                            Offset(right, bottom) to Offset(right, bottom - cornerLength),
+                        ).forEach { (start, end) ->
+                            drawLine(color = color, start = start, end = end, strokeWidth = strokeWidth * 1.8f)
+                        }
+                    }
+                }
+            }
         }
     }
 }
