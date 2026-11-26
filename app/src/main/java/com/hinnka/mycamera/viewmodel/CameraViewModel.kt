@@ -2132,6 +2132,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         previewEyeFocusProcessor.onInitializationError = { error ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 isEyeFocusRuntimeAvailable = false
+                aiSubjectTrackingEnabled = false
+                aiSubjectTrackingTarget = null
+                aiSubjectTrackingController.reset()
                 resetEyeFocusTracking(cancelCameraFocus = true, reason = "initialization_failed")
                 // Do not erase the user's preference after a transient model/package error.
                 // The detector is retried on the next app launch when its runtime is recreated.
