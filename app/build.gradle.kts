@@ -7,6 +7,75 @@ plugins {
     alias(libs.plugins.secrets)
 }
 
+
+/**
+ * The preview eye-focus detector loads this model from Android assets at runtime.
+ * Keep it generated under build/ so the APK always includes the real model without
+ * requiring a network connection on the device. The pinned SHA-256 prevents silently
+ * packaging an incompatible or changed upstream model.
+ */
+val eyeFocusAssetDirectory = layout.buildDirectory.dir("generated/eyeFocusAssets")
+val eyeFocusModelFile = eyeFocusAssetDirectory.map { it.file("blaze_face_full_range.tflite") }
+val eyeFocusModelUrl =
+    "https://huggingface.co/litert-community/MediaPipe-FaceDetector-BlazeFace-Full-Range/resolve/main/blaze_face_full_range.tflite"
+val eyeFocusModelSha256 = "3698b18f063835bc609069ef052228fbe86d9c9a6dc8dcb7c7c2d69aed2b181b"
+
+val downloadEyeFocusModel by tasks.registering {
+    inputs.property("modelUrl", eyeFocusModelUrl)
+    inputs.property("modelSha256", eyeFocusModelSha256)
+    outputs.file(eyeFocusModelFile)
+
+    doLast {
+        val outputFile = eyeFocusModelFile.get().asFile
+
+        fun sha256(file: java.io.File): String {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(16 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+            return digest.digest().joinToString("") {
+                (it.toInt() and 0xff).toString(16).padStart(2, '0')
+            }
+        }
+
+        if (outputFile.isFile && sha256(outputFile) == eyeFocusModelSha256) {
+            return@doLast
+        }
+
+        outputFile.parentFile.mkdirs()
+        val tempFile = java.io.File(outputFile.parentFile, "${outputFile.name}.download")
+        val connection = java.net.URL(eyeFocusModelUrl).openConnection()
+            as java.net.HttpURLConnection
+        try {
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 30_000
+            connection.readTimeout = 120_000
+            connection.setRequestProperty("User-Agent", "Photon.camera-Android-build")
+            connection.inputStream.use { input ->
+                tempFile.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val actualSha256 = sha256(tempFile)
+            if (actualSha256 != eyeFocusModelSha256) {
+                throw GradleException(
+                    "Eye-focus model checksum mismatch: expected $eyeFocusModelSha256, got $actualSha256"
+                )
+            }
+            if (!tempFile.renameTo(outputFile)) {
+                tempFile.copyTo(outputFile, overwrite = true)
+            }
+        } finally {
+            connection.disconnect()
+            tempFile.delete()
+        }
+    }
+}
+
 fun String.toBuildConfigString(): String =
     "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
@@ -127,6 +196,15 @@ android {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }
+    }
+}
+
+// Package the generated MediaPipe model as a normal Android asset.
+android.sourceSets.getByName("main").assets.srcDir(eyeFocusAssetDirectory)
+
+tasks.configureEach {
+    if (name.startsWith("merge") && name.endsWith("Assets")) {
+        dependsOn(downloadEyeFocusModel)
     }
 }
 
