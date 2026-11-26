@@ -223,6 +223,7 @@ class GyroPanPresetController(
         if (abs(value) < DEAD_ZONE_RADIANS) 0f else value
 
     private companion object {
+        const val DEG_TO_RAD = 0.017453292519943295f
         const val MAX_PAN_ANGLE_DEGREES = 18f
         const val MAX_HORIZON_CORRECTION_DEGREES = 15f
         const val MAX_ANTI_SHAKE_ROLL = 6f
@@ -231,6 +232,5 @@ class GyroPanPresetController(
         const val DEAD_ZONE_RADIANS = 0.15f * DEG_TO_RAD
         const val UPDATE_EPSILON = 0.0008f
         const val ROLL_UPDATE_EPSILON = 0.035f
-        const val DEG_TO_RAD = 0.017453292519943295f
     }
 }
