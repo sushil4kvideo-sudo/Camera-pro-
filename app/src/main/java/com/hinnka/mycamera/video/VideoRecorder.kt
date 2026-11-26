@@ -697,6 +697,20 @@ class VideoRecorder(
         PLog.d(TAG, "Video recording resumed")
     }
 
+    fun updateCameraInputCrop(zoomRatio: Float, panX: Float, panY: Float) {
+        if (!isRecording || stopRequested) return
+        requestedCameraInputZoomRatio = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
+        requestedCameraInputPanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        requestedCameraInputPanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val safeZoom = requestedCameraInputZoomRatio
+        val safePanX = requestedCameraInputPanX
+        val safePanY = requestedCameraInputPanY
+        scope.launch(renderDispatcher) {
+            if (!isRecording || stopRequested) return@launch
+            renderer?.updateCameraInputCrop(safeZoom, safePanX, safePanY)
+        }
+    }
+
     fun updateDualCaptureLayout(layout: DualCaptureLayout) {
         if (!isRecording || stopRequested) return
         requestedDualCaptureLayout = layout
