@@ -56,6 +56,42 @@ class ZoomCropGeometryTest {
     }
 
     @Test
+    fun displayPanTranslationMovesImageOppositeToSelectedCropDirection() {
+        val right = ZoomCropGeometry.displayPanTranslationFraction(
+            zoomRatio = 4f,
+            panX = 1f,
+            panY = 0f,
+        )
+        val left = ZoomCropGeometry.displayPanTranslationFraction(
+            zoomRatio = 4f,
+            panX = -1f,
+            panY = 0f,
+        )
+        val down = ZoomCropGeometry.displayPanTranslationFraction(
+            zoomRatio = 4f,
+            panX = 0f,
+            panY = 1f,
+        )
+
+        assertEquals(-1.5f, right.xFraction, 0.0001f)
+        assertEquals(0f, right.yFraction, 0.0001f)
+        assertEquals(1.5f, left.xFraction, 0.0001f)
+        assertEquals(-1.5f, down.yFraction, 0.0001f)
+    }
+
+    @Test
+    fun displayPanTranslationIsZeroAtNativeMagnification() {
+        val translation = ZoomCropGeometry.displayPanTranslationFraction(
+            zoomRatio = 1f,
+            panX = 1f,
+            panY = -1f,
+        )
+
+        assertEquals(0f, translation.xFraction, 0.0001f)
+        assertEquals(0f, translation.yFraction, 0.0001f)
+    }
+
+    @Test
     fun portraitSensorRatioAndCamera2AspectAreConvertedForNinetyDegreeSensor() {
         assertEquals(
             3f / 4f,

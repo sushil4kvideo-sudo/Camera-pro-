@@ -10404,7 +10404,13 @@ class Camera2Controller(private val context: Context) {
             return false
         }
         val cameraInfo = currentState.getCurrentCameraInfo() ?: return false
-        if (shouldUseLogicalMultiCameraZoom(currentState, cameraInfo)) return false
+        val normalVideoUltraWideSelected =
+            normalVideoUltraWideInstantSwitchActive &&
+                isNormalVideoUltraWideLens(cameraInfo)
+        if (
+            shouldUseLogicalMultiCameraZoom(currentState, cameraInfo) &&
+            !normalVideoUltraWideSelected
+        ) return false
         val activeArray = cameraInfo.activeArraySize ?: return false
         return activeArray.width() > 0 && activeArray.height() > 0
     }
@@ -12273,14 +12279,26 @@ class Camera2Controller(private val context: Context) {
             )
         }
 
+        val recordingCameraInfo = _state.value.getCurrentCameraInfo()
+        val normalVideoUltraWideRecordingInput =
+            normalVideoUltraWideInstantSwitchActive &&
+                isNormalVideoUltraWideLens(recordingCameraInfo)
+        val logicalMultiCameraRecordingInput =
+            shouldUseLogicalMultiCameraZoom(_state.value, recordingCameraInfo)
         val topOffSoftwareCropActiveForRecording =
             _topOffZoomEnabled.value &&
                 _state.value.captureMode == CaptureMode.VIDEO &&
-                !shouldUseLogicalMultiCameraZoom(_state.value, _state.value.getCurrentCameraInfo()) &&
+                (!logicalMultiCameraRecordingInput || normalVideoUltraWideRecordingInput) &&
                 !spatialVideoEnabled && !dualCaptureEnabled &&
-                _state.value.zoomRatio >= 1f
+                (_state.value.zoomRatio >= 1f || normalVideoUltraWideRecordingInput)
         val topOffSoftwareZoomForRecording = if (topOffSoftwareCropActiveForRecording) {
-            resolveTopOffZoomLockedRatio(_state.value.zoomRatio)
+            if (normalVideoUltraWideRecordingInput) {
+                // The ultra-wide optical baseline remains selected in the switchable input.
+                // Apply only the Top Off factor on that stream, not the main lens' locked ratio.
+                _topOffZoomFactor.value.coerceIn(1f, 4f)
+            } else {
+                resolveTopOffZoomLockedRatio(_state.value.zoomRatio)
+            }
         } else {
             1f
         }

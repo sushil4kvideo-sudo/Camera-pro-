@@ -401,22 +401,39 @@ fun CameraScreen(
         topOffZoomPanX,
         topOffZoomPanY,
         state.zoomRatio,
+        state.currentCameraId,
         state.captureMode,
+        normalVideoUltraWideInstantSwitchActive,
         spatialVideoEnabled,
         dualCaptureEnabled,
     ) {
         val glView = cameraGLSurfaceView ?: return@LaunchedEffect
+        val selectedCameraInfo = state.getCurrentCameraInfo()
+        val isSelectedUltraWide = selectedCameraInfo?.let { camera ->
+            camera.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                camera.intrinsicZoomRatio.isFinite() &&
+                camera.intrinsicZoomRatio in 0.2f..0.85f
+        } == true
+        val normalUltraWideTextureIsVisible =
+            normalVideoUltraWideInstantSwitchActive && isSelectedUltraWide
         val active = topOffZoomEnabled &&
             state.captureMode == CaptureMode.VIDEO &&
-            state.zoomRatio >= 1f &&
+            (state.zoomRatio >= 1f || isSelectedUltraWide) &&
             !spatialVideoEnabled && !dualCaptureEnabled
-        val lockedZoom = topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
-            ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
+        val lockedZoom = if (isSelectedUltraWide) {
+            topOffZoomFactor.coerceIn(1f, 4f)
+        } else {
+            topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
+                ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
+        }
+        // Instant-switch ultra-wide is rendered by the dedicated TextureView overlay.
+        // Do not crop the hidden primary GL stream while that overlay is selected.
+        val cropMainGlPreview = active && !normalUltraWideTextureIsVisible
         glView.setTopOffZoomCrop(
-            enabled = active,
-            zoomRatio = if (active) lockedZoom else 1f,
-            panX = if (active) topOffZoomPanX else 0f,
-            panY = if (active) topOffZoomPanY else 0f,
+            enabled = cropMainGlPreview,
+            zoomRatio = if (cropMainGlPreview) lockedZoom else 1f,
+            panX = if (cropMainGlPreview) topOffZoomPanX else 0f,
+            panY = if (cropMainGlPreview) topOffZoomPanY else 0f,
         )
     }
 
@@ -1256,6 +1273,7 @@ fun CameraScreen(
         val topOffZoomAvailable = remember(
             state.currentCameraId,
             state.captureMode,
+            normalVideoUltraWideInstantSwitchActive,
             spatialVideoEnabled,
             dualCaptureEnabled,
         ) {
@@ -1264,7 +1282,6 @@ fun CameraScreen(
         val topOffZoomJoystickSupported = isVideoMode &&
             topOffZoomEnabled &&
             topOffZoomAvailable &&
-            state.zoomRatio >= 1f &&
             !spatialVideoEnabled &&
             !dualCaptureEnabled
         val zoomJoystickSupported =
@@ -1896,6 +1913,22 @@ fun CameraScreen(
                             if (normalVideoUltraWideHandoffPreviewActive &&
                                 normalVideoUltraWidePreviewVisible
                             ) 1f else 0f
+                        val applyTopOffCropToUltraWideTexture =
+                            normalVideoUltraWideHandoffPreviewActive &&
+                                showUltraWideFullScreen &&
+                                topOffZoomEnabled &&
+                                topOffZoomAvailable
+                        val ultraWideTopOffCropScale = if (applyTopOffCropToUltraWideTexture) {
+                            topOffZoomFactor.coerceIn(1f, 4f)
+                        } else {
+                            1f
+                        }
+                        val ultraWideTopOffPanTranslation =
+                            ZoomCropGeometry.displayPanTranslationFraction(
+                                zoomRatio = ultraWideTopOffCropScale,
+                                panX = topOffZoomPanX,
+                                panY = topOffZoomPanY,
+                            )
                         val normalVideoUltraWidePreviewScaleAnimated by animateFloatAsState(
                             targetValue = normalVideoUltraWidePreviewScaleTarget
                                 .takeIf { it.isFinite() && it > 0f }
@@ -1934,13 +1967,22 @@ fun CameraScreen(
                         Box(
                             modifier = previewModifier
                                 .graphicsLayer {
-                                    if (normalVideoUltraWideHandoffPreviewActive) {
-                                        alpha = normalVideoUltraWidePreviewAlpha
-                                        scaleX = normalVideoUltraWidePreviewScale
-                                        scaleY = normalVideoUltraWidePreviewScale
+                                    val handoffScale = if (normalVideoUltraWideHandoffPreviewActive) {
+                                        normalVideoUltraWidePreviewScale
                                     } else {
-                                        alpha = if (showUltraWideFullScreen || showUltraWideInset) 1f else 0f
+                                        1f
                                     }
+                                    alpha = if (normalVideoUltraWideHandoffPreviewActive) {
+                                        normalVideoUltraWidePreviewAlpha
+                                    } else {
+                                        if (showUltraWideFullScreen || showUltraWideInset) 1f else 0f
+                                    }
+                                    scaleX = handoffScale * ultraWideTopOffCropScale
+                                    scaleY = handoffScale * ultraWideTopOffCropScale
+                                    translationX = ultraWideTopOffPanTranslation.xFraction *
+                                        size.width * handoffScale
+                                    translationY = ultraWideTopOffPanTranslation.yFraction *
+                                        size.height * handoffScale
                                 }
                                 .then(
                                     if (showUltraWideInset) Modifier

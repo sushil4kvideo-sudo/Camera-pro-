@@ -18,6 +18,12 @@ data class NormalizedZoomCropRect(
     val height: Float get() = bottom - top
 }
 
+/** Translation fractions for moving a zoomed preview while keeping its magnification fixed. */
+data class NormalizedZoomPanTranslation(
+    val xFraction: Float,
+    val yFraction: Float,
+)
+
 /**
  * Shared geometry for the movable crop editor and Camera2 SCALER_CROP_REGION.
  *
@@ -26,6 +32,26 @@ data class NormalizedZoomCropRect(
  * the equivalent ratio after accounting for SENSOR_ORIENTATION.
  */
 object ZoomCropGeometry {
+
+    /**
+     * Converts the selected sensor crop offset into a display-space translation.
+     * Positive pan moves the crop window right/down, so the image itself moves left/up.
+     * Fractions are relative to the unzoomed viewfinder dimensions.
+     */
+    fun displayPanTranslationFraction(
+        zoomRatio: Float,
+        panX: Float,
+        panY: Float,
+    ): NormalizedZoomPanTranslation {
+        val zoom = zoomRatio.takeIf { it.isFinite() }?.coerceAtLeast(1f) ?: 1f
+        val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val maxTravelFraction = (zoom - 1f) * 0.5f
+        return NormalizedZoomPanTranslation(
+            xFraction = -safePanX * maxTravelFraction,
+            yFraction = -safePanY * maxTravelFraction,
+        )
+    }
 
     fun calculate(
         sourceWidth: Float,
