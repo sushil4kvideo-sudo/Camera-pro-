@@ -2643,6 +2643,18 @@ fun CameraScreen(
                 },
                 showTrackingPad = canShowZoomJoystick,
                 showTopOffPanPresetControls = topOffZoomJoystickSupported,
+                showAiSubjectTrackingButton = isVideoMode && activePanel == ActivePanel.NONE,
+                aiSubjectTrackingEnabled = aiSubjectTrackingEnabled,
+                onAiSubjectTrackingToggle = {
+                    val requestedEnabled = !aiSubjectTrackingEnabled
+                    if (!viewModel.setAiSubjectTrackingEnabled(requestedEnabled)) {
+                        Toast.makeText(
+                            context,
+                            "AI Human Tracking needs a supported Normal Video camera. Enable it before recording.",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                },
                 onTrackingPadPan = if (topOffZoomJoystickSupported) {
                     { deltaX, deltaY ->
                         val nextPanX = (joystickTopOffPanX + deltaX).coerceIn(-1f, 1f)
@@ -2701,16 +2713,6 @@ fun CameraScreen(
                             AiSubjectTrackingOverlay(
                                 enabled = aiSubjectTrackingEnabled,
                                 target = aiSubjectTrackingTarget,
-                                onToggle = {
-                                    val requestedEnabled = !aiSubjectTrackingEnabled
-                                    if (!viewModel.setAiSubjectTrackingEnabled(requestedEnabled)) {
-                                        Toast.makeText(
-                                            context,
-                                            "AI Human Tracking needs a supported Normal Video camera. Enable it before recording.",
-                                            Toast.LENGTH_LONG,
-                                        ).show()
-                                    }
-                                },
                             )
                         }
                     }
@@ -3370,6 +3372,9 @@ private fun Controls(
     onGalleryClick: () -> Unit,
     showTrackingPad: Boolean,
     showTopOffPanPresetControls: Boolean,
+    showAiSubjectTrackingButton: Boolean,
+    aiSubjectTrackingEnabled: Boolean,
+    onAiSubjectTrackingToggle: () -> Unit,
     onTrackingPadPan: (Float, Float) -> Unit,
     onGyroPanUpdate: (Float, Float, Float) -> Unit,
     sideControlInset: Dp?,
@@ -3570,65 +3575,122 @@ private fun Controls(
                         },
                 )
 
-                if (showTrackingPad) {
-                    if (showTopOffPanPresetControls) {
-                        // Keep the pan-pad centered vertically on the shutter row.
-                        // The preset runner sits independently on the shutter's left side.
-                        // Keep Run/Stop available while recording; the controller updates
-                        // both the live preview crop and the recording encoder crop.
-                        // Mirror the joystick's 76.dp footprint and 24.dp edge inset.
-                        // This puts the Run button center exactly as far from the shutter
-                        // as the joystick center on the opposite side.
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.CenterStart)
-                                .padding(start = 24.dp)
-                                .size(76.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                IconButton(
-                                    onClick = {
-                                        if (runningTopOffPanPreset != null) {
-                                            runningTopOffPanPreset = null
-                                        } else {
-                                            runningTopOffPanPreset = selectedTopOffPanPreset
-                                        }
-                                    },
-                                    enabled = selectedTopOffPanPreset != null &&
-                                        !state.videoRecordingState.isProcessing,
-                                    modifier = Modifier
-                                        .size(42.dp)
-                                        .background(
-                                            Color.White.copy(alpha = 0.16f),
-                                            CircleShape,
-                                        ),
-                                ) {
-                                    Icon(
-                                        imageVector = if (runningTopOffPanPreset != null) {
-                                            Icons.Default.Close
-                                        } else {
-                                            Icons.Default.PlayArrow
-                                        },
-                                        contentDescription = if (runningTopOffPanPreset != null) {
-                                            "Stop pan preset"
-                                        } else {
-                                            "Run pan preset"
-                                        },
-                                        tint = Color.White,
-                                        modifier = Modifier.size(25.dp),
+                // Keep Run, AI tracking, and recording pause in one non-overlapping
+                // left-side control row. AI tracking uses an icon-only button.
+                if (showTopOffPanPresetControls || showAiSubjectTrackingButton ||
+                    state.videoRecordingState.isRecording
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        if (showTopOffPanPresetControls) {
+                            IconButton(
+                                onClick = {
+                                    if (runningTopOffPanPreset != null) {
+                                        runningTopOffPanPreset = null
+                                    } else {
+                                        runningTopOffPanPreset = selectedTopOffPanPreset
+                                    }
+                                },
+                                enabled = selectedTopOffPanPreset != null &&
+                                    !state.videoRecordingState.isProcessing,
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .background(
+                                        Color.White.copy(alpha = 0.16f),
+                                        CircleShape,
                                     )
-                                }
-                                Text(
-                                    text = if (runningTopOffPanPreset != null) "Stop" else "Run",
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Medium,
+                                    .border(
+                                        1.dp,
+                                        Color.White.copy(alpha = 0.55f),
+                                        CircleShape,
+                                    ),
+                            ) {
+                                Icon(
+                                    imageVector = if (runningTopOffPanPreset != null) {
+                                        Icons.Default.Close
+                                    } else {
+                                        Icons.Default.PlayArrow
+                                    },
+                                    contentDescription = if (runningTopOffPanPreset != null) {
+                                        "Stop pan preset"
+                                    } else {
+                                        "Run pan preset"
+                                    },
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp),
                                 )
                             }
                         }
+
+                        if (showAiSubjectTrackingButton) {
+                            IconButton(
+                                onClick = onAiSubjectTrackingToggle,
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .background(
+                                        if (aiSubjectTrackingEnabled) Color(0xDD145A3B)
+                                        else Color.White.copy(alpha = 0.16f),
+                                        CircleShape,
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (aiSubjectTrackingEnabled) Color(0xFF6EF0A7)
+                                        else Color.White.copy(alpha = 0.55f),
+                                        CircleShape,
+                                    ),
+                            ) {
+                                AiTrackingPersonIcon()
+                            }
+                        }
+
+                        if (state.videoRecordingState.isRecording) {
+                            IconButton(
+                                onClick = {
+                                    if (state.videoRecordingState.isPaused) {
+                                        viewModel.resumeVideoRecording()
+                                    } else {
+                                        viewModel.pauseVideoRecording()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(
+                                        Color.White.copy(alpha = 0.16f),
+                                        CircleShape,
+                                    )
+                                    .border(
+                                        1.dp,
+                                        Color.White.copy(alpha = 0.45f),
+                                        CircleShape,
+                                    )
+                                    .autoRotate(),
+                            ) {
+                                Icon(
+                                    imageVector = if (state.videoRecordingState.isPaused) {
+                                        Icons.Default.PlayArrow
+                                    } else {
+                                        AppIcons.Pause
+                                    },
+                                    contentDescription = if (state.videoRecordingState.isPaused) {
+                                        "Resume video recording"
+                                    } else {
+                                        "Pause video recording"
+                                    },
+                                    tint = Color.White,
+                                    modifier = Modifier.size(23.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (showTrackingPad) {
+                    if (showTopOffPanPresetControls) {
                         ZoomPanJoystick(
                             modifier = Modifier
                                 .align(Alignment.CenterEnd)
@@ -3720,29 +3782,6 @@ private fun Controls(
                     }
                 }
 
-                if (state.videoRecordingState.isRecording) {
-                    IconButton(
-                        onClick = {
-                            if (state.videoRecordingState.isPaused) {
-                                viewModel.resumeVideoRecording()
-                            } else {
-                                viewModel.pauseVideoRecording()
-                            }
-                        },
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .padding(start = 100.dp)
-                            .size(48.dp)
-                            .autoRotate()
-                    ) {
-                        Icon(
-                            imageVector = if (state.videoRecordingState.isPaused) Icons.Default.PlayArrow else AppIcons.Pause,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                }
             }
 
             Spacer(modifier = Modifier.height(CameraControlsLayoutDefaults.ModeSwitcherSpacing))
@@ -4549,69 +4588,62 @@ private fun TextureView.updateDualCaptureTextureTransform(
 private fun AiSubjectTrackingOverlay(
     enabled: Boolean,
     target: com.hinnka.mycamera.preview.PreviewEyeFocusProcessor.EyeTarget?,
-    onToggle: () -> Unit,
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (enabled && target != null) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val left = target.faceLeft.coerceIn(0f, 1f) * size.width
-                val top = target.faceTop.coerceIn(0f, 1f) * size.height
-                val right = target.faceRight.coerceIn(0f, 1f) * size.width
-                val bottom = target.faceBottom.coerceIn(0f, 1f) * size.height
-                if (right > left && bottom > top) {
-                    drawRoundRect(
-                        color = Color(0xFF55E69B),
-                        topLeft = Offset(left, top),
-                        size = ComposeSize(right - left, bottom - top),
-                        cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx()),
-                        style = Stroke(width = 2.5.dp.toPx()),
-                    )
-                    drawCircle(
-                        color = Color(0xFF55E69B),
-                        radius = 3.dp.toPx(),
-                        center = Offset((left + right) * 0.5f, (top + bottom) * 0.5f),
-                    )
-                }
+    if (enabled && target != null) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val left = target.faceLeft.coerceIn(0f, 1f) * size.width
+            val top = target.faceTop.coerceIn(0f, 1f) * size.height
+            val right = target.faceRight.coerceIn(0f, 1f) * size.width
+            val bottom = target.faceBottom.coerceIn(0f, 1f) * size.height
+            if (right > left && bottom > top) {
+                drawRoundRect(
+                    color = Color(0xFF55E69B),
+                    topLeft = Offset(left, top),
+                    size = ComposeSize(right - left, bottom - top),
+                    cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx()),
+                    style = Stroke(width = 2.5.dp.toPx()),
+                )
+                drawCircle(
+                    color = Color(0xFF55E69B),
+                    radius = 3.dp.toPx(),
+                    center = Offset((left + right) * 0.5f, (top + bottom) * 0.5f),
+                )
             }
         }
+    }
+}
 
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(12.dp)
-                .clickable(onClick = onToggle),
-            shape = RoundedCornerShape(50),
-            color = if (enabled) Color(0xDD145A3B) else Color(0xAA101010),
-            border = BorderStroke(
-                width = 1.dp,
-                color = if (enabled) Color(0xFF6EF0A7) else Color.White.copy(alpha = 0.55f),
-            ),
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 13.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .background(
-                            color = if (enabled) Color(0xFF70F2A7) else Color.White.copy(alpha = 0.75f),
-                            shape = CircleShape,
-                        ),
-                )
-                Text(
-                    text = when {
-                        !enabled -> "AI TRACK"
-                        target != null -> "AI TRACKING"
-                        else -> "AI SEARCHING"
-                    },
-                    color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.7.sp,
-                )
-            }
-        }
+@Composable
+private fun AiTrackingPersonIcon() {
+    Canvas(modifier = Modifier.size(25.dp)) {
+        val stroke = 2.dp.toPx()
+        val inset = 1.5.dp.toPx()
+        val corner = 5.dp.toPx()
+        val right = size.width - inset
+        val bottom = size.height - inset
+
+        // Four corner brackets around a person silhouette.
+        drawLine(Color.White, Offset(inset, inset + corner), Offset(inset, inset), stroke)
+        drawLine(Color.White, Offset(inset, inset), Offset(inset + corner, inset), stroke)
+        drawLine(Color.White, Offset(right - corner, inset), Offset(right, inset), stroke)
+        drawLine(Color.White, Offset(right, inset), Offset(right, inset + corner), stroke)
+        drawLine(Color.White, Offset(inset, bottom - corner), Offset(inset, bottom), stroke)
+        drawLine(Color.White, Offset(inset, bottom), Offset(inset + corner, bottom), stroke)
+        drawLine(Color.White, Offset(right - corner, bottom), Offset(right, bottom), stroke)
+        drawLine(Color.White, Offset(right, bottom), Offset(right, bottom - corner), stroke)
+
+        val centerX = size.width / 2f
+        drawCircle(
+            color = Color.White,
+            radius = 3.dp.toPx(),
+            center = Offset(centerX, size.height * 0.36f),
+        )
+        drawRoundRect(
+            color = Color.White,
+            topLeft = Offset(centerX - 7.dp.toPx(), size.height * 0.53f),
+            size = ComposeSize(14.dp.toPx(), 7.dp.toPx()),
+            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+            style = Stroke(width = stroke),
+        )
     }
 }
