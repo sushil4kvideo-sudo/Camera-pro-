@@ -40,8 +40,9 @@ class GyroPanPresetController(
 
     private val deviceRotation = FloatArray(9)
     private val referenceRotation = FloatArray(9)
-    private val inverseReferenceRotation = FloatArray(9)
-    private val relativeDeviceRotation = FloatArray(9)
+    private val referenceScreenRotation = FloatArray(9)
+    private val inverseReferenceScreenRotation = FloatArray(9)
+    private val relativeScreenRotation = FloatArray(9)
     private val screenRotation = FloatArray(9)
     private val orientationAngles = FloatArray(3)
 
@@ -125,21 +126,39 @@ class GyroPanPresetController(
                 return
             }
 
-            // Both matrices here are in the same, un-remapped device coordinate system.
-            multiply3x3(inverseReferenceRotation, deviceRotation, relativeDeviceRotation)
+            // Remap BOTH absolute orientations into the same display coordinate frame
+            // before taking their relative rotation. remapCoordinateSystem() changes the
+            // input basis; remapping only (reference^-1 * current) leaves the reference side
+            // in the old basis and can mix horizontal/vertical correction after screen rotation.
             val axes = screenAxes(rotationBucket)
             if (!SensorManager.remapCoordinateSystem(
-                    relativeDeviceRotation,
+                    deviceRotation,
                     axes.first,
                     axes.second,
                     screenRotation,
                 )
             ) {
-                PLog.w(TAG, "Could not remap gyro delta for display rotation=$rotationBucket")
+                PLog.w(TAG, "Could not remap current gyro orientation for display rotation=$rotationBucket")
                 return
             }
-            screenRotationBucket = rotationBucket
-            SensorManager.getOrientation(screenRotation, orientationAngles)
+            if (!SensorManager.remapCoordinateSystem(
+                    referenceRotation,
+                    axes.first,
+                    axes.second,
+                    referenceScreenRotation,
+                )
+            ) {
+                PLog.w(TAG, "Could not remap reference gyro orientation for display rotation=$rotationBucket")
+                return
+            }
+
+            transpose3x3(referenceScreenRotation, inverseReferenceScreenRotation)
+            multiply3x3(
+                inverseReferenceScreenRotation,
+                screenRotation,
+                relativeScreenRotation,
+            )
+            SensorManager.getOrientation(relativeScreenRotation, orientationAngles)
 
             val deltaSeconds = resolveDeltaSeconds(event.timestamp)
             val opticalRoll = deadZone(wrapRadians(orientationAngles[0]))
@@ -180,8 +199,9 @@ class GyroPanPresetController(
     }
 
     private fun setReference(rotation: FloatArray, rotationBucket: Int) {
+        // Keep the reference in the sensor's native device frame. Both the reference and
+        // current matrices are remapped into the same display frame for every sample.
         rotation.copyInto(referenceRotation)
-        transpose3x3(referenceRotation, inverseReferenceRotation)
         screenRotationBucket = rotationBucket
         hasReference = true
         resetFilters()
