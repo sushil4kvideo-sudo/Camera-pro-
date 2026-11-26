@@ -62,6 +62,8 @@ class RealtimeVideoRenderer(
     dualCapturePipWidthFraction: Float = 0.33f,
     private val encoderOrientationHintDegrees: Int = 0,
     private val cameraInputZoomRatio: Float = 1f,
+    private val cameraInputPanX: Float = 0f,
+    private val cameraInputPanY: Float = 0f,
     private val watermarkLabel: String? = null,
     private val switchableCameraInputSize: Size? = null,
     private val switchableCameraSensorOrientationDegrees: Int = 0,
@@ -469,7 +471,12 @@ class RealtimeVideoRenderer(
         if (timestampNs <= 0L) return null
         // Special Video's virtual telephoto is cropped from the live sensor frame here,
         // before it reaches the dedicated MediaCodec input surface (never after recording).
-        sourceCropRect = resolveRealtimeVideoZoomCropRect(sourceCropRect, cameraInputZoomRatio)
+        sourceCropRect = resolveRealtimeVideoZoomCropRect(
+            sourceCropRect,
+            cameraInputZoomRatio,
+            cameraInputPanX,
+            cameraInputPanY,
+        )
         val presentationTimeNs = mapPresentationTimeNs(timestampNs, useSwitchableCameraInput)
         if (presentationTimeNs <= 0L) return null
 
@@ -1643,19 +1650,35 @@ class RealtimeVideoRenderer(
 internal fun resolveRealtimeVideoZoomCropRect(
     sourceCropRect: FloatArray,
     zoomRatio: Float,
+    panX: Float = 0f,
+    panY: Float = 0f,
 ): FloatArray {
     if (sourceCropRect.size < 4) return sourceCropRect
     val zoom = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
     if (zoom <= 1.001f) return sourceCropRect
-    val centerX = (sourceCropRect[0] + sourceCropRect[2]) * 0.5f
-    val centerY = (sourceCropRect[1] + sourceCropRect[3]) * 0.5f
-    val halfWidth = (sourceCropRect[2] - sourceCropRect[0]) * 0.5f / zoom
-    val halfHeight = (sourceCropRect[3] - sourceCropRect[1]) * 0.5f / zoom
+
+    // The crop rect is already expressed in the oriented output-quad axes. Apply
+    // pan in those same display axes so preview and encoded video move identically,
+    // independent of SENSOR_ORIENTATION and the HAL's cropping type.
+    val sourceLeft = sourceCropRect[0]
+    val sourceTop = sourceCropRect[1]
+    val sourceWidth = (sourceCropRect[2] - sourceLeft).coerceAtLeast(0f)
+    val sourceHeight = (sourceCropRect[3] - sourceTop).coerceAtLeast(0f)
+    if (sourceWidth <= 0f || sourceHeight <= 0f) return sourceCropRect
+
+    val cropWidth = (sourceWidth / zoom).coerceAtLeast(0f)
+    val cropHeight = (sourceHeight / zoom).coerceAtLeast(0f)
+    val travelX = (sourceWidth - cropWidth).coerceAtLeast(0f)
+    val travelY = (sourceHeight - cropHeight).coerceAtLeast(0f)
+    val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+    val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+    val left = sourceLeft + travelX * (0.5f + 0.5f * safePanX)
+    val top = sourceTop + travelY * (0.5f + 0.5f * safePanY)
     return floatArrayOf(
-        (centerX - halfWidth).coerceIn(0f, 1f),
-        (centerY - halfHeight).coerceIn(0f, 1f),
-        (centerX + halfWidth).coerceIn(0f, 1f),
-        (centerY + halfHeight).coerceIn(0f, 1f),
+        left.coerceIn(sourceLeft, sourceCropRect[2] - cropWidth),
+        top.coerceIn(sourceTop, sourceCropRect[3] - cropHeight),
+        (left + cropWidth).coerceIn(sourceLeft, sourceCropRect[2]),
+        (top + cropHeight).coerceIn(sourceTop, sourceCropRect[3]),
     )
 }
 
