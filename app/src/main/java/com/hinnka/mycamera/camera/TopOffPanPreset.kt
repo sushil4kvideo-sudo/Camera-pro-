@@ -12,7 +12,7 @@ data class TopOffPanWaypoint(
     fun normalized(): TopOffPanWaypoint = copy(
         panX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f,
         panY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f,
-        zoomRatio = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: 2f,
+        zoomRatio = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO) ?: 2f,
     )
 }
 
@@ -35,6 +35,7 @@ data class TopOffPanPreset(
 
     companion object {
         const val MAX_POINTS = 32
+        const val MAX_ZOOM_RATIO = 10f
         const val BUILTIN_LEFT_RIGHT_ID = "builtin_left_right"
         const val BUILTIN_UP_DOWN_ID = "builtin_up_down"
 
