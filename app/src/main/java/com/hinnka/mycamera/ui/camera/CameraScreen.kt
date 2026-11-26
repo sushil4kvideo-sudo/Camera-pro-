@@ -80,6 +80,8 @@ import com.styropyr0.prismal.components.PrismalSegmentedControl
 import com.styropyr0.prismal.sources.prismalGlassLayer
 import com.styropyr0.prismal.sources.rememberPrismalGlassLayer
 import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
+import com.hinnka.mycamera.preview.PreviewSubjectTrackingProcessor
 import com.hinnka.mycamera.ui.theme.accentContentColor
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
@@ -245,6 +247,20 @@ fun CameraScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
+    var aiSubjectTrackingEnabled by rememberSaveable { mutableStateOf(false) }
+    var aiSubjectTarget by remember {
+        mutableStateOf<PreviewSubjectTrackingProcessor.Target?>(null)
+    }
+    // Allocate the lightweight wrapper only when enabled. The detector/model itself is
+    // initialized lazily by the first tracking frame, never from camera/application startup.
+    val subjectTrackingProcessor = remember(context, aiSubjectTrackingEnabled) {
+        if (aiSubjectTrackingEnabled) PreviewSubjectTrackingProcessor(context.applicationContext)
+        else null
+    }
+    DisposableEffect(subjectTrackingProcessor) {
+        onDispose { subjectTrackingProcessor?.close() }
+    }
+    var aiTrackingLastPanAtMs by remember { mutableLongStateOf(0L) }
     val pendingPhotoCrashReport by PhotoCaptureCrashLogger.pendingCrashReport.collectAsState()
     pendingPhotoCrashReport?.let { report ->
         PhotoCaptureCrashDialog(
@@ -275,6 +291,10 @@ fun CameraScreen(
         }
         if (state.captureMode != CaptureMode.VIDEO && spatialVideoEnabled) {
             viewModel.setSpatialVideoEnabled(false)
+        }
+        if (state.captureMode != CaptureMode.VIDEO && aiSubjectTrackingEnabled) {
+            aiSubjectTrackingEnabled = false
+            aiSubjectTarget = null
         }
     }
 
@@ -1299,6 +1319,51 @@ fun CameraScreen(
                 state.getCurrentCameraInfo()?.supportsFreeformZoomPan == true
         val canShowZoomJoystick = activePanel == ActivePanel.NONE &&
             (zoomJoystickSupported || topOffZoomJoystickSupported)
+        val aiSubjectTrackingActive = aiSubjectTrackingEnabled &&
+            isVideoMode && state.isPreviewActive && !state.isCapturing
+        val aiSubjectAutoPanMode = when {
+            topOffZoomJoystickSupported -> 1
+            zoomJoystickSupported -> 2
+            else -> 0
+        }
+
+        LaunchedEffect(subjectTrackingProcessor, aiSubjectTrackingActive) {
+            if (!aiSubjectTrackingActive) {
+                aiSubjectTarget = null
+                subjectTrackingProcessor?.resetTracking()
+                aiTrackingLastPanAtMs = 0L
+            }
+        }
+
+        // Object detection results are already smoothed by the tracker. Apply a small,
+        // rate-limited crop correction only when the normal or Top-Off joystick path is valid.
+        SideEffect {
+            subjectTrackingProcessor?.onTargetChanged = { target ->
+                aiSubjectTarget = target
+                if (target != null && aiSubjectTrackingActive && aiSubjectAutoPanMode != 0) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - aiTrackingLastPanAtMs >= 65L) {
+                        fun correction(error: Float): Float {
+                            if (kotlin.math.abs(error) <= 0.045f) return 0f
+                            return (error * 0.035f).coerceIn(-0.012f, 0.012f)
+                        }
+                        val panDeltaX = correction(target.centerX - 0.5f)
+                        val panDeltaY = correction(target.centerY - 0.5f)
+                        if (panDeltaX != 0f || panDeltaY != 0f) {
+                            aiTrackingLastPanAtMs = now
+                            if (aiSubjectAutoPanMode == 1) {
+                                viewModel.setTopOffZoomPan(
+                                    (topOffZoomPanX + panDeltaX).coerceIn(-1f, 1f),
+                                    (topOffZoomPanY + panDeltaY).coerceIn(-1f, 1f),
+                                )
+                            } else {
+                                viewModel.panZoomBy(panDeltaX, panDeltaY)
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         LaunchedEffect(zoomJoystickSupported) {
             if (!zoomJoystickSupported) {
@@ -1840,12 +1905,32 @@ fun CameraScreen(
                                 )
                             },
                             onEyeFocusInputAvailable = if (
-                                eyeFocusActive || portraitMaskActive
+                                eyeFocusActive || portraitMaskActive || aiSubjectTrackingActive
                             ) {
-                                viewModel::handleEyeFocusInputUpdate
+                                { frame ->
+                                    if (aiSubjectTrackingActive) {
+                                        // The ViewModel owns/recycles the original eye-focus frame.
+                                        // Tracking receives a separate small preview copy and cannot
+                                        // block camera rendering or Camera2 session startup.
+                                        val trackingCopy = runCatching {
+                                            frame.bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                                        }.getOrNull()
+                                        if (trackingCopy != null) {
+                                            subjectTrackingProcessor?.processFrame(
+                                                EyeFocusPreviewFrame(
+                                                    bitmap = trackingCopy,
+                                                    sampleStartedAtNanos = frame.sampleStartedAtNanos,
+                                                    captureDurationNanos = frame.captureDurationNanos,
+                                                )
+                                            )
+                                        }
+                                    }
+                                    viewModel.handleEyeFocusInputUpdate(frame)
+                                }
                             } else {
                                 null
                             },
+                            subjectTrackingTarget = if (aiSubjectTrackingActive) aiSubjectTarget else null,
                             onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
                             onGLSurfaceViewReady = {
                                 viewModel.attachCameraGLSurfaceView(it)
@@ -2755,6 +2840,32 @@ fun CameraScreen(
                     contentAlignment = Alignment.TopCenter
                 ) {
                     topBar()
+                }
+            }
+
+            if (isVideoMode && activePanel == ActivePanel.NONE) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .offset(y = videoTopBarAnchorTop + 50.dp)
+                        .padding(horizontal = 12.dp),
+                ) {
+                    AiSubjectTrackingButton(
+                        enabled = aiSubjectTrackingEnabled,
+                        hasTarget = aiSubjectTarget != null,
+                        onClick = {
+                            aiSubjectTrackingEnabled = !aiSubjectTrackingEnabled
+                            aiSubjectTarget = null
+                            aiTrackingLastPanAtMs = 0L
+                            if (aiSubjectTrackingEnabled) {
+                                subjectTrackingProcessor?.resetTracking()
+                            } else {
+                                subjectTrackingProcessor?.resetTracking()
+                            }
+                        },
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                    )
                 }
             }
         }
