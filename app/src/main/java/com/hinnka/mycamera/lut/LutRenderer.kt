@@ -409,6 +409,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     var meteringMode: MeteringMode = MeteringMode.SYSTEM_DEFAULT
 
     private val cropRect = floatArrayOf(0f, 0f, 1f, 1f)
+    private var topOffZoomCropEnabled = false
+    private var topOffZoomCropRatio = 1f
+    private var topOffZoomCropPanX = 0f
+    private var topOffZoomCropPanY = 0f
 
     @Volatile
     var meteringEnabled: Boolean = true
@@ -2067,7 +2071,16 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             sourceTextureTarget = currentCameraTextureTarget,
             sourceTextureId = currentCameraTextureId,
             sourceStMatrix = currentCameraTextureMatrix,
-            sourceCropRect = cropRect,
+            sourceCropRect = if (topOffZoomCropEnabled) {
+                resolveRealtimeVideoZoomCropRect(
+                    cropRect,
+                    topOffZoomCropRatio,
+                    topOffZoomCropPanX,
+                    topOffZoomCropPanY,
+                )
+            } else {
+                cropRect
+            },
             targetMvpMatrix = targetMvpMatrix,
             lutConfig = layerLutConfig,
             lutTextureId = layerLutTextureId,
@@ -3190,6 +3203,23 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         cropRect[2] = normalized.right
         cropRect[3] = normalized.bottom
         updateMVPMatrix()
+    }
+
+    /** Apply the same display-space Top-Off crop used by the realtime video encoder. */
+    fun setTopOffZoomCrop(enabled: Boolean, zoomRatio: Float, panX: Float, panY: Float) {
+        val safeZoom = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
+        val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        if (topOffZoomCropEnabled == enabled &&
+            kotlin.math.abs(topOffZoomCropRatio - safeZoom) <= 0.0001f &&
+            kotlin.math.abs(topOffZoomCropPanX - safePanX) <= 0.0001f &&
+            kotlin.math.abs(topOffZoomCropPanY - safePanY) <= 0.0001f
+        ) return
+        topOffZoomCropEnabled = enabled
+        topOffZoomCropRatio = safeZoom
+        topOffZoomCropPanX = safePanX
+        topOffZoomCropPanY = safePanY
+        onRequestRender?.invoke()
     }
 
     /**
