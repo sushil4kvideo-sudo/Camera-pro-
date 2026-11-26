@@ -85,6 +85,7 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.AiSubjectTrackingMode
+import com.hinnka.mycamera.camera.AiTrackingFollowSpeed
 import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
@@ -266,6 +267,7 @@ fun CameraScreen(
     val topOffZoomRollDegrees by viewModel.topOffZoomRollDegrees.collectAsState()
     val aiSubjectTrackingEnabled by viewModel.aiSubjectTrackingEnabled.collectAsState()
     val aiSubjectTrackingMode by viewModel.aiSubjectTrackingMode.collectAsState()
+    val aiTrackingFollowSpeed by viewModel.aiTrackingFollowSpeed.collectAsState()
     val aiSubjectTrackingTarget by viewModel.aiSubjectTrackingTarget.collectAsState()
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
@@ -2648,6 +2650,7 @@ fun CameraScreen(
                 showAiTrackingControls = topOffZoomJoystickSupported,
                 aiSubjectTrackingEnabled = aiSubjectTrackingEnabled,
                 aiSubjectTrackingMode = aiSubjectTrackingMode,
+                aiTrackingFollowSpeed = aiTrackingFollowSpeed,
                 onAiTrackingToggle = {
                     viewModel.setAiSubjectTrackingEnabled(!aiSubjectTrackingEnabled)
                 },
@@ -2657,6 +2660,15 @@ fun CameraScreen(
                             AiSubjectTrackingMode.ANY_OBJECT
                         } else {
                             AiSubjectTrackingMode.HUMAN
+                        }
+                    )
+                },
+                onAiTrackingSpeedCycle = {
+                    viewModel.setAiTrackingFollowSpeed(
+                        when (aiTrackingFollowSpeed) {
+                            AiTrackingFollowSpeed.SLOW -> AiTrackingFollowSpeed.NORMAL
+                            AiTrackingFollowSpeed.NORMAL -> AiTrackingFollowSpeed.FAST
+                            AiTrackingFollowSpeed.FAST -> AiTrackingFollowSpeed.SLOW
                         }
                     )
                 },
@@ -3375,8 +3387,10 @@ private fun Controls(
     showAiTrackingControls: Boolean,
     aiSubjectTrackingEnabled: Boolean,
     aiSubjectTrackingMode: AiSubjectTrackingMode,
+    aiTrackingFollowSpeed: AiTrackingFollowSpeed,
     onAiTrackingToggle: () -> Unit,
     onAiTrackingModeCycle: () -> Unit,
+    onAiTrackingSpeedCycle: () -> Unit,
     onTrackingPadPan: (Float, Float) -> Unit,
     onGyroPanUpdate: (Float, Float, Float) -> Unit,
     sideControlInset: Dp?,
@@ -3683,6 +3697,17 @@ private fun Controls(
                                 ) {
                                     Text(
                                         text = aiSubjectTrackingMode.title,
+                                        color = Color.White.copy(alpha = 0.9f),
+                                        fontSize = 9.sp,
+                                    )
+                                }
+                                TextButton(
+                                    onClick = onAiTrackingSpeedCycle,
+                                    modifier = Modifier.height(26.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                ) {
+                                    Text(
+                                        text = "Follow · ${aiTrackingFollowSpeed.title}",
                                         color = Color.White.copy(alpha = 0.9f),
                                         fontSize = 9.sp,
                                     )

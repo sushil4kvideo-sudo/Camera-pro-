@@ -326,6 +326,10 @@ class PreviewAiSubjectTrackingProcessor(context: Context) : Closeable {
                         previous.centerY,
                     ) <= MAX_CONTINUITY_DISTANCE
                 } ?: if (lockedTarget) null else chooseInitialCandidate(preferred)
+            } else if (lockedTarget) {
+                // Once a manually selected subject has fully disappeared, do not jump
+                // to another object of the same class. The user can tap a new target.
+                null
             } else {
                 chooseInitialCandidate(preferred)
             }
