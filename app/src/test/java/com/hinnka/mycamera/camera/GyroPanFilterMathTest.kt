@@ -1,7 +1,9 @@
 package com.hinnka.mycamera.camera
 
+import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.tan
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -94,6 +96,53 @@ class GyroPanFilterMathTest {
                 FloatArray(3),
             )
         )
+    }
+
+    @Test
+    fun normalizedPanUsesActualFovAndZoomTravel() {
+        val halfFovTangent = tan(Math.toRadians(45.0))
+        val zoom = 2f
+        val desiredPan = 0.5f
+        val angle = atan(halfFovTangent * (1.0 - 1.0 / zoom) * desiredPan).toFloat()
+
+        assertEquals(
+            desiredPan,
+            GyroPanFilterMath.normalizedPanForAngle(
+                angleRadians = angle,
+                fieldOfViewDegrees = 90f,
+                zoomRatio = zoom,
+            ),
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun normalizedPanIsZeroWhenThereIsNoCropTravelAtOneX() {
+        assertEquals(
+            0f,
+            GyroPanFilterMath.normalizedPanForAngle(
+                angleRadians = 0.3f,
+                fieldOfViewDegrees = 70f,
+                zoomRatio = 1f,
+            ),
+            0f,
+        )
+    }
+
+    @Test
+    fun fieldOfViewUsesActiveAspectCropAndSwapsDisplayAxesForPortraitRotation() {
+        val result = GyroPanFilterMath.fieldOfViewDegrees(
+            activeSensorWidthMm = 6f,
+            activeSensorHeightMm = 4.5f,
+            sensorCoordinateAspectRatio = 16f / 9f,
+            focalLengthMm = 5f,
+            sensorOrientationDegrees = 90,
+        ) ?: error("Valid sensor optics should produce an FOV")
+
+        val sensorHorizontal = Math.toDegrees(2.0 * atan(6.0 / 10.0)).toFloat()
+        val croppedSensorVertical = Math.toDegrees(2.0 * atan(3.375 / 10.0)).toFloat()
+        assertEquals(croppedSensorVertical, result.horizontalDegrees, 0.0001f)
+        assertEquals(sensorHorizontal, result.verticalDegrees, 0.0001f)
     }
 
     private fun runFilter(sampleCount: Int, deltaSeconds: Float): Float {
