@@ -6785,7 +6785,7 @@ class Camera2Controller(private val context: Context) {
                 !dualCaptureEnabled &&
                 userZoomRatio >= 1f
             val zoomRatio = if (topOffZoomActive) {
-                resolveTopOffZoomLockedRatio(userZoomRatio).coerceIn(minZoom, maxSupportedZoom)
+                resolveTopOffZoomLockedRatio(userZoomRatio)
             } else {
                 userZoomRatio
             }
