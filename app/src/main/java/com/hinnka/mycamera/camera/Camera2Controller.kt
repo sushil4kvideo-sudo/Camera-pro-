@@ -388,6 +388,7 @@ class Camera2Controller(private val context: Context) {
     val topOffZoomLockedRatioFlow: StateFlow<Float> = _topOffZoomLockedRatio.asStateFlow()
     @Volatile private var lastTopOffZoomDiagnosticSignature: String? = null
     private var lastTopOffZoomPanDiagnosticAtMs = 0L
+    private var lastTopOffZoomCaptureResultLogAtMs = 0L
     private val _topOffZoomPanX = MutableStateFlow(
         specialVideoPreferences.getFloat("top_off_zoom_pan_x", 0f).coerceIn(-1f, 1f)
     )
@@ -1564,6 +1565,30 @@ class Camera2Controller(private val context: Context) {
             result: TotalCaptureResult
         ) {
             super.onCaptureCompleted(session, request, result)
+
+            if (session === captureSession &&
+                _topOffZoomEnabled.value &&
+                _state.value.captureMode == CaptureMode.VIDEO &&
+                !spatialVideoEnabled && !dualCaptureEnabled
+            ) {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastTopOffZoomCaptureResultLogAtMs >= 500L) {
+                    lastTopOffZoomCaptureResultLogAtMs = now
+                    val croppingType = getActiveOpenCameraCharacteristics()
+                        ?.get(CameraCharacteristics.SCALER_CROPPING_TYPE)
+                    val requestedCrop = request.get(CaptureRequest.SCALER_CROP_REGION)
+                    val appliedCrop = result.get(CaptureResult.SCALER_CROP_REGION)
+                    PLog.i(
+                        "TopOffZoom",
+                        "CAMERA_RESULT croppingType=$croppingType " +
+                            "requestCrop=${requestedCrop?.toShortString() ?: "null"} " +
+                            "appliedCrop=${appliedCrop?.toShortString() ?: "null"} " +
+                            "requestZoom=${request.get(CaptureRequest.CONTROL_ZOOM_RATIO)} " +
+                            "appliedZoom=${result.get(CaptureResult.CONTROL_ZOOM_RATIO)} " +
+                            "frame=${result.frameNumber}"
+                    )
+                }
+            }
 
             if (session === captureSession && _state.value.previewFirstFrameTimestampNs == null) {
                 result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestamp ->
@@ -6798,7 +6823,8 @@ class Camera2Controller(private val context: Context) {
                 resetCropAtUnitZoom = false,
                 panX = panX,
                 panY = panY,
-                useFreeformPan = topOffZoomActive || (
+                useSoftwareCrop = topOffZoomActive,
+                useFreeformPan = !topOffZoomActive && (
                     !logicalAutoSwitch && state.zoomPanEnabled &&
                         cameraInfo?.supportsFreeformZoomPan == true
                 ),
@@ -6813,6 +6839,7 @@ class Camera2Controller(private val context: Context) {
                     activeRect = activeRect,
                     cropAspectRatio = cropAspectRatio,
                     sensorOrientation = sensorOrientation,
+                    softwareCrop = topOffZoomActive,
                 )
             }
         } catch (e: Exception) {
@@ -6841,9 +6868,24 @@ class Camera2Controller(private val context: Context) {
         resetCropAtUnitZoom: Boolean,
         panX: Float = 0f,
         panY: Float = 0f,
+        useSoftwareCrop: Boolean = false,
         useFreeformPan: Boolean = false,
         cropAspectRatio: Float? = null,
     ) {
+        // Top-Off framing is performed by the preview and encoder GPU renderers. Keep
+        // Camera2 on the full active array so CENTER_ONLY HALs cannot recenter the crop.
+        if (useSoftwareCrop) {
+            if (zoomRatioRange != null) {
+                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1f)
+            }
+            if (activeRect != null) {
+                builder.set(CaptureRequest.SCALER_CROP_REGION, Rect(activeRect))
+            } else {
+                builder.set(CaptureRequest.SCALER_CROP_REGION, null)
+            }
+            return
+        }
+
         // Freeform SCALER_CROP_REGION must not be combined with CONTROL_ZOOM_RATIO != 1.
         // While joystick pan is active, express zoom as a non-centred sensor crop instead.
         if (useFreeformPan && activeRect != null) {
@@ -8579,7 +8621,8 @@ class Camera2Controller(private val context: Context) {
                     resetCropAtUnitZoom = true,
                     panX = topOffPan?.first ?: _state.value.zoomPanX,
                     panY = topOffPan?.second ?: _state.value.zoomPanY,
-                    useFreeformPan = topOffZoomActive || (
+                    useSoftwareCrop = topOffZoomActive,
+                useFreeformPan = !topOffZoomActive && (
                         !logicalAutoSwitch && _state.value.zoomPanEnabled &&
                             _state.value.getCurrentCameraInfo()?.supportsFreeformZoomPan == true
                     ),
@@ -8595,6 +8638,7 @@ class Camera2Controller(private val context: Context) {
                     activeRect = activeRect,
                     cropAspectRatio = cropAspectRatio,
                     sensorOrientation = sensorOrientation,
+                    softwareCrop = topOffZoomActive,
                 )
             }
             if (logicalAutoSwitch && previousLogicalZoomRatio > 0.85f &&
@@ -10384,6 +10428,7 @@ class Camera2Controller(private val context: Context) {
         activeRect: Rect?,
         cropAspectRatio: Float,
         sensorOrientation: Int,
+        softwareCrop: Boolean = false,
     ) {
         val geometry = activeRect?.let {
             ZoomCropGeometry.calculate(
@@ -10409,7 +10454,7 @@ class Camera2Controller(private val context: Context) {
                 "sensorOrientation=$sensorOrientation outputAspect=$cropAspectRatio " +
                 "activeArray=${activeRect?.toShortString() ?: "missing"} " +
                 "normalizedCrop=${geometry?.let { "(${it.left},${it.top},${it.right},${it.bottom})" } ?: "not-built"} " +
-                "mode=${if (activeRect != null) "SCALER_CROP_REGION" else "NO_ACTIVE_ARRAY"}"
+                "mode=${if (softwareCrop) "GPU_SOFTWARE_CROP+FULL_SENSOR" else if (activeRect != null) "SCALER_CROP_REGION" else "NO_ACTIVE_ARRAY"}"
         )
     }
 
@@ -12219,9 +12264,34 @@ class Camera2Controller(private val context: Context) {
             )
         }
 
+        val topOffSoftwareCropActiveForRecording =
+            _topOffZoomEnabled.value &&
+                _state.value.captureMode == CaptureMode.VIDEO &&
+                !shouldUseLogicalMultiCameraZoom(_state.value, _state.value.getCurrentCameraInfo()) &&
+                !spatialVideoEnabled && !dualCaptureEnabled &&
+                _state.value.zoomRatio >= 1f
+        val topOffSoftwareZoomForRecording = if (topOffSoftwareCropActiveForRecording) {
+            resolveTopOffZoomLockedRatio(_state.value.zoomRatio)
+        } else {
+            1f
+        }
+        val topOffSoftwarePanXForRecording =
+            if (topOffSoftwareCropActiveForRecording) _topOffZoomPanX.value else 0f
+        val topOffSoftwarePanYForRecording =
+            if (topOffSoftwareCropActiveForRecording) _topOffZoomPanY.value else 0f
+        PLog.i(
+            "TopOffZoom",
+            "RECORDING_RENDER_PATH softwareCrop=$topOffSoftwareCropActiveForRecording " +
+                "zoom=$topOffSoftwareZoomForRecording " +
+                "displayPan=($topOffSoftwarePanXForRecording,$topOffSoftwarePanYForRecording)"
+        )
+
         val started = videoRecorder.startRecording(
             size = outputSize,
             cameraInputSize = cameraInputSize,
+            cameraInputZoomRatio = topOffSoftwareZoomForRecording,
+            cameraInputPanX = topOffSoftwarePanXForRecording,
+            cameraInputPanY = topOffSoftwarePanYForRecording,
             fps = _state.value.videoConfig.fps.fps,
             bitrateMbps = if (_state.value.videoConfig.fps == VideoFpsPreset.FPS_120) {
                 minOf(_state.value.videoConfig.bitrate.bitrateMbps, 100)
