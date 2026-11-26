@@ -5,6 +5,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Handler
+import android.os.HandlerThread
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.PI
@@ -46,7 +48,8 @@ class GyroPanPresetController(
     private var hasReference = false
     private var screenRotationBucket = -1
     private var lastSensorTimestampNs = 0L
-    private var sensorEventCount = 0L
+    @Volatile private var sensorEventCount = 0L
+    @Volatile private var sensorThread: HandlerThread? = null
     private var lastLoggedError: String? = null
 
     private var basePanX = initialPanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
@@ -57,7 +60,7 @@ class GyroPanPresetController(
     private var smoothHorizontal = 0f
     private var smoothVertical = 0f
     private var smoothRoll = 0f
-    private var lastCorrection = GyroPanCorrection(basePanX, basePanY, 0f)
+    @Volatile private var lastCorrection = GyroPanCorrection(basePanX, basePanY, 0f)
 
     val currentCorrection: GyroPanCorrection
         get() = lastCorrection
@@ -68,15 +71,26 @@ class GyroPanPresetController(
             PLog.e(TAG, "No GAME_ROTATION_VECTOR or ROTATION_VECTOR sensor is available")
             return false
         }
+        val callbackThread = HandlerThread("GyroPanSensor-$mode").apply { start() }
         val registered = runCatching {
-            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+            sensorManager.registerListener(
+                this,
+                sensor,
+                SensorManager.SENSOR_DELAY_GAME,
+                Handler(callbackThread.looper),
+            )
         }.onFailure { error ->
             PLog.e(TAG, "Failed to register orientation sensor listener", error)
         }.getOrDefault(false)
+        if (registered) {
+            sensorThread = callbackThread
+        } else {
+            callbackThread.quitSafely()
+        }
         PLog.i(
             TAG,
             "START mode=$mode sensor=${sensor.name} type=${sensor.type} vendor=${sensor.vendor} " +
-                "delay=GAME registered=$registered"
+                "delay=GAME thread=dedicated registered=$registered"
         )
         return registered
     }
@@ -270,6 +284,8 @@ class GyroPanPresetController(
 
     fun stop() {
         sensorManager.unregisterListener(this)
+        sensorThread?.quitSafely()
+        sensorThread = null
         PLog.i(TAG, "STOP mode=$mode receivedEvents=$sensorEventCount final=$lastCorrection")
     }
 
