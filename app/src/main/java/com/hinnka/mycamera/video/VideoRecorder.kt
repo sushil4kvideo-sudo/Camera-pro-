@@ -144,6 +144,8 @@ class VideoRecorder(
     private var requestedOutputSize = Size(1080, 1920)
     private var requestedCameraInputSize = Size(1920, 1080)
     private var requestedCameraInputZoomRatio: Float = 1f
+    private var requestedCameraInputPanX: Float = 0f
+    private var requestedCameraInputPanY: Float = 0f
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
     private var requestedEnhancedStabilization = false
     private var requestedEnhancedStabilizationStrength = DEFAULT_VIDEO_STABILIZATION_STRENGTH
@@ -256,6 +258,8 @@ class VideoRecorder(
         size: Size,
         cameraInputSize: Size = size,
         cameraInputZoomRatio: Float = 1f,
+        cameraInputPanX: Float = 0f,
+        cameraInputPanY: Float = 0f,
         fps: Int,
         bitrateMbps: Int,
         codecMime: String,
@@ -305,6 +309,8 @@ class VideoRecorder(
         requestedOutputSize = Size(size.width.align16(), size.height.align16())
         requestedCameraInputSize = cameraInputSize
         requestedCameraInputZoomRatio = cameraInputZoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
+        requestedCameraInputPanX = cameraInputPanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        requestedCameraInputPanY = cameraInputPanY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         requestedDualCaptureInputSize = dualCaptureInputSize
         requestedDualCaptureSensorOrientationDegrees = dualCaptureSensorOrientationDegrees
         requestedDualCaptureLayout = dualCaptureLayout
@@ -759,6 +765,8 @@ class VideoRecorder(
             switchableCameraInputSize = requestedSwitchableCameraInputSize,
             switchableCameraSensorOrientationDegrees = requestedSwitchableCameraSensorOrientationDegrees,
             cameraInputZoomRatio = requestedCameraInputZoomRatio,
+            cameraInputPanX = requestedCameraInputPanX,
+            cameraInputPanY = requestedCameraInputPanY,
             watermarkLabel = if (sharedTimelineStreamName != null) MediaWatermark.SPECIAL_VIDEO else null,
         )
         renderer = realtimeRenderer
