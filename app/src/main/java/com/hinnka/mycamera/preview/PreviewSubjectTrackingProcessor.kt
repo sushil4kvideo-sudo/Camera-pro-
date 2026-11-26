@@ -146,7 +146,7 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
                 recycle(sourceBitmap)
                 converted
             }
-            image = BitmapImageBuilder(preparedBitmap).build()
+            image = BitmapImageBuilder(checkNotNull(preparedBitmap)).build()
         } catch (error: RuntimeException) {
             image?.close()
             recycle(preparedBitmap)
@@ -156,24 +156,26 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
             return
         }
 
+        val submittedBitmap = checkNotNull(preparedBitmap)
+        val submittedImage = checkNotNull(image)
         val activeDetector = getOrCreateDetector()
         if (activeDetector == null || released.get()) {
-            image.close()
-            recycle(preparedBitmap)
+            submittedImage.close()
+            recycle(submittedBitmap)
             frameInFlight.set(false)
             return
         }
 
         val timestampMs = synchronized(lock) {
             lastTimestampMs = maxOf(SystemClock.uptimeMillis(), lastTimestampMs + 1L)
-            pendingImage = image
-            pendingBitmap = preparedBitmap
+            pendingImage = submittedImage
+            pendingBitmap = submittedBitmap
             pendingGeneration = frameGeneration
             lastTimestampMs
         }
 
         try {
-            activeDetector.detectAsync(image, timestampMs)
+            activeDetector.detectAsync(submittedImage, timestampMs)
         } catch (error: RuntimeException) {
             cleanupPendingInput()
             frameInFlight.set(false)
