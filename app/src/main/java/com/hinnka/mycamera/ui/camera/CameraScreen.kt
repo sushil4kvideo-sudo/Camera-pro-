@@ -3375,11 +3375,7 @@ private fun Controls(
         it.id == selectedTopOffPanPresetId
     } ?: availableTopOffPanPresets.firstOrNull()
     val latestOnGyroPanUpdate by rememberUpdatedState(onGyroPanUpdate)
-    val runningGyroPreset = runningTopOffPanPreset?.takeIf { it.gyroMode != null }
-    val gyroControllerRef = remember(runningGyroPreset?.id) {
-        mutableStateOf<GyroPanPresetController?>(null)
-    }
-    val topOffGyroOptics = remember(
+    LaunchedEffect(
         state.currentCameraId,
         state.videoConfig.aspectRatio,
         state.videoConfig.resolution,
@@ -3387,10 +3383,17 @@ private fun Controls(
         state.zoomRatio,
         topOffZoomFactor,
         topOffZoomLockedRatio,
+        runningGyroPreset?.id,
     ) {
-        viewModel.getTopOffGyroPanOptics()
+        // Read the controller's current StateFlows after the gyro start effect has applied
+        // the preset waypoint; do not briefly overwrite its fresh zoom with stale Compose state.
+        gyroControllerRef.value?.updateOptics(viewModel.getTopOffGyroPanOptics())
     }
 
+    val runningGyroPreset = runningTopOffPanPreset?.takeIf { it.gyroMode != null }
+    val gyroControllerRef = remember(runningGyroPreset?.id) {
+        mutableStateOf<GyroPanPresetController?>(null)
+    }
     DisposableEffect(runningGyroPreset?.id) {
         val preset = runningGyroPreset
         val gyroMode = preset?.gyroMode
@@ -3443,11 +3446,6 @@ private fun Controls(
                 }
             }
         }
-    }
-
-    SideEffect {
-        // Refresh gain on zoom/aspect/lens changes without resetting gyro reference orientation.
-        gyroControllerRef.value?.updateOptics(topOffGyroOptics)
     }
 
     LaunchedEffect(runningTopOffPanPreset) {
