@@ -33,7 +33,7 @@ val downloadEyeFocusModel by tasks.registering {
     doLast {
         val outputFile = eyeFocusModelFile.get().asFile
 
-        fun sha256(file: java.io.File): String {
+        fun sha256(file: File): String {
             val digest = MessageDigest.getInstance("SHA-256")
             file.inputStream().use { input ->
                 val buffer = ByteArray(16 * 1024)
