@@ -10605,24 +10605,14 @@ class Camera2Controller(private val context: Context) {
             ((SystemClock.elapsedRealtimeNanos() - requestedAtNs).coerceAtLeast(0L) / 1_000_000f)
     }
 
-    /** Apply one animated preset waypoint using the existing Top-Off crop pipeline. */
+    /**
+     * Update the software-crop state for one animation frame. This stays off the camera
+     * request queue and performs no disk I/O; CameraScreen observes these StateFlows and
+     * updates the GPU crop directly. Persist the final position once playback ends.
+     */
     fun setTopOffZoomPresetPoint(zoomRatio: Float, panX: Float, panY: Float) {
         val requestedAtNs = SystemClock.elapsedRealtimeNanos()
-        val handler = cameraHandler
-        if (handler != null && Looper.myLooper() != handler.looper) {
-            handler.post { applyTopOffZoomPresetPoint(zoomRatio, panX, panY, requestedAtNs) }
-            return
-        }
-        applyTopOffZoomPresetPoint(zoomRatio, panX, panY, requestedAtNs)
-    }
-
-    private fun applyTopOffZoomPresetPoint(
-        zoomRatio: Float,
-        panX: Float,
-        panY: Float,
-        requestedAtNs: Long,
-    ) {
-        if (!_topOffZoomEnabled.value || !isTopOffZoomAvailable()) return
+        if (!_topOffZoomEnabled.value) return
         if (
             videoRecorder.isRecording() ||
             spatialVideoRecorder.isRecording() ||
@@ -10630,7 +10620,6 @@ class Camera2Controller(private val context: Context) {
             _state.value.videoRecordingState.isRecording ||
             _state.value.videoRecordingState.isProcessing
         ) {
-            PLog.w("TopOffZoom", "PRESET_FRAME rejected: recording/processing is active")
             return
         }
 
@@ -10639,20 +10628,21 @@ class Camera2Controller(private val context: Context) {
             ?: (baseZoom * 2f)
         val safeFactor = (requestedZoom / baseZoom).coerceIn(1f, 4f)
         _topOffZoomFactor.value = safeFactor
-        specialVideoPreferences.edit().putFloat("top_off_zoom_factor", safeFactor).apply()
-        updateTopOffZoomLockedRatio(baseZoom * safeFactor, "pan-preset")
-
-        val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        _topOffZoomPanX.value = safePanX
-        _topOffZoomPanY.value = safePanY
-        specialVideoPreferences.edit()
-            .putFloat("top_off_zoom_pan_x", safePanX)
-            .putFloat("top_off_zoom_pan_y", safePanY)
-            .apply()
-        reapplyTopOffZoomRequest()
+        _topOffZoomLockedRatio.value = baseZoom * safeFactor
+        _topOffZoomPanX.value = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        _topOffZoomPanY.value = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         _topOffPanLatencyMs.value =
             ((SystemClock.elapsedRealtimeNanos() - requestedAtNs).coerceAtLeast(0L) / 1_000_000f)
+    }
+
+    /** Save the final animated crop state once, after playback completes or is cancelled. */
+    fun finishTopOffPanPresetPlayback() {
+        specialVideoPreferences.edit()
+            .putFloat("top_off_zoom_factor", _topOffZoomFactor.value)
+            .putFloat("top_off_zoom_locked_ratio", _topOffZoomLockedRatio.value)
+            .putFloat("top_off_zoom_pan_x", _topOffZoomPanX.value)
+            .putFloat("top_off_zoom_pan_y", _topOffZoomPanY.value)
+            .apply()
     }
 
     fun setTopOffJoystickSpeed(speed: Float) {

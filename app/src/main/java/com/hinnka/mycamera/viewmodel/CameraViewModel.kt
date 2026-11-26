@@ -3666,6 +3666,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setTopOffZoomPresetPoint(zoomRatio: Float, panX: Float, panY: Float) =
         cameraController.setTopOffZoomPresetPoint(zoomRatio, panX, panY)
 
+    fun finishTopOffPanPresetPlayback() =
+        cameraController.finishTopOffPanPresetPlayback()
+
     fun setTopOffJoystickSpeed(speed: Float) =
         cameraController.setTopOffJoystickSpeed(speed)
 

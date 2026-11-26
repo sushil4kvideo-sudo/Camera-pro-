@@ -3345,42 +3345,45 @@ private fun Controls(
 
     LaunchedEffect(runningTopOffPanPreset) {
         val preset = runningTopOffPanPreset ?: return@LaunchedEffect
-        val points = preset.points
-        if (points.size < 2) {
-            runningTopOffPanPreset = null
-            return@LaunchedEffect
-        }
+        try {
+            val points = preset.points
+            if (points.size < 2) return@LaunchedEffect
 
-        val speed = topOffJoystickSpeed.coerceIn(0.25f, 4f)
-        val durationNs = (preset.segmentDurationMs.toDouble() / speed * 1_000_000.0)
-            .toLong()
-            .coerceAtLeast(0L)
-        val first = points.first()
-        viewModel.setTopOffZoomPresetPoint(first.zoomRatio, first.panX, first.panY)
+            val speed = topOffJoystickSpeed.coerceIn(0.25f, 4f)
+            val durationNs = (preset.segmentDurationMs.toDouble() / speed * 1_000_000.0)
+                .toLong()
+                .coerceAtLeast(0L)
+            val first = points.first()
+            viewModel.setTopOffZoomPresetPoint(first.zoomRatio, first.panX, first.panY)
 
-        for (pointIndex in 1 until points.size) {
-            val start = points[pointIndex - 1]
-            val end = points[pointIndex]
-            if (durationNs == 0L) {
-                viewModel.setTopOffZoomPresetPoint(end.zoomRatio, end.panX, end.panY)
-                continue
+            for (pointIndex in 1 until points.size) {
+                val start = points[pointIndex - 1]
+                val end = points[pointIndex]
+                if (durationNs == 0L) {
+                    viewModel.setTopOffZoomPresetPoint(end.zoomRatio, end.panX, end.panY)
+                    continue
+                }
+
+                val segmentStartNs = withFrameNanos { it }
+                while (true) {
+                    val frameNs = withFrameNanos { it }
+                    val linearProgress = ((frameNs - segmentStartNs).toDouble() / durationNs)
+                        .toFloat()
+                        .coerceIn(0f, 1f)
+                    val easedProgress = linearProgress * linearProgress * (3f - 2f * linearProgress)
+                    val zoom = start.zoomRatio + (end.zoomRatio - start.zoomRatio) * easedProgress
+                    val panX = start.panX + (end.panX - start.panX) * easedProgress
+                    val panY = start.panY + (end.panY - start.panY) * easedProgress
+                    viewModel.setTopOffZoomPresetPoint(zoom, panX, panY)
+                    if (linearProgress >= 1f) break
+                }
             }
-
-            val segmentStartNs = withFrameNanos { it }
-            while (true) {
-                val frameNs = withFrameNanos { it }
-                val linearProgress = ((frameNs - segmentStartNs).toDouble() / durationNs)
-                    .toFloat()
-                    .coerceIn(0f, 1f)
-                val easedProgress = linearProgress * linearProgress * (3f - 2f * linearProgress)
-                val zoom = start.zoomRatio + (end.zoomRatio - start.zoomRatio) * easedProgress
-                val panX = start.panX + (end.panX - start.panX) * easedProgress
-                val panY = start.panY + (end.panY - start.panY) * easedProgress
-                viewModel.setTopOffZoomPresetPoint(zoom, panX, panY)
-                if (linearProgress >= 1f) break
+        } finally {
+            viewModel.finishTopOffPanPresetPlayback()
+            if (runningTopOffPanPreset?.id == preset.id) {
+                runningTopOffPanPreset = null
             }
         }
-        runningTopOffPanPreset = null
     }
 
     Box(
