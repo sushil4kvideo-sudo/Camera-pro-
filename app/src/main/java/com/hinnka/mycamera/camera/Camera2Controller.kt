@@ -8607,11 +8607,13 @@ class Camera2Controller(private val context: Context) {
                 zoomPanEnabled = keepZoomPan,
             )
             if (videoRecorder.isRecording()) {
-                videoRecorder.updateCameraInputCrop(
-                    zoomRatio = if (topOffZoomActive) requestZoomRatio else 1f,
-                    panX = if (topOffZoomActive) _topOffZoomPanX.value else 0f,
-                    panY = if (topOffZoomActive) _topOffZoomPanY.value else 0f,
-                )
+                val softwareZoom = if (topOffZoomActive) requestZoomRatio else 1f
+                val softwarePanX = if (topOffZoomActive) _topOffZoomPanX.value else 0f
+                val softwarePanY = if (topOffZoomActive) _topOffZoomPanY.value else 0f
+                videoRecorder.updateCameraInputCrop(softwareZoom, softwarePanX, softwarePanY)
+                if (dualAspectRecordingActive && spatialVideoRecorder.isRecording()) {
+                    spatialVideoRecorder.updateCameraInputCrop(softwareZoom, softwarePanX, softwarePanY)
+                }
             }
             if (recreateSessionForPhysicalZoomIfNeeded(_state.value)) {
                 PLog.d(TAG, "setZoomRatio: $ratio -> $clampedDeviceZoomRatio (physical output session recreated)")
@@ -12467,6 +12469,9 @@ class Camera2Controller(private val context: Context) {
             val secondaryStarted = spatialVideoRecorder.startRecording(
                 size = selectedDualAspectRatio.resolveOutputSize(_state.value.videoConfig.resolution),
                 cameraInputSize = cameraInputSize,
+                cameraInputZoomRatio = topOffSoftwareZoomForRecording,
+                cameraInputPanX = topOffSoftwarePanXForRecording,
+                cameraInputPanY = topOffSoftwarePanYForRecording,
                 fps = _state.value.videoConfig.fps.fps,
                 bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
                 codecMime = _state.value.videoConfig.codec.mimeType,
