@@ -99,6 +99,18 @@ class GyroPanFilterMathTest {
     }
 
     @Test
+    fun smoothFollowOffsetIsLowPassOrientationMinusCurrentOrientation() {
+        assertEquals(
+            -0.12f,
+            GyroPanFilterMath.smoothFollowOffset(
+                lowPassAngleRadians = 0.08f,
+                currentAngleRadians = 0.20f,
+            ),
+            0.000001f,
+        )
+    }
+
+    @Test
     fun normalizedPanUsesActualFovAndZoomTravel() {
         val halfFovTangent = tan(Math.toRadians(45.0))
         val zoom = 2f
