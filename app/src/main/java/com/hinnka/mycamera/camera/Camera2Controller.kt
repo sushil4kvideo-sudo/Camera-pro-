@@ -151,6 +151,12 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
+    // One-shot retry state: if the camera HAL rejects the high-resolution Top-Off
+    // PRIVATE stream in combination with the preview target, retry recording with the
+    // selected-resolution input while keeping the encoder output unchanged.
+    @Volatile
+    private var topOffHighResolutionRecordingFallback: Pair<Size, Size>? = null
+
     private data class PhysicalOutputFailureKey(
         val openCameraId: String,
         val physicalCameraId: String,
@@ -2827,6 +2833,7 @@ class Camera2Controller(private val context: Context) {
         } else {
             PLog.e(TAG, "Preview session failed: $reason")
         }
+        topOffHighResolutionRecordingFallback = null
         if (videoRecorder.isRecording()) {
             videoRecorder.forceStop()
             spatialVideoRecorder.forceStop()
@@ -4193,6 +4200,42 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun retryPreviewSessionWithStandardTopOffInput(
+        reason: String,
+        openGeneration: Long,
+    ): Boolean {
+        if (openGeneration != cameraOpenGeneration) return false
+        val fallback = topOffHighResolutionRecordingFallback ?: return false
+        if (!videoRecorder.isRecording()) {
+            topOffHighResolutionRecordingFallback = null
+            return false
+        }
+
+        // Consume the retry before touching Camera2. A failed fallback must not loop.
+        topOffHighResolutionRecordingFallback = null
+        val fallbackSize = fallback.second
+        val sensorOrientation = _state.value.getCurrentCameraInfo()?.sensorOrientation
+            ?: cachedSensorOrientation
+        return try {
+            videoRecorder.updateCameraInputSize(
+                size = fallbackSize,
+                currentCameraUsesEnhancedStabilization = false,
+                sensorOrientationDegrees = sensorOrientation,
+            )
+            PLog.w(
+                "TopOffZoom",
+                "High-resolution input session rejected ($reason); retrying with " +
+                    "selected-resolution input=${fallbackSize.width}x${fallbackSize.height}. " +
+                    "Encoder output remains unchanged.",
+            )
+            createPreviewSession(openGeneration = openGeneration)
+            true
+        } catch (error: Exception) {
+            PLog.e(TAG, "Could not fall back from high-resolution Top-Off input", error)
+            false
+        }
+    }
+
     private fun retryPreviewSessionWithoutUltraWideAeMetering(
         reason: String,
         openGeneration: Long,
@@ -4506,6 +4549,13 @@ class Camera2Controller(private val context: Context) {
                             }
                             PLog.e(TAG, "Video session configuration failed")
                             safeCloseCaptureSession(session, "video configure failure")
+                            if (retryPreviewSessionWithStandardTopOffInput(
+                                    reason = "video configure failed",
+                                    openGeneration = openGeneration,
+                                )
+                            ) {
+                                return
+                            }
                             if (normalVideoSwitchableRecordSurface != null &&
                                 normalVideoUltraWideInstantSwitchActive
                             ) {
@@ -4632,6 +4682,11 @@ class Camera2Controller(private val context: Context) {
             device.createCaptureSession(sessionConfig)
         } catch (e: IllegalStateException) {
             PLog.w(TAG, "Failed to create preview session", e)
+            if (retryPreviewSessionWithStandardTopOffInput(
+                    reason = "create session illegal state: ${e.message}",
+                    openGeneration = openGeneration,
+                )
+            ) return
             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
             if (retryPreviewSessionWithoutUltraWideAeMetering("create session illegal state: ${e.message}", openGeneration)) return
             if (vendorSessionParametersApplied &&
@@ -4652,6 +4707,11 @@ class Camera2Controller(private val context: Context) {
             handlePreviewSessionFailure("create session illegal state", openGeneration, e)
         } catch (e: Exception) {
             PLog.w(TAG, "Failed to create preview session", e)
+            if (retryPreviewSessionWithStandardTopOffInput(
+                    reason = "create session exception: ${e.message}",
+                    openGeneration = openGeneration,
+                )
+            ) return
             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
             if (retryPreviewSessionWithoutUltraWideAeMetering("create session exception: ${e.message}", openGeneration)) return
             if (vendorSessionParametersApplied &&
@@ -5304,6 +5364,9 @@ class Camera2Controller(private val context: Context) {
             return
         }
         captureSession = session
+        // The first successfully configured recording session no longer needs the
+        // one-shot high-resolution-input fallback.
+        topOffHighResolutionRecordingFallback = null
         _state.update { it.copy(previewFirstFrameTimestampNs = null) }
 
         try {
@@ -12848,9 +12911,13 @@ class Camera2Controller(private val context: Context) {
             cameraHandler?.post(completeRecording) ?: completeRecording.run()
         }
         if (!started) {
+            topOffHighResolutionRecordingFallback = null
             videoCameraHlg10InputActive = false
             if (dualAspectRecordingActive) clearDualAspectRecordingState("primary encoder preparation failed")
             return
+        }
+        topOffHighResolutionRecordingFallback = topOffHighResolutionInputSize?.let {
+            it to selectedResolutionCameraInputSize
         }
         if (switchableCameraInputSize != null) {
             videoRecorder.setSwitchableCameraInputActive(
