@@ -8456,7 +8456,7 @@ class Camera2Controller(private val context: Context) {
             val requestZoomRatio = (
                 clampedDeviceZoomRatio * if (topOffZoomActive) _topOffZoomFactor.value else 1f
             ).coerceIn(minZoom, maxSupportedZoom)
-            val topOffPan = if (topOffZoomActive) resolveTopOffZoomPan(selectedCamera) else null
+            val topOffPan = if (topOffZoomActive) resolveTopOffZoomPan(selectedCamera, _topOffZoomPanX.value, _topOffZoomPanY.value) else null
             val intrinsicZoomRatio = selectedCamera?.intrinsicZoomRatio
                 ?.takeIf { it.isFinite() && it > 0f } ?: 1f
             val clampedStateZoomRatio = if (logicalAutoSwitch) {
