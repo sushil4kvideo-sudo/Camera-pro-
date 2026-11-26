@@ -2123,7 +2123,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 isEyeFocusRuntimeAvailable = false
                 resetEyeFocusTracking(cancelCameraFocus = true, reason = "initialization_failed")
-                userPreferencesRepository.saveEyeFocusEnabled(false)
+                // Do not erase the user's preference after a transient model/package error.
+                // The detector is retried on the next app launch when its runtime is recreated.
                 PLog.e(TAG, "Human eye autofocus is unavailable", error)
             }
         }
