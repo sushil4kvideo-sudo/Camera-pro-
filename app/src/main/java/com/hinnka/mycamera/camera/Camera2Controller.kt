@@ -7676,6 +7676,83 @@ class Camera2Controller(private val context: Context) {
         return (size.width * size.height).takeIf { it.isFinite() && it > 0f }
     }
 
+    /**
+     * Resolve display-space FOV from the active camera's physical sensor, focal length and
+     * active video-aspect crop. The zoom returned here matches the preview/encoder Top-Off crop.
+     */
+    fun getTopOffGyroPanOptics(): GyroPanOptics {
+        val currentState = _state.value
+        val cameraInfo = currentState.getCurrentCameraInfo()
+        val selectedUltraWide = cameraInfo?.let { camera ->
+            camera.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                camera.intrinsicZoomRatio.isFinite() &&
+                camera.intrinsicZoomRatio in 0.2f..0.85f
+        } == true
+        val requestedZoom = if (selectedUltraWide) {
+            _topOffZoomFactor.value
+        } else {
+            _topOffZoomLockedRatio.value.takeIf { it.isFinite() && it >= 1f }
+                ?: (currentState.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value)
+        }
+        val safeZoom = requestedZoom.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
+
+        val characteristics = getActiveOpenCameraCharacteristics()
+        val physicalSize = characteristics?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        val focalLengthMm = characteristics
+            ?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            ?.firstOrNull { it.isFinite() && it > 0f }
+        if (characteristics == null || physicalSize == null || focalLengthMm == null) {
+            PLog.w(
+                "GyroPan",
+                "Active sensor size/focal length unavailable; using fallback FOV, zoom=$safeZoom"
+            )
+            return GyroPanOptics(60f, 45f, safeZoom)
+        }
+
+        // SENSOR_INFO_PHYSICAL_SIZE describes the pixel-array dimensions. Restrict it to the
+        // active array when the device advertises a smaller active rectangle.
+        val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        val pixelArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+        val activeWidthScale = if (activeArray != null && pixelArray != null && pixelArray.width > 0) {
+            (activeArray.width().toFloat() / pixelArray.width.toFloat()).coerceIn(0.1f, 1.1f)
+        } else {
+            1f
+        }
+        val activeHeightScale = if (activeArray != null && pixelArray != null && pixelArray.height > 0) {
+            (activeArray.height().toFloat() / pixelArray.height.toFloat()).coerceIn(0.1f, 1.1f)
+        } else {
+            1f
+        }
+        val activeSensorWidthMm = physicalSize.width * activeWidthScale
+        val activeSensorHeightMm = physicalSize.height * activeHeightScale
+        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)
+            ?: cameraInfo?.sensorOrientation
+            ?: cachedSensorOrientation
+        val sensorAspectRatio = ZoomCropGeometry.sensorCoordinateAspectRatio(
+            currentState.getPreviewAspectRatio(),
+            sensorOrientation,
+        )
+        val fieldOfView = GyroPanFilterMath.fieldOfViewDegrees(
+            activeSensorWidthMm = activeSensorWidthMm,
+            activeSensorHeightMm = activeSensorHeightMm,
+            sensorCoordinateAspectRatio = sensorAspectRatio,
+            focalLengthMm = focalLengthMm,
+            sensorOrientationDegrees = sensorOrientation,
+        )
+        if (fieldOfView == null) {
+            PLog.w(
+                "GyroPan",
+                "Could not resolve video crop FOV; using fallback FOV, zoom=$safeZoom"
+            )
+            return GyroPanOptics(60f, 45f, safeZoom)
+        }
+        return GyroPanOptics(
+            horizontalFieldOfViewDegrees = fieldOfView.horizontalDegrees,
+            verticalFieldOfViewDegrees = fieldOfView.verticalDegrees,
+            zoomRatio = safeZoom,
+        )
+    }
+
     /** 获取传感器方向（供外部 YUV 处理使用） */
     fun getSensorOrientation(): Int {
         return cachedSensorOrientation
@@ -10673,8 +10750,10 @@ class Camera2Controller(private val context: Context) {
             !spatialVideoEnabled && !dualCaptureEnabled
         if (!canApplySoftwareCrop) return
 
-        val zoom = _topOffZoomLockedRatio.value.takeIf { it.isFinite() && it > 1f }
-            ?: (current.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value)
+        val zoom = (
+            _topOffZoomLockedRatio.value.takeIf { it.isFinite() && it >= 1f }
+                ?: (current.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value)
+            ).coerceIn(1f, 20f)
         if (videoRecorder.isRecording()) {
             videoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll)
         }
@@ -10692,6 +10771,8 @@ class Camera2Controller(private val context: Context) {
         _topOffZoomPanY.value = safePanY
         _topOffZoomRollDegrees.value = safeRoll
         specialVideoPreferences.edit()
+            .putFloat("top_off_zoom_factor", _topOffZoomFactor.value)
+            .putFloat("top_off_zoom_locked_ratio", _topOffZoomLockedRatio.value)
             .putFloat("top_off_zoom_pan_x", safePanX)
             .putFloat("top_off_zoom_pan_y", safePanY)
             .putFloat("top_off_zoom_roll_degrees", safeRoll)
