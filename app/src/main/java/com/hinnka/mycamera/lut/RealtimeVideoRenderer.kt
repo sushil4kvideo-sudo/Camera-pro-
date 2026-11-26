@@ -61,9 +61,9 @@ class RealtimeVideoRenderer(
     dualCapturePositionY: Float = 0.05f,
     dualCapturePipWidthFraction: Float = 0.33f,
     private val encoderOrientationHintDegrees: Int = 0,
-    private val cameraInputZoomRatio: Float = 1f,
-    private val cameraInputPanX: Float = 0f,
-    private val cameraInputPanY: Float = 0f,
+    cameraInputZoomRatio: Float = 1f,
+    cameraInputPanX: Float = 0f,
+    cameraInputPanY: Float = 0f,
     private val watermarkLabel: String? = null,
     private val switchableCameraInputSize: Size? = null,
     private val switchableCameraSensorOrientationDegrees: Int = 0,
@@ -145,6 +145,12 @@ class RealtimeVideoRenderer(
     }
     private val fullCropRect = floatArrayOf(0f, 0f, 1f, 1f)
     private var cameraCropRect = fullCropRect
+    @Volatile private var currentCameraInputZoomRatio =
+        cameraInputZoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
+    @Volatile private var currentCameraInputPanX =
+        cameraInputPanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+    @Volatile private var currentCameraInputPanY =
+        cameraInputPanY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
     @Volatile private var cameraTransformAxesSwapped: Boolean? = null
     @Volatile private var currentCameraSensorOrientationDegrees = sensorOrientationDegrees
     @Volatile private var cameraSensorOrientationFallbackApplied = false
@@ -217,6 +223,17 @@ class RealtimeVideoRenderer(
         }
         switchableCameraInputActive = active
         PLog.i(TAG, "Recording camera source selected: ${if (active) "0.5x-ultraWide" else "1x-main"}")
+    }
+
+    fun updateCameraInputCrop(zoomRatio: Float, panX: Float, panY: Float) {
+        currentCameraInputZoomRatio = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
+        currentCameraInputPanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        currentCameraInputPanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        PLog.d(
+            TAG,
+            "Live software crop updated: zoom=$currentCameraInputZoomRatio, " +
+                "pan=($currentCameraInputPanX,$currentCameraInputPanY)",
+        )
     }
 
     fun updateDualCaptureLayout(layout: DualCaptureLayout) {
@@ -473,9 +490,9 @@ class RealtimeVideoRenderer(
         // before it reaches the dedicated MediaCodec input surface (never after recording).
         sourceCropRect = resolveRealtimeVideoZoomCropRect(
             sourceCropRect,
-            cameraInputZoomRatio,
-            cameraInputPanX,
-            cameraInputPanY,
+            currentCameraInputZoomRatio,
+            currentCameraInputPanX,
+            currentCameraInputPanY,
         )
         val presentationTimeNs = mapPresentationTimeNs(timestampNs, useSwitchableCameraInput)
         if (presentationTimeNs <= 0L) return null
