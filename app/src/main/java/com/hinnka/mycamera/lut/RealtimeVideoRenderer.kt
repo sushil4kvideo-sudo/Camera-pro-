@@ -64,6 +64,7 @@ class RealtimeVideoRenderer(
     cameraInputZoomRatio: Float = 1f,
     cameraInputPanX: Float = 0f,
     cameraInputPanY: Float = 0f,
+    cameraInputRollDegrees: Float = 0f,
     private val watermarkLabel: String? = null,
     private val switchableCameraInputSize: Size? = null,
     private val switchableCameraSensorOrientationDegrees: Int = 0,
@@ -151,6 +152,8 @@ class RealtimeVideoRenderer(
         cameraInputPanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
     @Volatile private var currentCameraInputPanY =
         cameraInputPanY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+    @Volatile private var currentCameraInputRollDegrees =
+        cameraInputRollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
     @Volatile private var cameraTransformAxesSwapped: Boolean? = null
     @Volatile private var currentCameraSensorOrientationDegrees = sensorOrientationDegrees
     @Volatile private var cameraSensorOrientationFallbackApplied = false
@@ -225,14 +228,20 @@ class RealtimeVideoRenderer(
         PLog.i(TAG, "Recording camera source selected: ${if (active) "0.5x-ultraWide" else "1x-main"}")
     }
 
-    fun updateCameraInputCrop(zoomRatio: Float, panX: Float, panY: Float) {
+    fun updateCameraInputCrop(
+        zoomRatio: Float,
+        panX: Float,
+        panY: Float,
+        rollDegrees: Float = 0f,
+    ) {
         currentCameraInputZoomRatio = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
         currentCameraInputPanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         currentCameraInputPanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        currentCameraInputRollDegrees = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
         PLog.d(
             TAG,
             "Live software crop updated: zoom=$currentCameraInputZoomRatio, " +
-                "pan=($currentCameraInputPanX,$currentCameraInputPanY)",
+                "pan=($currentCameraInputPanX,$currentCameraInputPanY), roll=$currentCameraInputRollDegrees°",
         )
     }
 
@@ -508,7 +517,11 @@ class RealtimeVideoRenderer(
             textureId = sourceTextureId,
             sourceStMatrix = sourceStMatrix,
             cropRect = sourceCropRect,
-            mvpMatrix = firstPassMvpMatrix,
+            mvpMatrix = resolveCameraInputRollMvpMatrix(
+                firstPassMvpMatrix,
+                encoderOutputSize.width,
+                encoderOutputSize.height,
+            ),
             enableVideoLog = videoLogProfile.isEnabled && !cameraInputAlreadyHlg10,
             presentationTimeNs = timestampNs,
             viewport = resolvePrimaryViewport(),
@@ -1006,6 +1019,35 @@ class RealtimeVideoRenderer(
                 "sensorOrientationFallback=$cameraSensorOrientationFallbackApplied, " +
                 "matrix=${presentationMatrix.joinToString(prefix = "[", postfix = "]")}"
         )
+    }
+
+    /**
+     * Apply gyro horizon correction to the actual MediaCodec render pass, not just preview.
+     * Scale to cover the output bounds so the rotated frame never exposes black corners.
+     */
+    private fun resolveCameraInputRollMvpMatrix(
+        baseMatrix: FloatArray,
+        width: Int,
+        height: Int,
+    ): FloatArray {
+        val angle = Math.toRadians(currentCameraInputRollDegrees.toDouble())
+        if (kotlin.math.abs(angle) < 0.0001) return baseMatrix
+        val aspect = (width.toFloat() / height.coerceAtLeast(1).toFloat()).coerceIn(0.1f, 10f)
+        val cosine = kotlin.math.cos(angle).toFloat()
+        val sine = kotlin.math.sin(angle).toFloat()
+        val coverScale = maxOf(
+            kotlin.math.abs(cosine) + kotlin.math.abs(sine) / aspect,
+            kotlin.math.abs(sine) * aspect + kotlin.math.abs(cosine),
+        )
+        val rollMatrix = FloatArray(16)
+        Matrix.setIdentityM(rollMatrix, 0)
+        rollMatrix[0] = cosine * coverScale
+        rollMatrix[1] = sine * aspect * coverScale
+        rollMatrix[4] = -sine / aspect * coverScale
+        rollMatrix[5] = cosine * coverScale
+        val result = FloatArray(16)
+        Matrix.multiplyMM(result, 0, baseMatrix, 0, rollMatrix, 0)
+        return result
     }
 
     private fun drawLayer(

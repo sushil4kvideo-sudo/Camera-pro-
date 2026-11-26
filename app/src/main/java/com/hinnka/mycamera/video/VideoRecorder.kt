@@ -146,6 +146,7 @@ class VideoRecorder(
     private var requestedCameraInputZoomRatio: Float = 1f
     private var requestedCameraInputPanX: Float = 0f
     private var requestedCameraInputPanY: Float = 0f
+    private var requestedCameraInputRollDegrees: Float = 0f
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
     private var requestedEnhancedStabilization = false
     private var requestedEnhancedStabilizationStrength = DEFAULT_VIDEO_STABILIZATION_STRENGTH
@@ -260,6 +261,7 @@ class VideoRecorder(
         cameraInputZoomRatio: Float = 1f,
         cameraInputPanX: Float = 0f,
         cameraInputPanY: Float = 0f,
+        cameraInputRollDegrees: Float = 0f,
         fps: Int,
         bitrateMbps: Int,
         codecMime: String,
@@ -311,6 +313,7 @@ class VideoRecorder(
         requestedCameraInputZoomRatio = cameraInputZoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
         requestedCameraInputPanX = cameraInputPanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         requestedCameraInputPanY = cameraInputPanY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        requestedCameraInputRollDegrees = cameraInputRollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
         requestedDualCaptureInputSize = dualCaptureInputSize
         requestedDualCaptureSensorOrientationDegrees = dualCaptureSensorOrientationDegrees
         requestedDualCaptureLayout = dualCaptureLayout
@@ -697,17 +700,24 @@ class VideoRecorder(
         PLog.d(TAG, "Video recording resumed")
     }
 
-    fun updateCameraInputCrop(zoomRatio: Float, panX: Float, panY: Float) {
+    fun updateCameraInputCrop(
+        zoomRatio: Float,
+        panX: Float,
+        panY: Float,
+        rollDegrees: Float = 0f,
+    ) {
         if (!isRecording || stopRequested) return
         requestedCameraInputZoomRatio = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
         requestedCameraInputPanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         requestedCameraInputPanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        requestedCameraInputRollDegrees = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
         val safeZoom = requestedCameraInputZoomRatio
         val safePanX = requestedCameraInputPanX
         val safePanY = requestedCameraInputPanY
+        val safeRoll = requestedCameraInputRollDegrees
         scope.launch(renderDispatcher) {
             if (!isRecording || stopRequested) return@launch
-            renderer?.updateCameraInputCrop(safeZoom, safePanX, safePanY)
+            renderer?.updateCameraInputCrop(safeZoom, safePanX, safePanY, safeRoll)
         }
     }
 
@@ -781,6 +791,7 @@ class VideoRecorder(
             cameraInputZoomRatio = requestedCameraInputZoomRatio,
             cameraInputPanX = requestedCameraInputPanX,
             cameraInputPanY = requestedCameraInputPanY,
+            cameraInputRollDegrees = requestedCameraInputRollDegrees,
             watermarkLabel = if (sharedTimelineStreamName != null) MediaWatermark.SPECIAL_VIDEO else null,
         )
         renderer = realtimeRenderer

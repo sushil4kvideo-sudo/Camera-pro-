@@ -147,7 +147,7 @@ internal fun TopOffPanPresetSettings(
             }
         }
         Text(
-            "Choose one from the camera Pan Preset picker and press Run. Start it before recording; gyro correction continues during the video render.",
+            "Choose one from the camera Pan Preset picker and press Run. Start it before recording; crop and roll corrections are sent to both preview and the MediaCodec video renderer.",
             color = Color.White.copy(alpha = 0.68f),
             fontSize = 11.sp,
             modifier = Modifier.padding(top = 8.dp, bottom = 10.dp),

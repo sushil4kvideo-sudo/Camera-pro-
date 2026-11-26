@@ -3671,6 +3671,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun finishTopOffPanPresetPlayback() =
         cameraController.finishTopOffPanPresetPlayback()
 
+    fun setTopOffGyroPanCorrection(panX: Float, panY: Float, rollDegrees: Float) =
+        cameraController.setTopOffGyroPanCorrection(panX, panY, rollDegrees)
+
     fun finishTopOffGyroPanPreset(panX: Float, panY: Float, rollDegrees: Float) =
         cameraController.finishTopOffGyroPanPreset(panX, panY, rollDegrees)
 

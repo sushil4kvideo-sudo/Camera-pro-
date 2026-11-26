@@ -2648,6 +2648,7 @@ fun CameraScreen(
                         topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
                             ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
                     }
+                    viewModel.setTopOffGyroPanCorrection(panX, panY, rollDegrees)
                     cameraGLSurfaceView?.setTopOffZoomCrop(
                         enabled = zoomCropVisible,
                         zoomRatio = if (zoomCropVisible) lockedZoom else 1f,
