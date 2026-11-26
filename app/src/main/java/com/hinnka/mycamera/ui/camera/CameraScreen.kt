@@ -3356,6 +3356,7 @@ private fun Controls(
     sideControlInset: Dp?,
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
+    val context = LocalContext.current
     val captureButtonStyle by viewModel.captureButtonStyle.collectAsState()
     val captureButtonColor by viewModel.captureButtonColor.collectAsState()
     val captureButtonImagePath by viewModel.captureButtonImagePath.collectAsState()
