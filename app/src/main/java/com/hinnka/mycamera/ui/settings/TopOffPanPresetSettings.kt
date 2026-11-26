@@ -244,7 +244,7 @@ internal fun TopOffPanPresetSettings(
                 onValueChange = { zoom ->
                     updateSelectedPoint { it.copy(zoomRatio = zoom) }
                 },
-                valueRange = 1f..10f,
+                valueRange = 1f..TopOffPanPreset.MAX_ZOOM_RATIO,
             )
             TextButton(
                 onClick = {
