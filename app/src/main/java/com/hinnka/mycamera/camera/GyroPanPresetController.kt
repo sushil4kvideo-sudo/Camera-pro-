@@ -316,9 +316,15 @@ class GyroPanPresetController(
                 )
                 // The virtual camera follows lowPass(orientation). The crop-window offset
                 // relative to the physical camera is lowPass(angle) - angle, not lowPass(angle).
-                val followHorizontalOffset = smoothHorizontal - horizontalAngle
-                val followVerticalOffset = smoothVertical - verticalAngle
-                val followRollOffset = smoothRoll - opticalRoll
+                val followHorizontalOffset = GyroPanFilterMath.smoothFollowOffset(
+                    smoothHorizontal, horizontalAngle
+                )
+                val followVerticalOffset = GyroPanFilterMath.smoothFollowOffset(
+                    smoothVertical, verticalAngle
+                )
+                val followRollOffset = GyroPanFilterMath.smoothFollowOffset(
+                    smoothRoll, opticalRoll
+                )
                 GyroPanCorrection(
                     panX = (
                         basePanX + GyroPanFilterMath.normalizedPanForAngle(
