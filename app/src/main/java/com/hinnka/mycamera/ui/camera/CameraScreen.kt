@@ -3595,60 +3595,60 @@ private fun Controls(
                     if (showTopOffPanPresetControls) {
                         // Keep the pan-pad centered vertically on the shutter row.
                         // The preset runner sits independently on the shutter's left side.
-                        if (!state.videoRecordingState.isRecording) {
-                            // Mirror the joystick's 76.dp footprint and 24.dp edge inset.
-                            // This puts the Run button center exactly as far from the shutter
-                            // as the joystick center on the opposite side.
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.CenterStart)
-                                    .padding(start = 24.dp)
-                                    .size(76.dp),
-                                contentAlignment = Alignment.Center,
+                        // Keep Run/Stop available while recording; the controller updates
+                        // both the live preview crop and the recording encoder crop.
+                        // Mirror the joystick's 76.dp footprint and 24.dp edge inset.
+                        // This puts the Run button center exactly as far from the shutter
+                        // as the joystick center on the opposite side.
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .padding(start = 24.dp)
+                                .size(76.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                IconButton(
+                                    onClick = {
+                                        if (runningTopOffPanPreset != null) {
+                                            runningTopOffPanPreset = null
+                                        } else {
+                                            if (aiSubjectTrackingEnabled) onAiTrackingToggle()
+                                            runningTopOffPanPreset = selectedTopOffPanPreset
+                                        }
+                                    },
+                                    enabled = selectedTopOffPanPreset != null &&
+                                        !state.videoRecordingState.isProcessing,
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .background(
+                                            Color.White.copy(alpha = 0.16f),
+                                            CircleShape,
+                                        ),
                                 ) {
-                                    IconButton(
-                                        onClick = {
-                                            if (runningTopOffPanPreset != null) {
-                                                runningTopOffPanPreset = null
-                                            } else {
-                                                if (aiSubjectTrackingEnabled) onAiTrackingToggle()
-                                                runningTopOffPanPreset = selectedTopOffPanPreset
-                                            }
+                                    Icon(
+                                        imageVector = if (runningTopOffPanPreset != null) {
+                                            Icons.Default.Close
+                                        } else {
+                                            Icons.Default.PlayArrow
                                         },
-                                        enabled = selectedTopOffPanPreset != null &&
-                                            !state.videoRecordingState.isProcessing,
-                                        modifier = Modifier
-                                            .size(42.dp)
-                                            .background(
-                                                Color.White.copy(alpha = 0.16f),
-                                                CircleShape,
-                                            ),
-                                    ) {
-                                        Icon(
-                                            imageVector = if (runningTopOffPanPreset != null) {
-                                                Icons.Default.Close
-                                            } else {
-                                                Icons.Default.PlayArrow
-                                            },
-                                            contentDescription = if (runningTopOffPanPreset != null) {
-                                                "Stop pan preset"
-                                            } else {
-                                                "Run pan preset"
-                                            },
-                                            tint = Color.White,
-                                            modifier = Modifier.size(25.dp),
-                                        )
-                                    }
-                                    Text(
-                                        text = if (runningTopOffPanPreset != null) "Stop" else "Run",
-                                        color = Color.White.copy(alpha = 0.85f),
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Medium,
+                                        contentDescription = if (runningTopOffPanPreset != null) {
+                                            "Stop pan preset"
+                                        } else {
+                                            "Run pan preset"
+                                        },
+                                        tint = Color.White,
+                                        modifier = Modifier.size(25.dp),
                                     )
                                 }
+                                Text(
+                                    text = if (runningTopOffPanPreset != null) "Stop" else "Run",
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
                             }
                         }
                         ZoomPanJoystick(
