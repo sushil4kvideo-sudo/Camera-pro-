@@ -8606,6 +8606,13 @@ class Camera2Controller(private val context: Context) {
                 zoomPanY = if (keepZoomPan) stateBeforeClamp.zoomPanY else 0f,
                 zoomPanEnabled = keepZoomPan,
             )
+            if (videoRecorder.isRecording()) {
+                videoRecorder.updateCameraInputCrop(
+                    zoomRatio = if (topOffZoomActive) requestZoomRatio else 1f,
+                    panX = if (topOffZoomActive) _topOffZoomPanX.value else 0f,
+                    panY = if (topOffZoomActive) _topOffZoomPanY.value else 0f,
+                )
+            }
             if (recreateSessionForPhysicalZoomIfNeeded(_state.value)) {
                 PLog.d(TAG, "setZoomRatio: $ratio -> $clampedDeviceZoomRatio (physical output session recreated)")
                 return
