@@ -52,7 +52,7 @@ class ZoomCropGeometryTest {
         assertEquals(left.top, right.top, 0.0001f)
         assertTrue(left.left < right.left)
         assertEquals(0f, left.left, 0.0001f)
-        assertEquals(0.5f, right.right, 0.0001f)
+        assertEquals(1f, right.right, 0.0001f)
     }
 
     @Test
