@@ -10735,8 +10735,12 @@ class Camera2Controller(private val context: Context) {
 
     fun setTopOffZoomPan(panX: Float, panY: Float) {
         val requestedAtNs = SystemClock.elapsedRealtimeNanos()
+        val isRecording = videoRecorder.isRecording() ||
+            _state.value.videoRecordingState.isRecording
         val handler = cameraHandler
-        if (handler != null && Looper.myLooper() != handler.looper) {
+        // Recording crop updates are thread-safe and dispatched by VideoRecorder to its render
+        // dispatcher. Do not queue every joystick sample behind Camera2 request work.
+        if (!isRecording && handler != null && Looper.myLooper() != handler.looper) {
             handler.post { applyTopOffZoomPan(panX, panY, requestedAtNs) }
             return
         }
@@ -10744,14 +10748,13 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun applyTopOffZoomPan(panX: Float, panY: Float, requestedAtNs: Long) {
+        val current = _state.value
         if (
-            videoRecorder.isRecording() ||
-            spatialVideoRecorder.isRecording() ||
+            (spatialVideoRecorder.isRecording() && !dualAspectRecordingActive) ||
             spatialVideoTelephotoRecorder.isRecording() ||
-            _state.value.videoRecordingState.isRecording ||
-            _state.value.videoRecordingState.isProcessing
+            current.videoRecordingState.isProcessing
         ) {
-            PLog.w("TopOffZoom", "PAN rejected: recording/processing is active")
+            PLog.w("TopOffZoom", "PAN rejected: incompatible spatial recording/processing is active")
             return
         }
 
@@ -10765,47 +10768,85 @@ class Camera2Controller(private val context: Context) {
             .putFloat("top_off_zoom_pan_y", safePanY)
             .putFloat("top_off_zoom_roll_degrees", 0f)
             .apply()
+
+        val recording = current.videoRecordingState.isRecording || videoRecorder.isRecording()
+        val canApplySoftwareCrop = _topOffZoomEnabled.value &&
+            current.captureMode == CaptureMode.VIDEO &&
+            !spatialVideoEnabled && !dualCaptureEnabled
+        if (recording && canApplySoftwareCrop) {
+            val zoom = (
+                _topOffZoomLockedRatio.value.takeIf { it.isFinite() && it >= 1f }
+                    ?: (current.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value)
+                ).coerceIn(1f, 20f)
+            if (videoRecorder.isRecording()) {
+                videoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, 0f)
+            }
+            if (dualAspectRecordingActive && spatialVideoRecorder.isRecording()) {
+                spatialVideoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, 0f)
+            }
+        } else if (!recording) {
+            // Camera2 request updates are only needed in the idle preview path. During video,
+            // the preview follows StateFlow and the encoder receives the matching crop directly.
+            reapplyTopOffZoomRequest()
+        }
+
         val now = SystemClock.elapsedRealtime()
         if (now - lastTopOffZoomPanDiagnosticAtMs >= 120L) {
             lastTopOffZoomPanDiagnosticAtMs = now
             PLog.d(
                 "TopOffZoom",
-                "PAN accepted pan=($safePanX,$safePanY) lockedZoom=${_topOffZoomLockedRatio.value} " +
-                    "baseZoom=${_state.value.zoomRatio}"
+                "PAN accepted pan=($safePanX,$safePanY) recording=$recording " +
+                    "lockedZoom=${_topOffZoomLockedRatio.value} baseZoom=${current.zoomRatio}"
             )
         }
-        reapplyTopOffZoomRequest()
         _topOffPanLatencyMs.value =
             ((SystemClock.elapsedRealtimeNanos() - requestedAtNs).coerceAtLeast(0L) / 1_000_000f)
     }
 
     /**
-     * Update the software-crop state for one animation frame. This stays off the camera
-     * request queue and performs no disk I/O; CameraScreen observes these StateFlows and
-     * updates the GPU crop directly. Persist the final position once playback ends.
+     * Update the software crop for one preset animation frame. StateFlows update the preview;
+     * the active video encoder receives the same crop directly so waypoint playback continues
+     * in the saved recording without rebuilding the Camera2 session.
      */
     fun setTopOffZoomPresetPoint(zoomRatio: Float, panX: Float, panY: Float) {
         val requestedAtNs = SystemClock.elapsedRealtimeNanos()
         if (!_topOffZoomEnabled.value) return
+
+        val current = _state.value
         if (
-            videoRecorder.isRecording() ||
-            spatialVideoRecorder.isRecording() ||
+            (spatialVideoRecorder.isRecording() && !dualAspectRecordingActive) ||
             spatialVideoTelephotoRecorder.isRecording() ||
-            _state.value.videoRecordingState.isRecording ||
-            _state.value.videoRecordingState.isProcessing
+            current.videoRecordingState.isProcessing
         ) {
             return
         }
 
-        val baseZoom = _state.value.zoomRatio.coerceAtLeast(1f)
+        val baseZoom = current.zoomRatio.coerceAtLeast(1f)
         val requestedZoom = zoomRatio.takeIf { it.isFinite() }?.coerceAtLeast(baseZoom)
             ?: (baseZoom * 2f)
         val safeFactor = (requestedZoom / baseZoom).coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
+        val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         _topOffZoomFactor.value = safeFactor
         _topOffZoomLockedRatio.value = baseZoom * safeFactor
-        _topOffZoomPanX.value = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        _topOffZoomPanY.value = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        _topOffZoomPanX.value = safePanX
+        _topOffZoomPanY.value = safePanY
         _topOffZoomRollDegrees.value = 0f
+
+        val recording = current.videoRecordingState.isRecording || videoRecorder.isRecording()
+        val canApplySoftwareCrop = _topOffZoomEnabled.value &&
+            current.captureMode == CaptureMode.VIDEO &&
+            !spatialVideoEnabled && !dualCaptureEnabled
+        if (recording && canApplySoftwareCrop) {
+            val encoderZoom = _topOffZoomLockedRatio.value.coerceIn(1f, 20f)
+            if (videoRecorder.isRecording()) {
+                videoRecorder.updateCameraInputCrop(encoderZoom, safePanX, safePanY, 0f)
+            }
+            if (dualAspectRecordingActive && spatialVideoRecorder.isRecording()) {
+                spatialVideoRecorder.updateCameraInputCrop(encoderZoom, safePanX, safePanY, 0f)
+            }
+        }
+
         _topOffPanLatencyMs.value =
             ((SystemClock.elapsedRealtimeNanos() - requestedAtNs).coerceAtLeast(0L) / 1_000_000f)
     }
