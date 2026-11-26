@@ -231,6 +231,6 @@ class GyroPanPresetController(
         const val DEAD_ZONE_RADIANS = 0.15f * DEG_TO_RAD
         const val UPDATE_EPSILON = 0.0008f
         const val ROLL_UPDATE_EPSILON = 0.035f
-        const val DEG_TO_RAD = (PI / 180.0).toFloat()
+        const val DEG_TO_RAD = 0.017453292519943295f
     }
 }
