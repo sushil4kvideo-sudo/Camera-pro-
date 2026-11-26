@@ -266,6 +266,9 @@ fun CameraScreen(
     var aiTrackingOwnsTopOffZoom by remember { mutableStateOf(false) }
     var aiTrackingChangedTopOffFactor by remember { mutableStateOf(false) }
     var aiTrackingPreviousTopOffFactor by remember { mutableFloatStateOf(Float.NaN) }
+    var aiTrackingShouldRestoreTopOffPan by remember { mutableStateOf(false) }
+    var aiTrackingPreviousTopOffPanX by remember { mutableFloatStateOf(0f) }
+    var aiTrackingPreviousTopOffPanY by remember { mutableFloatStateOf(0f) }
     var aiTrackingOriginalZoom by remember { mutableFloatStateOf(Float.NaN) }
     var aiTrackingAssistZoom by remember { mutableFloatStateOf(Float.NaN) }
     val pendingPhotoCrashReport by PhotoCaptureCrashLogger.pendingCrashReport.collectAsState()
@@ -1350,6 +1353,13 @@ fun CameraScreen(
             val cameraIdle = !state.videoRecordingState.isRecording &&
                 !state.videoRecordingState.isProcessing
             if (shouldStopTracking && cameraIdle) {
+                if (aiTrackingShouldRestoreTopOffPan) {
+                    viewModel.setTopOffZoomPan(
+                        aiTrackingPreviousTopOffPanX,
+                        aiTrackingPreviousTopOffPanY,
+                    )
+                    aiTrackingShouldRestoreTopOffPan = false
+                }
                 if (aiTrackingOwnsTopOffZoom) {
                     viewModel.setTopOffZoomEnabled(false)
                     aiTrackingOwnsTopOffZoom = false
@@ -2903,7 +2913,19 @@ fun CameraScreen(
                                 val recordingActive = state.videoRecordingState.isRecording ||
                                     state.videoRecordingState.isProcessing
                                 val cameraInfo = state.getCurrentCameraInfo()
-                                if (topOffZoomAvailable && !topOffZoomEnabled && !recordingActive) {
+                                if (topOffZoomEnabled) {
+                                    aiTrackingPreviousTopOffPanX = topOffZoomPanX
+                                    aiTrackingPreviousTopOffPanY = topOffZoomPanY
+                                    aiTrackingShouldRestoreTopOffPan = true
+                                    if (topOffZoomFactor < 2f && !recordingActive) {
+                                        aiTrackingPreviousTopOffFactor = topOffZoomFactor
+                                        aiTrackingChangedTopOffFactor = true
+                                        viewModel.setTopOffZoomFactor(2f)
+                                    }
+                                } else if (topOffZoomAvailable && !recordingActive) {
+                                    aiTrackingPreviousTopOffPanX = topOffZoomPanX
+                                    aiTrackingPreviousTopOffPanY = topOffZoomPanY
+                                    aiTrackingShouldRestoreTopOffPan = true
                                     aiTrackingPreviousTopOffFactor = topOffZoomFactor
                                     aiTrackingChangedTopOffFactor = true
                                     viewModel.setTopOffZoomFactor(maxOf(2f, topOffZoomFactor))
