@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.ui.components.OppoCameraGlassSurface
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoCapabilities
