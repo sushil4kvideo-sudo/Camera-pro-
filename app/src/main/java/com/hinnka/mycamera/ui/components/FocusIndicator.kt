@@ -95,10 +95,16 @@ fun FocusIndicator(
     )
     
     // 颜色
-    val color = when (focusSuccess) {
-        true -> Color.Green
-        false -> Color.Red
-        else -> if (source == FocusPointSource.EYE) Color(0xFF64D8FF) else Color.White
+    // Keep the dedicated eye-tracking reticle yellow; manual AF retains its
+    // existing green/red success feedback and white idle state.
+    val color = if (source == FocusPointSource.EYE) {
+        Color(0xFFFFD54F)
+    } else {
+        when (focusSuccess) {
+            true -> Color.Green
+            false -> Color.Red
+            else -> Color.White
+        }
     }
 
     LaunchedEffect(position) {
