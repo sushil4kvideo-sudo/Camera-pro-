@@ -137,22 +137,22 @@ object PLog {
     /**
      * 获取格式化的所有日志文本
      */
-    fun getFormattedLogs(): String {
-        if (logQueue.isEmpty()) {
+    fun getFormattedLogs(entries: List<LogEntry> = getAllLogs()): String {
+        if (entries.isEmpty()) {
             return "暂无日志记录"
         }
 
         return buildString {
             appendLine("=== MyCamera 日志记录 ===")
             appendLine("导出时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
-            appendLine("日志总数: ${logQueue.size}")
+            appendLine("日志总数: ${entries.size}")
             appendLine("厂商: ${Build.MANUFACTURER}")
             appendLine("型号: ${Build.MODEL}")
             appendLine("Android 版本: ${Build.VERSION.RELEASE}")
             appendLine("=".repeat(50))
             appendLine()
 
-            getAllLogs().forEach { entry ->
+            entries.forEach { entry ->
                 appendLine(entry.getFormattedLog())
             }
         }
@@ -164,6 +164,11 @@ object PLog {
     fun clearLogs() {
         logQueue.clear()
         Log.i(TAG, "日志已清空")
+    }
+
+    fun clearLogsByTag(tag: String) {
+        logQueue.removeIf { it.tag == tag }
+        Log.i(TAG, "已清空标签为 $tag 的日志")
     }
 
     /**
@@ -183,9 +188,9 @@ object PLog {
     /**
      * 获取日志统计信息
      */
-    fun getLogStats(): Map<LogLevel, Int> {
+    fun getLogStats(entries: List<LogEntry> = getAllLogs()): Map<LogLevel, Int> {
         return LogLevel.entries.associateWith { level ->
-            logQueue.count { it.level == level }
+            entries.count { it.level == level }
         }
     }
 }

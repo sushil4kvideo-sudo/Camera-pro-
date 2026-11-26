@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -59,6 +60,7 @@ import com.hinnka.mycamera.video.VideoCapabilities
 import com.hinnka.mycamera.video.VideoConfig
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoResolutionPreset
+import com.hinnka.mycamera.utils.PLog
 
 private val VideoSelectorGold = Color(0xFFFFC107)
 private val VideoSelectorLabel = Color.White.copy(alpha = 0.72f)
@@ -471,6 +473,7 @@ private fun TopOffZoomCropEditor(
                 )
             )
             var isCropDragging by remember { androidx.compose.runtime.mutableStateOf(false) }
+            var lastDragDiagnosticAtMs by remember { androidx.compose.runtime.mutableStateOf(0L) }
 
             Box(
                 modifier = Modifier
@@ -485,9 +488,24 @@ private fun TopOffZoomCropEditor(
                                     start.x <= bounds.right + hitSlop &&
                                     start.y >= bounds.top - hitSlop &&
                                     start.y <= bounds.bottom + hitSlop
+                                PLog.i(
+                                    "TopOffZoom",
+                                    "EDITOR dragStart accepted=$isCropDragging pointer=(${start.x},${start.y}) " +
+                                        "cropBounds=$bounds zoom=$zoomFactor pan=(${panX},${panY}) " +
+                                        "travel=(${latestTravelX.value},${latestTravelY.value})"
+                                )
                             },
-                            onDragEnd = { isCropDragging = false },
-                            onDragCancel = { isCropDragging = false },
+                            onDragEnd = {
+                                PLog.i(
+                                    "TopOffZoom",
+                                    "EDITOR dragEnd pan=(${currentPanX.value},${currentPanY.value}) zoom=$zoomFactor"
+                                )
+                                isCropDragging = false
+                            },
+                            onDragCancel = {
+                                PLog.w("TopOffZoom", "EDITOR dragCancel pan=(${currentPanX.value},${currentPanY.value})")
+                                isCropDragging = false
+                            },
                         ) { change, dragAmount ->
                             if (!isCropDragging) return@detectDragGestures
                             change.consume()
@@ -504,6 +522,16 @@ private fun TopOffZoomCropEditor(
                                 0f
                             }
                             currentOnPanChange.value(nextPanX, nextPanY)
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastDragDiagnosticAtMs >= 120L) {
+                                lastDragDiagnosticAtMs = now
+                                PLog.d(
+                                    "TopOffZoom",
+                                    "EDITOR dragDelta=(${dragAmount.x},${dragAmount.y}) " +
+                                        "pan=(${nextPanX},${nextPanY}) zoom=$zoomFactor " +
+                                        "travelPx=(${travelXpx},${travelYpx})"
+                                )
+                            }
                         }
                     },
                 contentAlignment = Alignment.TopStart,

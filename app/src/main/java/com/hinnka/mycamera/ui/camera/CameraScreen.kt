@@ -254,6 +254,7 @@ fun CameraScreen(
     val spatialVideoVirtualTelephotoEnabled by viewModel.spatialVideoVirtualTelephotoEnabled.collectAsState()
     val topOffZoomEnabled by viewModel.topOffZoomEnabled.collectAsState()
     val topOffZoomFactor by viewModel.topOffZoomFactor.collectAsState()
+    val topOffZoomLockedRatio by viewModel.topOffZoomLockedRatio.collectAsState()
     val topOffZoomPanX by viewModel.topOffZoomPanX.collectAsState()
     val topOffZoomPanY by viewModel.topOffZoomPanY.collectAsState()
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
@@ -1261,7 +1262,8 @@ fun CameraScreen(
             viewModel.isTopOffZoomAvailable()
         }
         val effectiveTopOffZoomRatio = (
-            state.zoomRatio * topOffZoomFactor
+            topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
+                ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
         ).coerceIn(1f, (currentCameraInfo?.maxZoom ?: 10f).coerceAtLeast(1f))
 
         val density = LocalDensity.current

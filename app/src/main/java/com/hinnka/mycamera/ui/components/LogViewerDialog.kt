@@ -41,12 +41,16 @@ import java.util.Locale
 @Composable
 fun LogViewerDialog(
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    filterTag: String? = null,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val logs = remember { PLog.getAllLogs() }
-    val logStats = remember { PLog.getLogStats() }
+    val logs = remember(filterTag) {
+        PLog.getAllLogs().filter { filterTag == null || it.tag == filterTag }
+    }
+    val logStats = remember(logs) { PLog.getLogStats(logs) }
+    val viewerTitle = if (filterTag == "TopOffZoom") "Top Off Zoom diagnostics" else "日志查看器"
     val downloadSuccessMessage = stringResource(R.string.log_download_success)
     val downloadFailedMessage = stringResource(R.string.log_download_failed)
 
@@ -70,9 +74,10 @@ fun LogViewerDialog(
             ) {
                 // 标题栏
                 LogViewerHeader(
+                    title = viewerTitle,
                     logCount = logs.size,
                     onDownload = {
-                        val formattedLogs = PLog.getFormattedLogs()
+                        val formattedLogs = PLog.getFormattedLogs(logs)
                         coroutineScope.launch {
                             val fileName = withContext(Dispatchers.IO) {
                                 downloadLogs(context, formattedLogs).getOrNull()
@@ -86,7 +91,7 @@ fun LogViewerDialog(
                         }
                     },
                     onClear = {
-                        PLog.clearLogs()
+                        if (filterTag == null) PLog.clearLogs() else PLog.clearLogsByTag(filterTag)
                         Toast.makeText(context, "日志已清空", Toast.LENGTH_SHORT).show()
                         onDismiss()
                     },
@@ -117,6 +122,7 @@ fun LogViewerDialog(
  */
 @Composable
 private fun LogViewerHeader(
+    title: String,
     logCount: Int,
     onDownload: () -> Unit,
     onClear: () -> Unit,
@@ -131,7 +137,7 @@ private fun LogViewerHeader(
     ) {
         Column {
             Text(
-                text = "日志查看器",
+                text = title,
                 color = Color.White,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold

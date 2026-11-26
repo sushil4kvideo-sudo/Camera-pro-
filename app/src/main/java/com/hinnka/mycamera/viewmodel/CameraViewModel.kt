@@ -3582,6 +3582,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val spatialVideoVirtualTelephotoEnabled = cameraController.spatialVideoVirtualTelephotoEnabledFlow
     val topOffZoomEnabled = cameraController.topOffZoomEnabledFlow
     val topOffZoomFactor = cameraController.topOffZoomFactorFlow
+    val topOffZoomLockedRatio = cameraController.topOffZoomLockedRatioFlow
     val topOffZoomPanX = cameraController.topOffZoomPanXFlow
     val topOffZoomPanY = cameraController.topOffZoomPanYFlow
     val normalVideoUltraWideInstantSwitchActive =

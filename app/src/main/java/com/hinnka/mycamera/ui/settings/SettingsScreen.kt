@@ -775,6 +775,7 @@ fun SettingsScreen(
 
     // 日志查看器弹窗状态
     var showLogViewerDialog by remember { mutableStateOf(false) }
+    var logViewerFilterTag by remember { mutableStateOf<String?>(null) }
     var showCustomAIModelDialog by remember { mutableStateOf(false) }
     var customAIModelValue by remember { mutableStateOf("") }
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
@@ -2251,6 +2252,20 @@ fun SettingsScreen(
                             action = volumeKeyAction,
                             onActionSelected = { viewModel.setVolumeKeyAction(it) }
                         )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        NavigationSettingItem(
+                            title = "Top Off Zoom diagnostics",
+                            description = "View crop drag, pan, zoom-lock and Camera2 crop-request logs.",
+                            onClick = {
+                                logViewerFilterTag = "TopOffZoom"
+                                showLogViewerDialog = true
+                            },
+                        )
                     }
                 }
 
@@ -2309,7 +2324,10 @@ fun SettingsScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { showLogViewerDialog = true }
+                                .clickable {
+                                    logViewerFilterTag = null
+                                    showLogViewerDialog = true
+                                }
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
@@ -2484,7 +2502,8 @@ fun SettingsScreen(
     // 显示日志查看器弹窗
     if (showLogViewerDialog) {
         LogViewerDialog(
-            onDismiss = { showLogViewerDialog = false }
+            onDismiss = { showLogViewerDialog = false },
+            filterTag = logViewerFilterTag,
         )
     }
 

@@ -381,6 +381,13 @@ class Camera2Controller(private val context: Context) {
         specialVideoPreferences.getFloat("top_off_zoom_factor", 2f).coerceIn(1f, 4f)
     )
     val topOffZoomFactorFlow: StateFlow<Float> = _topOffZoomFactor.asStateFlow()
+    private val _topOffZoomLockedRatio = MutableStateFlow(
+        specialVideoPreferences.getFloat("top_off_zoom_locked_ratio", Float.NaN)
+            .takeIf { it.isFinite() && it >= 1f } ?: Float.NaN
+    )
+    val topOffZoomLockedRatioFlow: StateFlow<Float> = _topOffZoomLockedRatio.asStateFlow()
+    @Volatile private var lastTopOffZoomDiagnosticSignature: String? = null
+    private var lastTopOffZoomPanDiagnosticAtMs = 0L
     private val _topOffZoomPanX = MutableStateFlow(
         specialVideoPreferences.getFloat("top_off_zoom_pan_x", 0f).coerceIn(-1f, 1f)
     )
@@ -6738,8 +6745,11 @@ class Camera2Controller(private val context: Context) {
                 !spatialVideoEnabled &&
                 !dualCaptureEnabled &&
                 userZoomRatio >= 1f
-            val zoomMultiplier = if (topOffZoomActive) _topOffZoomFactor.value else 1f
-            val zoomRatio = (userZoomRatio * zoomMultiplier).coerceIn(minZoom, maxSupportedZoom)
+            val zoomRatio = if (topOffZoomActive) {
+                resolveTopOffZoomLockedRatio(userZoomRatio).coerceIn(minZoom, maxSupportedZoom)
+            } else {
+                userZoomRatio
+            }
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
             val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)
                 ?: cameraInfo?.sensorOrientation ?: 0
@@ -6760,6 +6770,26 @@ class Camera2Controller(private val context: Context) {
             val panX = topOffPan?.first ?: state.zoomPanX
             val panY = topOffPan?.second ?: state.zoomPanY
 
+            if (_topOffZoomEnabled.value && !topOffZoomActive) {
+                val inactiveReason = when {
+                    state.captureMode != CaptureMode.VIDEO -> "capture-mode-not-video"
+                    logicalAutoSwitch -> "logical-multi-camera-active"
+                    spatialVideoEnabled -> "spatial-video-active"
+                    dualCaptureEnabled -> "dual-capture-active"
+                    userZoomRatio < 1f -> "base-zoom-below-1x"
+                    else -> "unknown"
+                }
+                val inactiveSignature = "inactive|$inactiveReason|$userZoomRatio|$logicalAutoSwitch"
+                if (inactiveSignature != lastTopOffZoomDiagnosticSignature) {
+                    lastTopOffZoomDiagnosticSignature = inactiveSignature
+                    PLog.w(
+                        "TopOffZoom",
+                        "NOT_ACTIVE reason=$inactiveReason baseZoom=$userZoomRatio " +
+                            "logicalAutoSwitch=$logicalAutoSwitch spatial=$spatialVideoEnabled dual=$dualCaptureEnabled"
+                    )
+                }
+            }
+
             applyZoomRequestSettings(
                 builder = builder,
                 zoomRatio = zoomRatio,
@@ -6774,7 +6804,21 @@ class Camera2Controller(private val context: Context) {
                 ),
                 cropAspectRatio = cropAspectRatio,
             )
+            if (topOffZoomActive) {
+                logTopOffZoomRequest(
+                    baseZoomRatio = userZoomRatio,
+                    lockedZoomRatio = zoomRatio,
+                    panX = panX,
+                    panY = panY,
+                    activeRect = activeRect,
+                    cropAspectRatio = cropAspectRatio,
+                    sensorOrientation = sensorOrientation,
+                )
+            }
         } catch (e: Exception) {
+            if (_topOffZoomEnabled.value) {
+                PLog.e("TopOffZoom", "APPLY_FAILED while applying Camera2 crop request", e)
+            }
             PLog.e(TAG, "Failed to apply zoom settings", e)
         }
     }
@@ -8480,9 +8524,14 @@ class Camera2Controller(private val context: Context) {
                 !spatialVideoEnabled &&
                 !dualCaptureEnabled &&
                 clampedDeviceZoomRatio >= 1f
-            val requestZoomRatio = (
-                clampedDeviceZoomRatio * if (topOffZoomActive) _topOffZoomFactor.value else 1f
-            ).coerceIn(minZoom, maxSupportedZoom)
+            val requestZoomRatio = if (topOffZoomActive) {
+                updateTopOffZoomLockedRatio(
+                    clampedDeviceZoomRatio * _topOffZoomFactor.value,
+                    "manual-zoom-selection",
+                ).coerceIn(minZoom, maxSupportedZoom)
+            } else {
+                clampedDeviceZoomRatio
+            }
             val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)
                 ?: selectedCamera?.sensorOrientation ?: 0
             val cropAspectRatio = ZoomCropGeometry.sensorCoordinateAspectRatio(
@@ -8535,6 +8584,17 @@ class Camera2Controller(private val context: Context) {
                             _state.value.getCurrentCameraInfo()?.supportsFreeformZoomPan == true
                     ),
                     cropAspectRatio = cropAspectRatio,
+                )
+            }
+            if (topOffZoomActive) {
+                logTopOffZoomRequest(
+                    baseZoomRatio = clampedDeviceZoomRatio,
+                    lockedZoomRatio = requestZoomRatio,
+                    panX = topOffPan?.first ?: _state.value.zoomPanX,
+                    panY = topOffPan?.second ?: _state.value.zoomPanY,
+                    activeRect = activeRect,
+                    cropAspectRatio = cropAspectRatio,
+                    sensorOrientation = sensorOrientation,
                 )
             }
             if (logicalAutoSwitch && previousLogicalZoomRatio > 0.85f &&
@@ -10296,6 +10356,63 @@ class Camera2Controller(private val context: Context) {
         return activeArray.width() > 0 && activeArray.height() > 0
     }
 
+    private fun updateTopOffZoomLockedRatio(ratio: Float, reason: String): Float {
+        val safeRatio = if (ratio.isFinite()) ratio.coerceAtLeast(1f) else 1f
+        _topOffZoomLockedRatio.value = safeRatio
+        specialVideoPreferences.edit().putFloat("top_off_zoom_locked_ratio", safeRatio).apply()
+        PLog.i(
+            "TopOffZoom",
+            "ZOOM_LOCK reason=$reason ratio=$safeRatio base=${_state.value.zoomRatio} factor=${_topOffZoomFactor.value}"
+        )
+        return safeRatio
+    }
+
+    private fun resolveTopOffZoomLockedRatio(baseZoomRatio: Float): Float {
+        val current = _topOffZoomLockedRatio.value
+        if (current.isFinite() && current >= 1f) return current
+        return updateTopOffZoomLockedRatio(
+            baseZoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value,
+            "initialise",
+        )
+    }
+
+    private fun logTopOffZoomRequest(
+        baseZoomRatio: Float,
+        lockedZoomRatio: Float,
+        panX: Float,
+        panY: Float,
+        activeRect: Rect?,
+        cropAspectRatio: Float,
+        sensorOrientation: Int,
+    ) {
+        val geometry = activeRect?.let {
+            ZoomCropGeometry.calculate(
+                sourceWidth = it.width().toFloat(),
+                sourceHeight = it.height().toFloat(),
+                outputAspectRatio = cropAspectRatio,
+                zoomRatio = lockedZoomRatio,
+                panX = panX,
+                panY = panY,
+            )
+        }
+        val signature = listOf(
+            baseZoomRatio.toString(), lockedZoomRatio.toString(),
+            panX.toString(), panY.toString(),
+            activeRect?.toShortString() ?: "no-active-array",
+            cropAspectRatio.toString(), sensorOrientation.toString(),
+        ).joinToString("|")
+        if (signature == lastTopOffZoomDiagnosticSignature) return
+        lastTopOffZoomDiagnosticSignature = signature
+        PLog.d(
+            "TopOffZoom",
+            "CAMERA_REQUEST base=$baseZoomRatio locked=$lockedZoomRatio pan=($panX,$panY) " +
+                "sensorOrientation=$sensorOrientation outputAspect=$cropAspectRatio " +
+                "activeArray=${activeRect?.toShortString() ?: "missing"} " +
+                "normalizedCrop=${geometry?.let { "(${it.left},${it.top},${it.right},${it.bottom})" } ?: "not-built"} " +
+                "mode=${if (activeRect != null) "SCALER_CROP_REGION" else "NO_ACTIVE_ARRAY"}"
+        )
+    }
+
     fun setTopOffZoomEnabled(enabled: Boolean) {
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
@@ -10308,9 +10425,21 @@ class Camera2Controller(private val context: Context) {
             spatialVideoTelephotoRecorder.isRecording() ||
             _state.value.videoRecordingState.isRecording ||
             _state.value.videoRecordingState.isProcessing
-        ) return
-        if (enabled && !isTopOffZoomAvailable()) return
-
+        ) {
+            PLog.w("TopOffZoom", "ENABLE rejected: recording/processing is active")
+            return
+        }
+        if (enabled && !isTopOffZoomAvailable()) {
+            PLog.w("TopOffZoom", "ENABLE rejected: feature unavailable for current camera/mode")
+            return
+        }
+        if (enabled) {
+            updateTopOffZoomLockedRatio(
+                _state.value.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value,
+                "enabled",
+            )
+        }
+        PLog.i("TopOffZoom", "ENABLE changed=$enabled")
         _topOffZoomEnabled.value = enabled
         specialVideoPreferences.edit().putBoolean("top_off_zoom_enabled", enabled).apply()
         reapplyTopOffZoomRequest()
@@ -10328,11 +10457,18 @@ class Camera2Controller(private val context: Context) {
             spatialVideoTelephotoRecorder.isRecording() ||
             _state.value.videoRecordingState.isRecording ||
             _state.value.videoRecordingState.isProcessing
-        ) return
+        ) {
+            PLog.w("TopOffZoom", "FACTOR rejected: recording/processing is active")
+            return
+        }
 
         val safeFactor = if (factor.isFinite()) factor.coerceIn(1f, 4f) else 2f
         _topOffZoomFactor.value = safeFactor
         specialVideoPreferences.edit().putFloat("top_off_zoom_factor", safeFactor).apply()
+        updateTopOffZoomLockedRatio(
+            _state.value.zoomRatio.coerceAtLeast(1f) * safeFactor,
+            "factor-selected",
+        )
         reapplyTopOffZoomRequest()
     }
 
@@ -10348,7 +10484,10 @@ class Camera2Controller(private val context: Context) {
             spatialVideoTelephotoRecorder.isRecording() ||
             _state.value.videoRecordingState.isRecording ||
             _state.value.videoRecordingState.isProcessing
-        ) return
+        ) {
+            PLog.w("TopOffZoom", "PAN rejected: recording/processing is active")
+            return
+        }
 
         val safePanX = if (panX.isFinite()) panX.coerceIn(-1f, 1f) else 0f
         val safePanY = if (panY.isFinite()) panY.coerceIn(-1f, 1f) else 0f
@@ -10358,6 +10497,15 @@ class Camera2Controller(private val context: Context) {
             .putFloat("top_off_zoom_pan_x", safePanX)
             .putFloat("top_off_zoom_pan_y", safePanY)
             .apply()
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastTopOffZoomPanDiagnosticAtMs >= 120L) {
+            lastTopOffZoomPanDiagnosticAtMs = now
+            PLog.d(
+                "TopOffZoom",
+                "PAN accepted pan=($safePanX,$safePanY) lockedZoom=${_topOffZoomLockedRatio.value} " +
+                    "baseZoom=${_state.value.zoomRatio}"
+            )
+        }
         reapplyTopOffZoomRequest()
     }
 
