@@ -108,6 +108,7 @@ class Camera2Controller(private val context: Context) {
     companion object {
         private const val TAG = "Camera2Controller"
         private const val ULTRA_WIDE_AE_HANDOFF_MAX_AGE_MS = 900L
+        private const val TOPOFF_HIGH_RES_INPUT_MAX_PIXELS = 12_500_000L
 
         // 自定义错误代码
         const val ERROR_CAMERA_DISCONNECTED = 1000
@@ -11070,6 +11071,70 @@ class Camera2Controller(private val context: Context) {
         }.getOrNull()
     }
 
+    /**
+     * Prefer a high-resolution PRIVATE/SurfaceTexture source for Top-Off software zoom while
+     * keeping the MediaCodec output size controlled by the selected recording preset.
+     *
+     * Camera2 stream size support alone does not guarantee a usable frame rate, so reject
+     * candidates whose reported minimum frame duration exceeds the selected frame interval.
+     * A zero duration means the HAL did not report a constraint; it is accepted for normal
+     * 30 fps recording, but not used to force high-resolution input above 30 fps.
+     */
+    private fun resolveTopOffHighResolutionCameraInputSize(
+        characteristics: CameraCharacteristics?,
+        preferred: Size,
+        targetFps: Int,
+    ): Size? {
+        if (characteristics == null || targetFps <= 0 || targetFps > 60) return null
+        val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return null
+        val preferredPixels = preferred.width.toLong() * preferred.height.toLong()
+        val frameIntervalNs = 1_000_000_000L / targetFps.coerceAtLeast(1)
+        val candidates = runCatching {
+            streamMap.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
+        }.getOrDefault(emptyList())
+            .distinct()
+            .filter { size ->
+                val pixels = size.width.toLong() * size.height.toLong()
+                size.width >= 1920 &&
+                    size.height >= 1080 &&
+                    pixels > preferredPixels &&
+                    pixels <= TOPOFF_HIGH_RES_INPUT_MAX_PIXELS
+            }
+            .filter { size ->
+                val minFrameDurationNs = runCatching {
+                    streamMap.getOutputMinFrameDuration(SurfaceTexture::class.java, size)
+                }.getOrDefault(0L)
+                (minFrameDurationNs <= 0L && targetFps <= 30) ||
+                    (minFrameDurationNs in 1L..frameIntervalNs)
+            }
+        val preferredAspect = preferred.width.toFloat() / preferred.height.coerceAtLeast(1)
+        val selected = candidates.sortedWith(
+            compareByDescending<Size> { it.width.toLong() * it.height.toLong() }
+                .thenBy {
+                    abs(it.width.toFloat() / it.height.coerceAtLeast(1) - preferredAspect)
+                }
+        ).firstOrNull()
+        if (selected != null) {
+            val durationNs = runCatching {
+                streamMap.getOutputMinFrameDuration(SurfaceTexture::class.java, selected)
+            }.getOrDefault(0L)
+            PLog.i(
+                "TopOffZoom",
+                "HIGH_RES_CANDIDATE=${selected.width}x${selected.height}, " +
+                    "pixels=${selected.width.toLong() * selected.height.toLong()}, " +
+                    "minFrameDurationNs=$durationNs, targetFps=$targetFps",
+            )
+        } else {
+            PLog.w(
+                "TopOffZoom",
+                "No higher-resolution SurfaceTexture input supports ${targetFps}fps; " +
+                    "keeping selected-resolution input ${preferred.width}x${preferred.height}",
+            )
+        }
+        return selected
+    }
+
     @Synchronized
     private fun finalizeSpatialVideoCompanionIfReady() {
         val primary = spatialPrimaryFinishedUri ?: return
@@ -12404,7 +12469,25 @@ class Camera2Controller(private val context: Context) {
         videoCaptureStatsFrames = 0
         videoCaptureStatsFirstTimestampNs = 0L
         val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
-        val requestedCameraInputSize = if (useEnhancedStabilization) {
+        val recordingCameraInfo = _state.value.getCurrentCameraInfo()
+        val normalVideoUltraWideRecordingInput =
+            normalVideoUltraWideInstantSwitchActive &&
+                isNormalVideoUltraWideLens(recordingCameraInfo)
+        val logicalMultiCameraRecordingInput =
+            shouldUseLogicalMultiCameraZoom(_state.value, recordingCameraInfo)
+        val topOffSoftwareCropActiveForRecording =
+            _topOffZoomEnabled.value &&
+                _state.value.captureMode == CaptureMode.VIDEO &&
+                (!logicalMultiCameraRecordingInput || normalVideoUltraWideRecordingInput) &&
+                !spatialVideoEnabled && !dualCaptureEnabled &&
+                (_state.value.zoomRatio >= 1f || normalVideoUltraWideRecordingInput)
+        val normalVideoMainInputId = normalVideoMainPhysicalCameraId ?: normalVideoPrimaryCameraId
+        val normalVideoMainCharacteristics = if (normalVideoUltraWideInstantSwitchActive && !spatialVideoEnabled) {
+            normalVideoMainInputId?.let { getCameraCharacteristicsOrNull(it, "Normal Video main recording input") }
+        } else {
+            null
+        }
+        val selectedResolutionCameraInputSize = if (useEnhancedStabilization) {
             _state.value.videoCapabilities.enhancedStabilizationInputSizesByResolution[
                 _state.value.videoConfig.resolution
             ]
@@ -12413,11 +12496,32 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.resolution
             ]
         } ?: _state.value.currentPreviewSize
-        val normalVideoMainInputId = normalVideoMainPhysicalCameraId ?: normalVideoPrimaryCameraId
-        val normalVideoMainCharacteristics = if (normalVideoUltraWideInstantSwitchActive && !spatialVideoEnabled) {
-            normalVideoMainInputId?.let { getCameraCharacteristicsOrNull(it, "Normal Video main recording input") }
+        // Top-Off uses the full sensor frame as its digital-zoom source. Keep this
+        // independent from the encoder canvas, which remains the selected video preset.
+        // Avoid increasing the input load for EIS+, Open Gate, paired-camera, or
+        // dual-aspect sessions, where stream-combination limits are tighter.
+        val topOffHighResolutionInputSize = if (
+            topOffSoftwareCropActiveForRecording &&
+            !useEnhancedStabilization &&
+            !normalVideoUltraWideInstantSwitchActive &&
+            selectedDualAspectRatio == null &&
+            _state.value.videoConfig.aspectRatio != VideoAspectRatio.OPEN_GATE
+        ) {
+            resolveTopOffHighResolutionCameraInputSize(
+                characteristics = getActiveOpenCameraCharacteristics(),
+                preferred = selectedResolutionCameraInputSize,
+                targetFps = _state.value.videoConfig.fps.fps,
+            )
         } else {
             null
+        }
+        val requestedCameraInputSize = topOffHighResolutionInputSize ?: selectedResolutionCameraInputSize
+        if (topOffHighResolutionInputSize != null) {
+            PLog.i(
+                "TopOffZoom",
+                "HIGH_RES_INPUT selected=${topOffHighResolutionInputSize.width}x${topOffHighResolutionInputSize.height}, " +
+                    "encoderPreset=${_state.value.videoConfig.resolution}, fps=${_state.value.videoConfig.fps.fps}",
+            )
         }
         val cameraInputSize = if (normalVideoUltraWideInstantSwitchActive && !spatialVideoEnabled) {
             normalVideoMainInputId?.let { resolveSpatialVideoInputSize(it, requestedCameraInputSize) }
@@ -12563,18 +12667,6 @@ class Camera2Controller(private val context: Context) {
             )
         }
 
-        val recordingCameraInfo = _state.value.getCurrentCameraInfo()
-        val normalVideoUltraWideRecordingInput =
-            normalVideoUltraWideInstantSwitchActive &&
-                isNormalVideoUltraWideLens(recordingCameraInfo)
-        val logicalMultiCameraRecordingInput =
-            shouldUseLogicalMultiCameraZoom(_state.value, recordingCameraInfo)
-        val topOffSoftwareCropActiveForRecording =
-            _topOffZoomEnabled.value &&
-                _state.value.captureMode == CaptureMode.VIDEO &&
-                (!logicalMultiCameraRecordingInput || normalVideoUltraWideRecordingInput) &&
-                !spatialVideoEnabled && !dualCaptureEnabled &&
-                (_state.value.zoomRatio >= 1f || normalVideoUltraWideRecordingInput)
         val topOffSoftwareZoomForRecording = if (topOffSoftwareCropActiveForRecording) {
             if (normalVideoUltraWideRecordingInput) {
                 // The ultra-wide optical baseline remains selected in the switchable input.
