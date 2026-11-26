@@ -3356,6 +3356,8 @@ private fun Controls(
     val captureProcessingState by viewModel.captureProcessingState.collectAsState()
     val capturedThumbnail by viewModel.capturedThumbnail.collectAsState()
     val topOffJoystickSpeed by viewModel.topOffJoystickSpeed.collectAsState()
+    val topOffZoomFactor by viewModel.topOffZoomFactor.collectAsState()
+    val topOffZoomLockedRatio by viewModel.topOffZoomLockedRatio.collectAsState()
     val topOffZoomPanX by viewModel.topOffZoomPanX.collectAsState()
     val topOffZoomPanY by viewModel.topOffZoomPanY.collectAsState()
     val topOffShowLatency by viewModel.topOffShowLatency.collectAsState()
@@ -3374,6 +3376,20 @@ private fun Controls(
     } ?: availableTopOffPanPresets.firstOrNull()
     val latestOnGyroPanUpdate by rememberUpdatedState(onGyroPanUpdate)
     val runningGyroPreset = runningTopOffPanPreset?.takeIf { it.gyroMode != null }
+    val gyroControllerRef = remember(runningGyroPreset?.id) {
+        mutableStateOf<GyroPanPresetController?>(null)
+    }
+    val topOffGyroOptics = remember(
+        state.currentCameraId,
+        state.videoConfig.aspectRatio,
+        state.videoConfig.resolution,
+        state.videoCapabilities.openGatePortraitAspectRatio,
+        state.zoomRatio,
+        topOffZoomFactor,
+        topOffZoomLockedRatio,
+    ) {
+        viewModel.getTopOffGyroPanOptics()
+    }
 
     DisposableEffect(runningGyroPreset?.id) {
         val preset = runningGyroPreset
@@ -3381,14 +3397,30 @@ private fun Controls(
         if (gyroMode == null) {
             onDispose { }
         } else {
+            // Gyro presets bypass the normal waypoint playback effect below. Initialize their
+            // first waypoint here so the preview crop and encoder crop are active before the
+            // first orientation sample arrives.
+            val initialPoint = preset.points.firstOrNull()
+            if (initialPoint != null) {
+                viewModel.setTopOffZoomPresetPoint(
+                    initialPoint.zoomRatio,
+                    initialPoint.panX,
+                    initialPoint.panY,
+                )
+            }
+            val initialOptics = viewModel.getTopOffGyroPanOptics()
             val gyroController = GyroPanPresetController(
                 context = context,
                 mode = gyroMode,
-                initialPanX = topOffZoomPanX,
-                initialPanY = topOffZoomPanY,
+                initialPanX = initialPoint?.panX ?: topOffZoomPanX,
+                initialPanY = initialPoint?.panY ?: topOffZoomPanY,
+                initialHorizontalFieldOfViewDegrees = initialOptics.horizontalFieldOfViewDegrees,
+                initialVerticalFieldOfViewDegrees = initialOptics.verticalFieldOfViewDegrees,
+                initialZoomRatio = initialOptics.zoomRatio,
             ) { correction ->
                 latestOnGyroPanUpdate(correction.panX, correction.panY, correction.rollDegrees)
             }
+            gyroControllerRef.value = gyroController
             val sensorStarted = gyroController.start()
             if (!sensorStarted) {
                 Toast.makeText(
@@ -3399,6 +3431,7 @@ private fun Controls(
                 runningTopOffPanPreset = null
             }
             onDispose {
+                gyroControllerRef.value = null
                 gyroController.stop()
                 if (sensorStarted) {
                     val finalCorrection = gyroController.currentCorrection
@@ -3410,6 +3443,11 @@ private fun Controls(
                 }
             }
         }
+    }
+
+    SideEffect {
+        // Refresh gain on zoom/aspect/lens changes without resetting gyro reference orientation.
+        gyroControllerRef.value?.updateOptics(topOffGyroOptics)
     }
 
     LaunchedEffect(runningTopOffPanPreset) {
