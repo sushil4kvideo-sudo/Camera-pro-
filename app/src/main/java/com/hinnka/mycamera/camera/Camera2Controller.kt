@@ -378,7 +378,7 @@ class Camera2Controller(private val context: Context) {
     )
     val topOffZoomEnabledFlow: StateFlow<Boolean> = _topOffZoomEnabled.asStateFlow()
     private val _topOffZoomFactor = MutableStateFlow(
-        specialVideoPreferences.getFloat("top_off_zoom_factor", 2f).coerceIn(1f, 4f)
+        specialVideoPreferences.getFloat("top_off_zoom_factor", 2f).coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
     )
     val topOffZoomFactorFlow: StateFlow<Float> = _topOffZoomFactor.asStateFlow()
     private val _topOffZoomLockedRatio = MutableStateFlow(
@@ -8584,7 +8584,7 @@ class Camera2Controller(private val context: Context) {
                 updateTopOffZoomLockedRatio(
                     clampedDeviceZoomRatio * _topOffZoomFactor.value,
                     "manual-zoom-selection",
-                ).coerceIn(minZoom, maxSupportedZoom)
+                )
             } else {
                 clampedDeviceZoomRatio
             }
@@ -10551,7 +10551,7 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        val safeFactor = if (factor.isFinite()) factor.coerceIn(1f, 4f) else 2f
+        val safeFactor = if (factor.isFinite()) factor.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO) else 2f
         _topOffZoomFactor.value = safeFactor
         specialVideoPreferences.edit().putFloat("top_off_zoom_factor", safeFactor).apply()
         updateTopOffZoomLockedRatio(
@@ -10626,7 +10626,7 @@ class Camera2Controller(private val context: Context) {
         val baseZoom = _state.value.zoomRatio.coerceAtLeast(1f)
         val requestedZoom = zoomRatio.takeIf { it.isFinite() }?.coerceAtLeast(baseZoom)
             ?: (baseZoom * 2f)
-        val safeFactor = (requestedZoom / baseZoom).coerceIn(1f, 4f)
+        val safeFactor = (requestedZoom / baseZoom).coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
         _topOffZoomFactor.value = safeFactor
         _topOffZoomLockedRatio.value = baseZoom * safeFactor
         _topOffZoomPanX.value = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
@@ -12401,7 +12401,7 @@ class Camera2Controller(private val context: Context) {
             if (normalVideoUltraWideRecordingInput) {
                 // The ultra-wide optical baseline remains selected in the switchable input.
                 // Apply only the Top Off factor on that stream, not the main lens' locked ratio.
-                _topOffZoomFactor.value.coerceIn(1f, 4f)
+                _topOffZoomFactor.value.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
             } else {
                 resolveTopOffZoomLockedRatio(_state.value.zoomRatio)
             }
