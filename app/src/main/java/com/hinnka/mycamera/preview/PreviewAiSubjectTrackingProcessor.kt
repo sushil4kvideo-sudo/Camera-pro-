@@ -256,8 +256,7 @@ class PreviewAiSubjectTrackingProcessor(context: Context) : Closeable {
             PLog.e(TAG, "Failed to initialize AI subject detector", error)
             onInitializationError?.invoke(error)
             null
-        }
-        catch (error: LinkageError) {
+        } catch (error: LinkageError) {
             // MediaPipe can fail while loading its JNI/runtime libraries on a device.
             // Treat that as an unavailable optional feature instead of crashing the app.
             detectorInitializationFailed = true
