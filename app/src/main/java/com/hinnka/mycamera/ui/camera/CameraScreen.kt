@@ -351,6 +351,12 @@ fun CameraScreen(
     var videoEditPillBounds by remember { mutableStateOf<Rect?>(null) }
     var cameraGLSurfaceView by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
     var zoomJoystickOpen by remember { mutableStateOf(false) }
+    var joystickTopOffPanX by remember { mutableFloatStateOf(topOffZoomPanX) }
+    var joystickTopOffPanY by remember { mutableFloatStateOf(topOffZoomPanY) }
+    LaunchedEffect(topOffZoomPanX, topOffZoomPanY) {
+        joystickTopOffPanX = topOffZoomPanX
+        joystickTopOffPanY = topOffZoomPanY
+    }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
     var zoomBarBounds by remember { mutableStateOf<Rect?>(null) }
     var filterButtonBounds by remember { mutableStateOf<Rect?>(null) }
@@ -1248,19 +1254,36 @@ fun CameraScreen(
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
+        val topOffZoomAvailable = remember(
+            state.currentCameraId,
+            state.captureMode,
+            spatialVideoEnabled,
+            dualCaptureEnabled,
+        ) {
+            viewModel.isTopOffZoomAvailable()
+        }
+        val topOffZoomJoystickSupported = isVideoMode &&
+            topOffZoomEnabled &&
+            topOffZoomAvailable &&
+            state.zoomRatio >= 1f &&
+            !spatialVideoEnabled &&
+            !dualCaptureEnabled
         val zoomJoystickSupported =
             !state.useRaw &&
                 (state.captureMode == CaptureMode.PHOTO || state.captureMode == CaptureMode.VIDEO) &&
                 state.zoomRatio > 2f &&
                 state.getCurrentCameraInfo()?.supportsFreeformZoomPan == true
-        val canShowZoomJoystick = activePanel == ActivePanel.NONE && zoomJoystickSupported
+        val canShowZoomJoystick = activePanel == ActivePanel.NONE &&
+            (zoomJoystickSupported || topOffZoomJoystickSupported)
 
         LaunchedEffect(canShowZoomJoystick) {
             if (!canShowZoomJoystick) zoomJoystickOpen = false
         }
-        LaunchedEffect(zoomJoystickSupported) {
-            if (!zoomJoystickSupported) {
+        LaunchedEffect(zoomJoystickSupported, topOffZoomJoystickSupported) {
+            if (!zoomJoystickSupported && !topOffZoomJoystickSupported) {
                 zoomJoystickOpen = false
+            }
+            if (!zoomJoystickSupported) {
                 viewModel.resetZoomPan()
             }
         }
@@ -1276,22 +1299,6 @@ fun CameraScreen(
         }
         val isOpenGateVideo =
             isVideoMode && state.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE
-        val currentCameraInfo = state.getCurrentCameraInfo()
-        val sensorAspectRatio = currentCameraInfo?.activeArraySize?.let { activeArray ->
-            ZoomCropGeometry.portraitSensorAspectRatio(activeArray.width(), activeArray.height())
-        } ?: (3f / 4f)
-        val topOffZoomAvailable = remember(
-            state.currentCameraId,
-            state.captureMode,
-            spatialVideoEnabled,
-            dualCaptureEnabled,
-        ) {
-            viewModel.isTopOffZoomAvailable()
-        }
-        val effectiveTopOffZoomRatio = (
-            topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
-                ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
-        ).coerceIn(1f, (currentCameraInfo?.maxZoom ?: 10f).coerceAtLeast(1f))
 
         val density = LocalDensity.current
 
@@ -2642,7 +2649,17 @@ fun CameraScreen(
                             if (zoomJoystickOpen) {
                                 ZoomPanJoystick(
                                     modifier = Modifier.align(Alignment.Center),
-                                    onPanBy = viewModel::panZoomBy,
+                                    onPanBy = if (topOffZoomJoystickSupported) {
+                                        { deltaX, deltaY ->
+                                            val nextPanX = (joystickTopOffPanX + deltaX).coerceIn(-1f, 1f)
+                                            val nextPanY = (joystickTopOffPanY + deltaY).coerceIn(-1f, 1f)
+                                            joystickTopOffPanX = nextPanX
+                                            joystickTopOffPanY = nextPanY
+                                            viewModel.setTopOffZoomPan(nextPanX, nextPanY)
+                                        }
+                                    } else {
+                                        viewModel::panZoomBy
+                                    },
                                 )
                             }
                         }
@@ -2721,15 +2738,8 @@ fun CameraScreen(
                 topOffZoomAvailable = topOffZoomAvailable,
                 topOffZoomEnabled = topOffZoomEnabled,
                 topOffZoomFactor = topOffZoomFactor,
-                effectiveZoomRatio = effectiveTopOffZoomRatio,
-                baseZoomRatio = state.zoomRatio,
-                sensorAspectRatio = sensorAspectRatio,
-                cropAspectRatio = state.getPreviewAspectRatio(),
-                topOffZoomPanX = topOffZoomPanX,
-                topOffZoomPanY = topOffZoomPanY,
                 onTopOffZoomEnabledChange = viewModel::setTopOffZoomEnabled,
                 onTopOffZoomFactorChange = viewModel::setTopOffZoomFactor,
-                onTopOffZoomPanChange = viewModel::setTopOffZoomPan,
                 onDismiss = { videoSettingsPanelOpen = false },
                 glassTransparency = cameraMenuTransparency,
                 glassBlurStrength = cameraMenuBlurRadius,

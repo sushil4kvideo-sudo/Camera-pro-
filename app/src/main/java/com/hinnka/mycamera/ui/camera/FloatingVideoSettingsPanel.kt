@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.ui.camera
 
-import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -14,12 +13,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -46,21 +41,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.ui.components.OppoCameraGlassSurface
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoCapabilities
 import com.hinnka.mycamera.video.VideoConfig
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoResolutionPreset
-import com.hinnka.mycamera.utils.PLog
 
 private val VideoSelectorGold = Color(0xFFFFC107)
 private val VideoSelectorLabel = Color.White.copy(alpha = 0.72f)
@@ -84,15 +75,8 @@ fun FloatingVideoSettingsPanel(
     topOffZoomAvailable: Boolean,
     topOffZoomEnabled: Boolean,
     topOffZoomFactor: Float,
-    effectiveZoomRatio: Float,
-    baseZoomRatio: Float,
-    sensorAspectRatio: Float,
-    cropAspectRatio: Float,
-    topOffZoomPanX: Float,
-    topOffZoomPanY: Float,
     onTopOffZoomEnabledChange: (Boolean) -> Unit,
     onTopOffZoomFactorChange: (Float) -> Unit,
-    onTopOffZoomPanChange: (Float, Float) -> Unit,
     onDismiss: () -> Unit,
     glassTransparency: Float,
     glassBlurStrength: Float,
@@ -338,11 +322,6 @@ fun FloatingVideoSettingsPanel(
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.SemiBold,
                                     )
-                                    Text(
-                                        text = "Move the sensor crop without changing magnification",
-                                        color = VideoSelectorDescription,
-                                        fontSize = 11.5.sp,
-                                    )
                                 }
                                 Switch(
                                     checked = topOffZoomEnabled,
@@ -381,28 +360,6 @@ fun FloatingVideoSettingsPanel(
                                     steps = 5,
                                     modifier = Modifier.testTag("top_off_zoom_factor_slider"),
                                 )
-                                Text(
-                                    text = "Sensor crop position",
-                                    color = VideoSelectorLabel,
-                                    fontSize = 12.5.sp,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                                if (baseZoomRatio >= 1f) {
-                                    TopOffZoomCropEditor(
-                                        zoomFactor = effectiveZoomRatio,
-                                        panX = topOffZoomPanX,
-                                        panY = topOffZoomPanY,
-                                        sensorAspectRatio = sensorAspectRatio,
-                                        cropAspectRatio = cropAspectRatio,
-                                        onPanChange = onTopOffZoomPanChange,
-                                    )
-                                } else {
-                                    Text(
-                                        text = "Crop positioning is available from 1x and above.",
-                                        color = VideoSelectorDescription,
-                                        fontSize = 11.sp,
-                                    )
-                                }
                             }
                         } else {
                             Text(
@@ -416,149 +373,5 @@ fun FloatingVideoSettingsPanel(
                 }
             }
         }
-    }
-}
-
-
-@Composable
-private fun TopOffZoomCropEditor(
-    zoomFactor: Float,
-    panX: Float,
-    panY: Float,
-    sensorAspectRatio: Float,
-    cropAspectRatio: Float,
-    onPanChange: (Float, Float) -> Unit,
-) {
-    val density = LocalDensity.current
-    val currentPanX = rememberUpdatedState(panX.coerceIn(-1f, 1f))
-    val currentPanY = rememberUpdatedState(panY.coerceIn(-1f, 1f))
-    val currentOnPanChange = rememberUpdatedState(onPanChange)
-
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(sensorAspectRatio.coerceIn(0.1f, 1f))
-                .clip(RoundedCornerShape(9.dp))
-                .background(Color(0xFF11151B))
-                .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(9.dp))
-                .testTag("top_off_zoom_crop_frame"),
-        ) {
-            val crop = ZoomCropGeometry.calculate(
-                sourceWidth = maxWidth.value,
-                sourceHeight = maxHeight.value,
-                outputAspectRatio = cropAspectRatio,
-                zoomRatio = zoomFactor,
-                panX = panX,
-                panY = panY,
-            )
-            val cropWidth = maxWidth * crop.width
-            val cropHeight = maxHeight * crop.height
-            val cropOffsetX = maxWidth * crop.left
-            val cropOffsetY = maxHeight * crop.top
-            val maxTravelX = maxWidth * ((1f - crop.width).coerceAtLeast(0f) / 2f)
-            val maxTravelY = maxHeight * ((1f - crop.height).coerceAtLeast(0f) / 2f)
-            val latestTravelX = rememberUpdatedState(maxTravelX)
-            val latestTravelY = rememberUpdatedState(maxTravelY)
-            // Keep drag coordinates in the stationary sensor-frame coordinate space.
-            // The crop box itself is offset every time pan state changes; attaching
-            // pointerInput to that moving child rebases pointer coordinates during the
-            // same gesture and can cancel/undo the requested pan.
-            val currentCropBounds = rememberUpdatedState(
-                Rect(
-                    left = with(density) { cropOffsetX.toPx() },
-                    top = with(density) { cropOffsetY.toPx() },
-                    right = with(density) { (cropOffsetX + cropWidth).toPx() },
-                    bottom = with(density) { (cropOffsetY + cropHeight).toPx() },
-                )
-            )
-            var isCropDragging by remember { androidx.compose.runtime.mutableStateOf(false) }
-            var lastDragDiagnosticAtMs by remember { androidx.compose.runtime.mutableStateOf(0L) }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(maxWidth, maxHeight) {
-                        detectDragGestures(
-                            onDragStart = { start ->
-                                val bounds = currentCropBounds.value
-                                val hitSlop = with(density) { 16.dp.toPx() }
-                                isCropDragging =
-                                    start.x >= bounds.left - hitSlop &&
-                                    start.x <= bounds.right + hitSlop &&
-                                    start.y >= bounds.top - hitSlop &&
-                                    start.y <= bounds.bottom + hitSlop
-                                PLog.i(
-                                    "TopOffZoom",
-                                    "EDITOR dragStart accepted=$isCropDragging pointer=(${start.x},${start.y}) " +
-                                        "cropBounds=$bounds zoom=$zoomFactor pan=(${panX},${panY}) " +
-                                        "travel=(${latestTravelX.value},${latestTravelY.value})"
-                                )
-                            },
-                            onDragEnd = {
-                                PLog.i(
-                                    "TopOffZoom",
-                                    "EDITOR dragEnd pan=(${currentPanX.value},${currentPanY.value}) zoom=$zoomFactor"
-                                )
-                                isCropDragging = false
-                            },
-                            onDragCancel = {
-                                PLog.w("TopOffZoom", "EDITOR dragCancel pan=(${currentPanX.value},${currentPanY.value})")
-                                isCropDragging = false
-                            },
-                        ) { change, dragAmount ->
-                            if (!isCropDragging) return@detectDragGestures
-                            change.consume()
-                            val travelXpx = with(density) { latestTravelX.value.toPx() }
-                            val travelYpx = with(density) { latestTravelY.value.toPx() }
-                            val nextPanX = if (travelXpx > 0f) {
-                                (currentPanX.value + dragAmount.x / travelXpx).coerceIn(-1f, 1f)
-                            } else {
-                                0f
-                            }
-                            val nextPanY = if (travelYpx > 0f) {
-                                (currentPanY.value + dragAmount.y / travelYpx).coerceIn(-1f, 1f)
-                            } else {
-                                0f
-                            }
-                            currentOnPanChange.value(nextPanX, nextPanY)
-                            val now = SystemClock.elapsedRealtime()
-                            if (now - lastDragDiagnosticAtMs >= 120L) {
-                                lastDragDiagnosticAtMs = now
-                                PLog.d(
-                                    "TopOffZoom",
-                                    "EDITOR dragDelta=(${dragAmount.x},${dragAmount.y}) " +
-                                        "pan=(${nextPanX},${nextPanY}) zoom=$zoomFactor " +
-                                        "travelPx=(${travelXpx},${travelYpx})"
-                                )
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.TopStart,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .offset(x = cropOffsetX, y = cropOffsetY)
-                        .size(width = cropWidth, height = cropHeight)
-                        .background(VideoSelectorGold.copy(alpha = 0.12f))
-                        .border(2.dp, VideoSelectorGold, RoundedCornerShape(3.dp))
-                        .testTag("top_off_zoom_crop_box"),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "CROP",
-                        color = VideoSelectorGold,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-        }
-        Text(
-            text = "3:4 sensor area · inner box follows the selected video aspect ratio.",
-            color = VideoSelectorDescription,
-            fontSize = 11.sp,
-            textAlign = TextAlign.Start,
-        )
     }
 }
