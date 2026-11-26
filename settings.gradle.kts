@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PhotonCamera"
+rootProject.name = "CameraPro"
 include(":app", ":Prismal")

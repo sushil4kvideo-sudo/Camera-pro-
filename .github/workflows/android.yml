@@ -1,4 +1,4 @@
-name: Build APK
+name: Camera Pro Android APK
 
 on:
   workflow_dispatch:
@@ -85,8 +85,8 @@ jobs:
             gh release upload "$TAG" "$APK_PATH" --clobber
           else
             gh release create "$TAG" "$APK_PATH" \
-              --title "APK build #${GITHUB_RUN_NUMBER}" \
-              --notes "Debug APK built from commit ${GITHUB_SHA}." \
+              --title "Camera Pro APK build #${GITHUB_RUN_NUMBER}" \
+              --notes "Camera Pro debug APK built from commit ${GITHUB_SHA}." \
               --prerelease \
               --target "${GITHUB_SHA}"
           fi

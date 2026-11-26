@@ -60,7 +60,7 @@ val downloadEyeFocusModel by tasks.registering {
             connection.instanceFollowRedirects = true
             connection.connectTimeout = 30_000
             connection.readTimeout = 120_000
-            connection.setRequestProperty("User-Agent", "Photon.camera-Android-build")
+            connection.setRequestProperty("User-Agent", "CameraPro-Android-build")
             connection.inputStream.use { input ->
                 tempFile.outputStream().use { output -> input.copyTo(output) }
             }

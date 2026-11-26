@@ -1,57 +1,43 @@
-# Photon Camera
+# Camera Pro
 
-[English](./README_EN.md) | [简体中文](./README_CN.md) | [日本語](./README_JA.md)
+**Camera Pro** is an open-source Android camera application focused on hands-on capture controls, advanced color processing, and flexible photo and video workflows.
 
-[![Google Play](https://img.shields.io/badge/Google%20Play-Get%20it%20on-green?logo=google-play&logoColor=white)](https://play.google.com/store/apps/details?id=com.hinnka.mycamera)
+## Features
 
-Photon Camera is an open-source Android camera application focused on static photography, designed to simulate the handling and image quality of modern mirrorless digital cameras.
+- **Advanced LUT support:** import and apply `.cube`, `.png`, and `.xmp` profiles, with real-time preview.
+- **Color controls:** fine-tune exposure, contrast, highlights, shadows, saturation, temperature, tint, vignette, grain, fade, and other creative effects.
+- **Motion photos:** support for motion-photo workflows across supported Android devices and camera vendors.
+- **High-speed burst:** capture rapid image sequences with optional real-time LUT processing.
+- **Multi-frame processing:** combine frames for improved detail and noise reduction.
+- **Depth effects:** local depth estimation for large-aperture-style background blur.
+- **Phantom Mode:** use the system camera capture path while applying Camera Pro's color-processing pipeline.
+- **AI-assisted color tools:** create color looks from visual references.
 
-## 🌟 Key Features
+## Technology
 
-### 1. Advanced LUT Support
-* **Multi-format Compatibility**: Supports importing and applying `.cube`, `.png` (Halfs/Fulls), and `.xmp` profile files.
-* **Real-time Preview**: High-performance shaders enable real-time LUT filtering with "What You See Is What You Get" (WYSIWYG).
-* **Custom Imports**: Easily import your own LUT libraries to create a unique color signature.
+- **UI:** Jetpack Compose
+- **Camera:** Android Camera2 API
+- **Minimum Android version:** Android 11 (API 30)
+- **Build toolchain:** JDK 17, Android SDK 36, NDK 29
 
-### 2. Deep Color Recipes
-A professional-grade color adjustment system allowing fine-tuning across multiple dimensions:
-* **Basic Adjustments**: Exposure, Contrast, Highlights, Shadows, Saturation, Temperature, Tint.
-* **Artistic Effects**: Color effects, Vignette, Grain, Fade, Bleach Bypass.
-* **Pro Filters**: Bloom, Dispersion, Noise, Low-pixel aesthetics.
+## Build
 
-### 3. Motion Photos
-* **Industry Unique**: The only open-source project providing multi-vendor adaptation (Xiaomi, Samsung, Pixel, etc.) for Motion Photos on Android.
-* **Dynamic Moments**: Capture short video clips alongside your still images.
+From the repository root:
 
-### 4. High-Speed Burst
-* **Performance Peak**: High-speed burst mode with no limit on the number of frames.
-* **LUT Integration**: Supports applying LUT filters in real-time during burst sequences.
+```bash
+./gradlew --no-daemon :app:assembleDebug
+```
 
-### 5. Multi-frame Synthesis & Super Resolution
-* **Quality Enhancement**: Enhances image quality through advanced multi-frame stacking.
-* **Noise Reduction**: Provides effective noise reduction while focusing on preserving natural details.
+The first build needs network access to download the pinned face-detection model used by the eye-focus feature.
 
-### 6. Large Aperture Bokeh
-* **AI-Driven**: Integrates the **midas-v2** depth detection local AI model, optimized for Qualcomm chips.
-* **Precise Depth**: Offers accurate depth sensing for natural background blur transitions (ongoing refinements).
+## APK builds
 
-### 7. Phantom Mode
-* **Raw Quality**: Directly bridges with the system camera for image capture while applying Photon Camera's LUT engine. This bypasses the typical "bad image quality" and "over-sharpening" issues found in standard third-party camera APIs.
+GitHub Actions runs unit tests and builds the minified debug APK on pushes to `main`. Successful push builds publish an APK to the repository's [Releases](https://github.com/sushil4kvideo-sudo/Photon.camera/releases) page.
 
-### 8. AI Color Simulation
-* **Smart Stylization**: Utilizes **Google Nano Banana 2** technology to analyze reference photos, restore original colors, and extract color profiles to generate custom LUTs.
+## Bugs and feature requests
 
-## 🛠️ Technology Stack
-* **UI**: Jetpack Compose
-* **Camera API**: Camera2 API
-* **Min SDK**: Android 11+ (minSdk 30)
+Please open an issue in the [Camera Pro issue tracker](https://github.com/sushil4kvideo-sudo/Photon.camera/issues).
 
-## 🤝 Contribution & Feedback
-Contributions of any kind are welcome! If you have questions or suggestions, please open an Issue.
+## License
 
-## 📄 License
-Except for third-party components, models, fonts, LUTs, and other assets that carry their own license notices in this repository, Photon Camera source code is licensed under the [Apache License 2.0](./LICENSE).
-
-## Contact
-
-Telegram: https://t.me/photoncameraapp
+The project includes an Apache License 2.0 license file. Third-party libraries, models, fonts, LUTs, and other assets may have separate license terms; retain and follow their original notices when using or redistributing them.
