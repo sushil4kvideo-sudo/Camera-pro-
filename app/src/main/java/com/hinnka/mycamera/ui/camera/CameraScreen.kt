@@ -82,6 +82,8 @@ import com.styropyr0.prismal.components.PrismalSegmentedControl
 import com.styropyr0.prismal.sources.prismalGlassLayer
 import com.styropyr0.prismal.sources.rememberPrismalGlassLayer
 import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
+import com.hinnka.mycamera.preview.PreviewSubjectTrackingProcessor
 import com.hinnka.mycamera.ui.theme.accentContentColor
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
@@ -247,6 +249,27 @@ fun CameraScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
+    var aiSubjectTrackingEnabled by rememberSaveable { mutableStateOf(false) }
+    var aiSubjectTarget by remember {
+        mutableStateOf<PreviewSubjectTrackingProcessor.Target?>(null)
+    }
+    // Keep detection lazy: no model creation or warm-up is done during camera startup.
+    val subjectTrackingProcessor = remember(context, aiSubjectTrackingEnabled) {
+        if (aiSubjectTrackingEnabled) PreviewSubjectTrackingProcessor(context.applicationContext)
+        else null
+    }
+    DisposableEffect(subjectTrackingProcessor) {
+        onDispose { subjectTrackingProcessor?.close() }
+    }
+    var aiTrackingLastPanAtMs by remember { mutableLongStateOf(0L) }
+    var aiTrackingOwnsTopOffZoom by remember { mutableStateOf(false) }
+    var aiTrackingChangedTopOffFactor by remember { mutableStateOf(false) }
+    var aiTrackingPreviousTopOffFactor by remember { mutableFloatStateOf(Float.NaN) }
+    var aiTrackingShouldRestoreTopOffPan by remember { mutableStateOf(false) }
+    var aiTrackingPreviousTopOffPanX by remember { mutableFloatStateOf(0f) }
+    var aiTrackingPreviousTopOffPanY by remember { mutableFloatStateOf(0f) }
+    var aiTrackingOriginalZoom by remember { mutableFloatStateOf(Float.NaN) }
+    var aiTrackingAssistZoom by remember { mutableFloatStateOf(Float.NaN) }
     val pendingPhotoCrashReport by PhotoCaptureCrashLogger.pendingCrashReport.collectAsState()
     pendingPhotoCrashReport?.let { report ->
         PhotoCaptureCrashDialog(
@@ -278,8 +301,10 @@ fun CameraScreen(
         if (state.captureMode != CaptureMode.VIDEO && spatialVideoEnabled) {
             viewModel.setSpatialVideoEnabled(false)
         }
-        if (state.captureMode != CaptureMode.VIDEO && viewModel.aiSubjectTrackingEnabled) {
-            viewModel.setAiSubjectTrackingEnabled(false)
+        if (state.captureMode != CaptureMode.VIDEO && aiSubjectTrackingEnabled) {
+            aiSubjectTrackingEnabled = false
+            aiSubjectTarget = null
+            subjectTrackingProcessor?.resetTracking()
         }
     }
 
@@ -289,8 +314,6 @@ fun CameraScreen(
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
     val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
-    val aiSubjectTrackingEnabled = viewModel.aiSubjectTrackingEnabled
-    val aiSubjectTrackingTarget = viewModel.aiSubjectTrackingTarget
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
     val cameraMenuBlurRadius by viewModel.cameraMenuBlurRadius.collectAsState()
     val cameraMenuTransparency by viewModel.cameraMenuTransparency.collectAsState()
@@ -1306,6 +1329,94 @@ fun CameraScreen(
                 state.getCurrentCameraInfo()?.supportsFreeformZoomPan == true
         val canShowZoomJoystick = activePanel == ActivePanel.NONE &&
             (zoomJoystickSupported || topOffZoomJoystickSupported)
+        val aiSubjectTrackingActive = aiSubjectTrackingEnabled &&
+            isVideoMode && state.isPreviewActive && !state.isCapturing
+        val aiSubjectFreeformPanSupported = !state.useRaw &&
+            isVideoMode &&
+            state.zoomRatio > 1.001f &&
+            state.getCurrentCameraInfo()?.supportsFreeformZoomPan == true
+        val aiSubjectAutoPanMode = when {
+            topOffZoomJoystickSupported -> 1
+            aiSubjectFreeformPanSupported -> 2
+            else -> 0
+        }
+
+        // Restore only crop/zoom settings that AI changed itself. When tracking is
+        // disabled while recording, cleanup waits until the encoder has stopped.
+        LaunchedEffect(
+            aiSubjectTrackingEnabled,
+            state.videoRecordingState.isRecording,
+            state.videoRecordingState.isProcessing,
+            state.captureMode,
+        ) {
+            val shouldStopTracking = !aiSubjectTrackingEnabled ||
+                state.captureMode != CaptureMode.VIDEO
+            val cameraIdle = !state.videoRecordingState.isRecording &&
+                !state.videoRecordingState.isProcessing
+            if (shouldStopTracking && cameraIdle) {
+                if (aiTrackingShouldRestoreTopOffPan) {
+                    viewModel.setTopOffZoomPan(
+                        aiTrackingPreviousTopOffPanX,
+                        aiTrackingPreviousTopOffPanY,
+                    )
+                    aiTrackingShouldRestoreTopOffPan = false
+                }
+                if (aiTrackingOwnsTopOffZoom) {
+                    viewModel.setTopOffZoomEnabled(false)
+                    aiTrackingOwnsTopOffZoom = false
+                }
+                if (aiTrackingChangedTopOffFactor &&
+                    aiTrackingPreviousTopOffFactor.isFinite()
+                ) {
+                    viewModel.setTopOffZoomFactor(aiTrackingPreviousTopOffFactor)
+                    aiTrackingChangedTopOffFactor = false
+                    aiTrackingPreviousTopOffFactor = Float.NaN
+                }
+                if (aiTrackingOriginalZoom.isFinite() && aiTrackingAssistZoom.isFinite() &&
+                    kotlin.math.abs(state.zoomRatio - aiTrackingAssistZoom) <= 0.18f
+                ) {
+                    viewModel.setZoomRatio(aiTrackingOriginalZoom)
+                }
+                aiTrackingOriginalZoom = Float.NaN
+                aiTrackingAssistZoom = Float.NaN
+            }
+        }
+
+        LaunchedEffect(subjectTrackingProcessor, aiSubjectTrackingActive) {
+            if (!aiSubjectTrackingActive) {
+                aiSubjectTarget = null
+                subjectTrackingProcessor?.resetTracking()
+                aiTrackingLastPanAtMs = 0L
+            }
+        }
+
+        SideEffect {
+            subjectTrackingProcessor?.onTargetChanged = { target ->
+                aiSubjectTarget = target
+                if (target != null && aiSubjectTrackingActive && aiSubjectAutoPanMode != 0) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - aiTrackingLastPanAtMs >= 50L) {
+                        fun correction(error: Float): Float {
+                            if (kotlin.math.abs(error) <= 0.025f) return 0f
+                            return (error * 0.14f).coerceIn(-0.035f, 0.035f)
+                        }
+                        val panDeltaX = correction(target.centerX - 0.5f)
+                        val panDeltaY = correction(target.centerY - 0.5f)
+                        if (panDeltaX != 0f || panDeltaY != 0f) {
+                            aiTrackingLastPanAtMs = now
+                            if (aiSubjectAutoPanMode == 1) {
+                                viewModel.setTopOffZoomPan(
+                                    (topOffZoomPanX + panDeltaX).coerceIn(-1f, 1f),
+                                    (topOffZoomPanY + panDeltaY).coerceIn(-1f, 1f),
+                                )
+                            } else {
+                                viewModel.panZoomBy(panDeltaX, panDeltaY)
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         LaunchedEffect(zoomJoystickSupported) {
             if (!zoomJoystickSupported) {
@@ -1775,9 +1886,6 @@ fun CameraScreen(
                         state.isAutoFocus &&
                         !state.isHyperfocalFocusEnabled &&
                         (state.focusPoint == null || state.focusPointSource == FocusPointSource.EYE)
-                    val aiSubjectTrackingActive = aiSubjectTrackingEnabled &&
-                        state.captureMode == CaptureMode.VIDEO &&
-                        viewModel.isEyeFocusRuntimeAvailable
                     val portraitMaskActive = state.captureMode == CaptureMode.PHOTO &&
                         state.useRaw &&
                         state.isRawSupported
@@ -1852,10 +1960,27 @@ fun CameraScreen(
                             onEyeFocusInputAvailable = if (
                                 eyeFocusActive || portraitMaskActive || aiSubjectTrackingActive
                             ) {
-                                viewModel::handleEyeFocusInputUpdate
+                                { frame ->
+                                    if (aiSubjectTrackingActive) {
+                                        val trackingCopy = runCatching {
+                                            frame.bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                                        }.getOrNull()
+                                        if (trackingCopy != null) {
+                                            subjectTrackingProcessor?.processFrame(
+                                                EyeFocusPreviewFrame(
+                                                    bitmap = trackingCopy,
+                                                    sampleStartedAtNanos = frame.sampleStartedAtNanos,
+                                                    captureDurationNanos = frame.captureDurationNanos,
+                                                )
+                                            )
+                                        }
+                                    }
+                                    viewModel.handleEyeFocusInputUpdate(frame)
+                                }
                             } else {
                                 null
                             },
+                            subjectTrackingTarget = if (aiSubjectTrackingActive) aiSubjectTarget else null,
                             onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
                             onGLSurfaceViewReady = {
                                 viewModel.attachCameraGLSurfaceView(it)
@@ -2646,14 +2771,45 @@ fun CameraScreen(
                 showAiSubjectTrackingButton = isVideoMode && activePanel == ActivePanel.NONE,
                 aiSubjectTrackingEnabled = aiSubjectTrackingEnabled,
                 onAiSubjectTrackingToggle = {
-                    val requestedEnabled = !aiSubjectTrackingEnabled
-                    if (!viewModel.setAiSubjectTrackingEnabled(requestedEnabled)) {
-                        Toast.makeText(
-                            context,
-                            "AI Human Tracking needs a supported Normal Video camera. Enable it before recording.",
-                            Toast.LENGTH_LONG,
-                        ).show()
+                    if (!aiSubjectTrackingEnabled) {
+                        val recordingActive = state.videoRecordingState.isRecording ||
+                            state.videoRecordingState.isProcessing
+                        val cameraInfo = state.getCurrentCameraInfo()
+                        if (topOffZoomEnabled) {
+                            aiTrackingPreviousTopOffPanX = topOffZoomPanX
+                            aiTrackingPreviousTopOffPanY = topOffZoomPanY
+                            aiTrackingShouldRestoreTopOffPan = true
+                            if (topOffZoomFactor < 2f && !recordingActive) {
+                                aiTrackingPreviousTopOffFactor = topOffZoomFactor
+                                aiTrackingChangedTopOffFactor = true
+                                viewModel.setTopOffZoomFactor(2f)
+                            }
+                        } else if (topOffZoomAvailable && !recordingActive) {
+                            aiTrackingPreviousTopOffPanX = topOffZoomPanX
+                            aiTrackingPreviousTopOffPanY = topOffZoomPanY
+                            aiTrackingShouldRestoreTopOffPan = true
+                            aiTrackingPreviousTopOffFactor = topOffZoomFactor
+                            aiTrackingChangedTopOffFactor = true
+                            viewModel.setTopOffZoomFactor(maxOf(2f, topOffZoomFactor))
+                            aiTrackingOwnsTopOffZoom = true
+                            viewModel.setTopOffZoomEnabled(true)
+                        } else if (
+                            !topOffZoomEnabled &&
+                            !state.useRaw &&
+                            cameraInfo?.supportsFreeformZoomPan == true &&
+                            state.zoomRatio <= 2f
+                        ) {
+                            aiTrackingOriginalZoom = state.zoomRatio
+                            aiTrackingAssistZoom = maxOf(2.1f, state.zoomRatio)
+                            viewModel.setZoomRatio(aiTrackingAssistZoom)
+                        }
+                        aiSubjectTrackingEnabled = true
+                    } else {
+                        aiSubjectTrackingEnabled = false
                     }
+                    aiSubjectTarget = null
+                    aiTrackingLastPanAtMs = 0L
+                    subjectTrackingProcessor?.resetTracking()
                 },
                 onTrackingPadPan = if (topOffZoomJoystickSupported) {
                     { deltaX, deltaY ->
