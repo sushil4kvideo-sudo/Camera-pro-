@@ -61,11 +61,11 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
     companion object {
         private const val TAG = "PreviewSubjectTracking"
         private const val MODEL_ASSET = "efficientdet_lite0_int8.tflite"
-        private const val MIN_SCORE = 0.38f
-        private const val MAX_RESULTS = 8
-        private const val LOST_FRAMES_BEFORE_RESET = 3
-        private const val SMOOTHING_ALPHA = 0.42f
-        private const val MAX_TARGET_CENTER_DISTANCE = 0.30f
+        private const val MIN_SCORE = 0.32f
+        private const val MAX_RESULTS = 20
+        private const val LOST_FRAMES_BEFORE_RESET = 7
+        private const val SMOOTHING_ALPHA = 0.48f
+        private const val MAX_TARGET_CENTER_DISTANCE = 0.42f
     }
 
     private val appContext = context.applicationContext
@@ -93,6 +93,8 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
     private var pendingGeneration = 0
     private var lastTimestampMs = 0L
     private var lastBounds: Candidate? = null
+    private var velocityX = 0f
+    private var velocityY = 0f
     private var missingFrames = 0
 
     /**
@@ -123,6 +125,8 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
         generation.incrementAndGet()
         synchronized(lock) {
             lastBounds = null
+            velocityX = 0f
+            velocityY = 0f
             missingFrames = 0
         }
         dispatchTarget(null)
@@ -266,23 +270,50 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
     private fun selectTargetLocked(candidates: List<Candidate>): Target? {
         val previous = lastBounds
         val selected = if (previous == null) {
-            // Prefer a person when the scene contains one; otherwise track the most
-            // prominent confident object instead of silently doing nothing.
-            val people = candidates.filter { it.label.equals("person", ignoreCase = true) }
-            (people.ifEmpty { candidates }).maxByOrNull {
-                it.confidence * (0.55f + sqrt(it.area.coerceAtLeast(0f)))
+            // Do not hard-code "person": any COCO category can become the initial target.
+            // Confidence, object size and distance from the viewfinder centre determine
+            // which visible object is the most useful automatic lock candidate.
+            candidates.maxByOrNull { candidate ->
+                val centrePenalty = centerDistanceToViewfinderCentre(candidate)
+                candidate.confidence *
+                    (0.45f + sqrt(candidate.area.coerceAtLeast(0f))) *
+                    (1f - (centrePenalty * 0.30f).coerceIn(0f, 0.30f))
             }
         } else {
-            val sameClass = candidates.filter { it.label.equals(previous.label, ignoreCase = true) }
-            val pool = sameClass.ifEmpty { candidates }
+            // Constant-velocity prediction keeps the association gate around a moving
+            // object instead of around its stale last-detected rectangle.
+            val predictionFrames = 1f + missingFrames.coerceAtMost(3) * 0.35f
+            val predicted = previous.translated(
+                velocityX * predictionFrames,
+                velocityY * predictionFrames,
+            )
+            val sameClass = candidates.filter {
+                it.label.equals(previous.label, ignoreCase = true)
+            }
+            // A detector can briefly change a category label. Permit class re-acquisition
+            // only after a missed frame, and only close to the predicted object position.
+            val pool = if (sameClass.isNotEmpty()) {
+                sameClass
+            } else if (missingFrames >= 1) {
+                candidates
+            } else {
+                emptyList()
+            }
+            val maxDistance = (MAX_TARGET_CENTER_DISTANCE + missingFrames * 0.035f)
+                .coerceAtMost(0.55f)
             pool.maxByOrNull { candidate ->
-                val overlap = intersectionOverUnion(previous, candidate)
-                val distance = centerDistance(previous, candidate)
-                overlap * 2.0f + (1f - (distance / MAX_TARGET_CENTER_DISTANCE).coerceIn(0f, 1f)) +
-                    candidate.confidence * 0.15f
+                val overlap = intersectionOverUnion(predicted, candidate)
+                val distance = centerDistance(predicted, candidate)
+                val motionSimilarity = 1f - (distance / maxDistance).coerceIn(0f, 1f)
+                val sizeSimilarity = minOf(predicted.area, candidate.area) /
+                    maxOf(predicted.area, candidate.area, 1e-4f)
+                overlap * 2.2f +
+                    motionSimilarity * 1.8f +
+                    sizeSimilarity * 0.45f +
+                    candidate.confidence * 0.25f
             }?.takeIf { candidate ->
-                intersectionOverUnion(previous, candidate) >= 0.015f ||
-                    centerDistance(previous, candidate) <= MAX_TARGET_CENTER_DISTANCE
+                intersectionOverUnion(predicted, candidate) >= 0.005f ||
+                    centerDistance(predicted, candidate) <= maxDistance
             }
         }
 
@@ -290,21 +321,42 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
             missingFrames++
             if (missingFrames >= LOST_FRAMES_BEFORE_RESET) {
                 lastBounds = null
+                velocityX = 0f
+                velocityY = 0f
                 missingFrames = 0
                 return null
             }
-            return lastBounds?.toTarget()
+
+            // Extrapolate briefly through detector dropouts/partial occlusion so the
+            // overlay and pan controller do not freeze on the last stale box.
+            velocityX *= 0.82f
+            velocityY *= 0.82f
+            val predicted = previous?.translated(velocityX, velocityY)
+            lastBounds = predicted
+            return predicted?.toTarget()
         }
 
         missingFrames = 0
+        if (previous == null) {
+            velocityX = 0f
+            velocityY = 0f
+        } else {
+            val observedX = selected.centerX - previous.centerX
+            val observedY = selected.centerY - previous.centerY
+            velocityX = (velocityX * 0.35f + observedX * 0.65f).coerceIn(-0.20f, 0.20f)
+            velocityY = (velocityY * 0.35f + observedY * 0.65f).coerceIn(-0.20f, 0.20f)
+        }
+
+        val movement = previous?.let { centerDistance(it, selected) } ?: 0f
+        val smoothing = if (movement > 0.075f) 0.68f else SMOOTHING_ALPHA
         val smoothed = if (previous == null || !selected.label.equals(previous.label, true)) {
             selected
         } else {
             Candidate(
-                left = lerp(previous.left, selected.left, SMOOTHING_ALPHA),
-                top = lerp(previous.top, selected.top, SMOOTHING_ALPHA),
-                right = lerp(previous.right, selected.right, SMOOTHING_ALPHA),
-                bottom = lerp(previous.bottom, selected.bottom, SMOOTHING_ALPHA),
+                left = lerp(previous.left, selected.left, smoothing),
+                top = lerp(previous.top, selected.top, smoothing),
+                right = lerp(previous.right, selected.right, smoothing),
+                bottom = lerp(previous.bottom, selected.bottom, smoothing),
                 label = selected.label,
                 confidence = selected.confidence,
             )
@@ -374,6 +426,22 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
 
     private fun centerDistance(a: Candidate, b: Candidate): Float =
         hypot(a.centerX - b.centerX, a.centerY - b.centerY)
+
+    private fun centerDistanceToViewfinderCentre(candidate: Candidate): Float =
+        hypot(candidate.centerX - 0.5f, candidate.centerY - 0.5f)
+
+    private fun Candidate.translated(dx: Float, dy: Float): Candidate {
+        val width = (right - left).coerceIn(0.015f, 1f)
+        val height = (bottom - top).coerceIn(0.015f, 1f)
+        val centerX = (this.centerX + dx).coerceIn(width * 0.5f, 1f - width * 0.5f)
+        val centerY = (this.centerY + dy).coerceIn(height * 0.5f, 1f - height * 0.5f)
+        return copy(
+            left = centerX - width * 0.5f,
+            top = centerY - height * 0.5f,
+            right = centerX + width * 0.5f,
+            bottom = centerY + height * 0.5f,
+        )
+    }
 
     private fun lerp(start: Float, end: Float, amount: Float): Float =
         start + (end - start) * amount
