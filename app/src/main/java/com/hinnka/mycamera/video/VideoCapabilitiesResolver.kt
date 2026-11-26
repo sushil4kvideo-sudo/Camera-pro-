@@ -52,6 +52,27 @@ object VideoCapabilitiesResolver {
         val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         val openGateAspect = resolveOpenGatePortraitAspectRatio(activeArray, sensorOrientation)
         val targetPortraitAspect = requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
+        // Capture input is resolved once at a fixed 4K-capable size. It must not
+        // follow the output preset selected in the video settings panel.
+        val fixedCameraInputSize = findBestOutputSize(
+            previewOutputSizes,
+            VideoResolutionPreset.UHD_2160P,
+            requestedConfig.aspectRatio,
+            openGateAspect,
+        ) ?: previewOutputSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+        // EIS+ uses a separate YUV source, but it follows the same fixed-input rule.
+        // If a 4K-capable YUV source is unavailable, EIS+ is not advertised.
+        val fixedEnhancedStabilizationInputSize = findBestOutputSize(
+            yuvOutputSizes,
+            VideoResolutionPreset.UHD_2160P,
+            requestedConfig.aspectRatio,
+            openGateAspect,
+        )?.takeIf { source ->
+            canProduceOutputWithoutUpscaling(
+                source,
+                VideoResolutionPreset.UHD_2160P.resolveOutputSize(targetPortraitAspect),
+            )
+        }
         val threeKOutputSize = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
             null
         } else {
@@ -124,20 +145,29 @@ object VideoCapabilitiesResolver {
                 (preset != VideoResolutionPreset.THREE_K || supportsThreeKEncoder) &&
                     (preset != VideoResolutionPreset.QHD_1440P || supportsQhdEncoder) &&
                     findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null &&
-                    findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null
+                    fixedCameraInputSize?.let { inputSize ->
+                        when (preset) {
+                            VideoResolutionPreset.THREE_K, VideoResolutionPreset.QHD_1440P ->
+                                canProduceOutputWithoutUpscaling(
+                                    inputSize,
+                                    preset.resolveOutputSize(targetPortraitAspect),
+                                )
+                            else -> maxOf(inputSize.width, inputSize.height) >= preset.longEdge
+                        }
+                    } == true
             }
 
         val recordingSizesByResolution = availableResolutions.mapNotNull { preset ->
             findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
                 ?.let { preset to it }
         }.toMap()
+        // Every output preset receives the same source stream; only the encoder
+        // canvas changes when the user selects 720p / 1080p / 3K / 4K.
         val cameraInputSizesByResolution = availableResolutions.mapNotNull { preset ->
-            findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
-                ?.let { preset to it }
+            fixedCameraInputSize?.let { preset to it }
         }.toMap()
         val enhancedStabilizationInputSizesByResolution = availableResolutions.mapNotNull { preset ->
-            findBestOutputSize(yuvOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
-                ?.let { preset to it }
+            fixedEnhancedStabilizationInputSize?.let { preset to it }
         }.toMap()
 
         val resolvedResolution = requestedConfig.resolution.takeIf { availableResolutions.contains(it) }
@@ -157,7 +187,22 @@ object VideoCapabilitiesResolver {
         ) ?: VideoResolutionPreset.FHD_1080P.resolveOutputSize(
             requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
         )
-        val cameraInputSize = cameraInputSizesByResolution[resolvedResolution] ?: fallbackPreviewSize
+        val cameraInputSize = fixedCameraInputSize ?: fallbackPreviewSize
+        if (fixedCameraInputSize != null) {
+            val fixed4kTarget = VideoResolutionPreset.UHD_2160P.resolveOutputSize(targetPortraitAspect)
+            val inputIs4kCapable = maxOf(fixedCameraInputSize.width, fixedCameraInputSize.height) >=
+                VideoResolutionPreset.UHD_2160P.longEdge &&
+                minOf(fixedCameraInputSize.width, fixedCameraInputSize.height) + 16 >=
+                minOf(fixed4kTarget.width, fixed4kTarget.height)
+            PLog.i(
+                TAG,
+                "Fixed camera video input=${fixedCameraInputSize.width}x${fixedCameraInputSize.height}, " +
+                    "4KCapable=$inputIs4kCapable; output resolution=${requestedConfig.resolution.displayName}",
+            )
+            if (!inputIs4kCapable) {
+                PLog.w(TAG, "Camera does not expose a 4K SurfaceTexture source; using its highest available source")
+            }
+        }
         if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
             val sourceCandidates = previewOutputSizes
                 .sortedByDescending { it.width.toLong() * it.height.toLong() }

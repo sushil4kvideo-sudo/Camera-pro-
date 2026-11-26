@@ -108,7 +108,6 @@ class Camera2Controller(private val context: Context) {
     companion object {
         private const val TAG = "Camera2Controller"
         private const val ULTRA_WIDE_AE_HANDOFF_MAX_AGE_MS = 900L
-        private const val TOPOFF_HIGH_RES_INPUT_MAX_PIXELS = 12_500_000L
 
         // 自定义错误代码
         const val ERROR_CAMERA_DISCONNECTED = 1000
@@ -150,12 +149,6 @@ class Camera2Controller(private val context: Context) {
             VendorCaptureKey.VIVO_FORCE_SENSOR_MODE
         )
     }
-
-    // One-shot retry state: if the camera HAL rejects the high-resolution Top-Off
-    // PRIVATE stream in combination with the preview target, retry recording with the
-    // selected-resolution input while keeping the encoder output unchanged.
-    @Volatile
-    private var topOffHighResolutionRecordingFallback: Pair<Size, Size>? = null
 
     private data class PhysicalOutputFailureKey(
         val openCameraId: String,
@@ -2833,7 +2826,6 @@ class Camera2Controller(private val context: Context) {
         } else {
             PLog.e(TAG, "Preview session failed: $reason")
         }
-        topOffHighResolutionRecordingFallback = null
         if (videoRecorder.isRecording()) {
             videoRecorder.forceStop()
             spatialVideoRecorder.forceStop()
@@ -4200,42 +4192,6 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun retryPreviewSessionWithStandardTopOffInput(
-        reason: String,
-        openGeneration: Long,
-    ): Boolean {
-        if (openGeneration != cameraOpenGeneration) return false
-        val fallback = topOffHighResolutionRecordingFallback ?: return false
-        if (!videoRecorder.isRecording()) {
-            topOffHighResolutionRecordingFallback = null
-            return false
-        }
-
-        // Consume the retry before touching Camera2. A failed fallback must not loop.
-        topOffHighResolutionRecordingFallback = null
-        val fallbackSize = fallback.second
-        val sensorOrientation = _state.value.getCurrentCameraInfo()?.sensorOrientation
-            ?: cachedSensorOrientation
-        return try {
-            videoRecorder.updateCameraInputSize(
-                size = fallbackSize,
-                currentCameraUsesEnhancedStabilization = false,
-                sensorOrientationDegrees = sensorOrientation,
-            )
-            PLog.w(
-                "TopOffZoom",
-                "High-resolution input session rejected ($reason); retrying with " +
-                    "selected-resolution input=${fallbackSize.width}x${fallbackSize.height}. " +
-                    "Encoder output remains unchanged.",
-            )
-            createPreviewSession(openGeneration = openGeneration)
-            true
-        } catch (error: Exception) {
-            PLog.e(TAG, "Could not fall back from high-resolution Top-Off input", error)
-            false
-        }
-    }
-
     private fun retryPreviewSessionWithoutUltraWideAeMetering(
         reason: String,
         openGeneration: Long,
@@ -4549,13 +4505,6 @@ class Camera2Controller(private val context: Context) {
                             }
                             PLog.e(TAG, "Video session configuration failed")
                             safeCloseCaptureSession(session, "video configure failure")
-                            if (retryPreviewSessionWithStandardTopOffInput(
-                                    reason = "video configure failed",
-                                    openGeneration = openGeneration,
-                                )
-                            ) {
-                                return
-                            }
                             if (normalVideoSwitchableRecordSurface != null &&
                                 normalVideoUltraWideInstantSwitchActive
                             ) {
@@ -4682,11 +4631,6 @@ class Camera2Controller(private val context: Context) {
             device.createCaptureSession(sessionConfig)
         } catch (e: IllegalStateException) {
             PLog.w(TAG, "Failed to create preview session", e)
-            if (retryPreviewSessionWithStandardTopOffInput(
-                    reason = "create session illegal state: ${e.message}",
-                    openGeneration = openGeneration,
-                )
-            ) return
             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
             if (retryPreviewSessionWithoutUltraWideAeMetering("create session illegal state: ${e.message}", openGeneration)) return
             if (vendorSessionParametersApplied &&
@@ -4707,11 +4651,6 @@ class Camera2Controller(private val context: Context) {
             handlePreviewSessionFailure("create session illegal state", openGeneration, e)
         } catch (e: Exception) {
             PLog.w(TAG, "Failed to create preview session", e)
-            if (retryPreviewSessionWithStandardTopOffInput(
-                    reason = "create session exception: ${e.message}",
-                    openGeneration = openGeneration,
-                )
-            ) return
             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
             if (retryPreviewSessionWithoutUltraWideAeMetering("create session exception: ${e.message}", openGeneration)) return
             if (vendorSessionParametersApplied &&
@@ -5364,9 +5303,6 @@ class Camera2Controller(private val context: Context) {
             return
         }
         captureSession = session
-        // The first successfully configured recording session no longer needs the
-        // one-shot high-resolution-input fallback.
-        topOffHighResolutionRecordingFallback = null
         _state.update { it.copy(previewFirstFrameTimestampNs = null) }
 
         try {
@@ -11134,70 +11070,6 @@ class Camera2Controller(private val context: Context) {
         }.getOrNull()
     }
 
-    /**
-     * Prefer a high-resolution PRIVATE/SurfaceTexture source for Top-Off software zoom while
-     * keeping the MediaCodec output size controlled by the selected recording preset.
-     *
-     * Camera2 stream size support alone does not guarantee a usable frame rate, so reject
-     * candidates whose reported minimum frame duration exceeds the selected frame interval.
-     * A zero duration means the HAL did not report a constraint; it is accepted for normal
-     * 30 fps recording, but not used to force high-resolution input above 30 fps.
-     */
-    private fun resolveTopOffHighResolutionCameraInputSize(
-        characteristics: CameraCharacteristics?,
-        preferred: Size,
-        targetFps: Int,
-    ): Size? {
-        if (characteristics == null || targetFps <= 0 || targetFps > 60) return null
-        val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?: return null
-        val preferredPixels = preferred.width.toLong() * preferred.height.toLong()
-        val frameIntervalNs = 1_000_000_000L / targetFps.coerceAtLeast(1)
-        val candidates = runCatching {
-            streamMap.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
-        }.getOrDefault(emptyList())
-            .distinct()
-            .filter { size ->
-                val pixels = size.width.toLong() * size.height.toLong()
-                size.width >= 1920 &&
-                    size.height >= 1080 &&
-                    pixels > preferredPixels &&
-                    pixels <= TOPOFF_HIGH_RES_INPUT_MAX_PIXELS
-            }
-            .filter { size ->
-                val minFrameDurationNs = runCatching {
-                    streamMap.getOutputMinFrameDuration(SurfaceTexture::class.java, size)
-                }.getOrDefault(0L)
-                (minFrameDurationNs <= 0L && targetFps <= 30) ||
-                    (minFrameDurationNs in 1L..frameIntervalNs)
-            }
-        val preferredAspect = preferred.width.toFloat() / preferred.height.coerceAtLeast(1)
-        val selected = candidates.sortedWith(
-            compareByDescending<Size> { it.width.toLong() * it.height.toLong() }
-                .thenBy {
-                    abs(it.width.toFloat() / it.height.coerceAtLeast(1) - preferredAspect)
-                }
-        ).firstOrNull()
-        if (selected != null) {
-            val durationNs = runCatching {
-                streamMap.getOutputMinFrameDuration(SurfaceTexture::class.java, selected)
-            }.getOrDefault(0L)
-            PLog.i(
-                "TopOffZoom",
-                "HIGH_RES_CANDIDATE=${selected.width}x${selected.height}, " +
-                    "pixels=${selected.width.toLong() * selected.height.toLong()}, " +
-                    "minFrameDurationNs=$durationNs, targetFps=$targetFps",
-            )
-        } else {
-            PLog.w(
-                "TopOffZoom",
-                "No higher-resolution SurfaceTexture input supports ${targetFps}fps; " +
-                    "keeping selected-resolution input ${preferred.width}x${preferred.height}",
-            )
-        }
-        return selected
-    }
-
     @Synchronized
     private fun finalizeSpatialVideoCompanionIfReady() {
         val primary = spatialPrimaryFinishedUri ?: return
@@ -12550,7 +12422,10 @@ class Camera2Controller(private val context: Context) {
         } else {
             null
         }
-        val selectedResolutionCameraInputSize = if (useEnhancedStabilization) {
+        // This source remains fixed at the 4K-capable size resolved for the camera,
+        // regardless of which recording resolution is selected in the UI.
+        // Top-Off zoom/pan is applied by the GL renderer, not by changing the input size.
+        val fixedCameraInputSize = if (useEnhancedStabilization) {
             _state.value.videoCapabilities.enhancedStabilizationInputSizesByResolution[
                 _state.value.videoConfig.resolution
             ]
@@ -12559,38 +12434,11 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.resolution
             ]
         } ?: _state.value.currentPreviewSize
-        // Top-Off uses the full sensor frame as its digital-zoom source. Keep this
-        // independent from the encoder canvas, which remains the selected video preset.
-        // Avoid increasing the input load for EIS+, Open Gate, paired-camera, or
-        // dual-aspect sessions, where stream-combination limits are tighter.
-        val topOffHighResolutionInputSize = if (
-            topOffSoftwareCropActiveForRecording &&
-            !useEnhancedStabilization &&
-            !normalVideoUltraWideInstantSwitchActive &&
-            selectedDualAspectRatio == null &&
-            _state.value.videoConfig.aspectRatio != VideoAspectRatio.OPEN_GATE
-        ) {
-            resolveTopOffHighResolutionCameraInputSize(
-                characteristics = getActiveOpenCameraCharacteristics(),
-                preferred = selectedResolutionCameraInputSize,
-                targetFps = _state.value.videoConfig.fps.fps,
-            )
-        } else {
-            null
-        }
-        val requestedCameraInputSize = topOffHighResolutionInputSize ?: selectedResolutionCameraInputSize
-        if (topOffHighResolutionInputSize != null) {
-            PLog.i(
-                "TopOffZoom",
-                "HIGH_RES_INPUT selected=${topOffHighResolutionInputSize.width}x${topOffHighResolutionInputSize.height}, " +
-                    "encoderPreset=${_state.value.videoConfig.resolution}, fps=${_state.value.videoConfig.fps.fps}",
-            )
-        }
         val cameraInputSize = if (normalVideoUltraWideInstantSwitchActive && !spatialVideoEnabled) {
-            normalVideoMainInputId?.let { resolveSpatialVideoInputSize(it, requestedCameraInputSize) }
-                ?: requestedCameraInputSize
+            normalVideoMainInputId?.let { resolveSpatialVideoInputSize(it, fixedCameraInputSize) }
+                ?: fixedCameraInputSize
         } else {
-            requestedCameraInputSize
+            fixedCameraInputSize
         }
         val switchableCameraInputSize = if (normalVideoUltraWideInstantSwitchActive && !spatialVideoEnabled) {
             val wideId = normalVideoUltraWidePhysicalCameraId ?: run {
@@ -12627,6 +12475,12 @@ class Camera2Controller(private val context: Context) {
         val outputSize = _state.value.videoConfig.resolveOutputSize(
             _state.value.videoCapabilities.openGatePortraitAspectRatio,
             cameraInputSize
+        )
+        PLog.i(
+            "VideoResolution",
+            "RECORDING input=${cameraInputSize.width}x${cameraInputSize.height}, " +
+                "encoderOutput=${outputSize.width}x${outputSize.height}, " +
+                "selectedPreset=${_state.value.videoConfig.resolution.displayName}",
         )
         val fallbackOutputSizes = if (isOpenGateRecording) {
             listOfNotNull(
@@ -12911,13 +12765,9 @@ class Camera2Controller(private val context: Context) {
             cameraHandler?.post(completeRecording) ?: completeRecording.run()
         }
         if (!started) {
-            topOffHighResolutionRecordingFallback = null
-            videoCameraHlg10InputActive = false
+                videoCameraHlg10InputActive = false
             if (dualAspectRecordingActive) clearDualAspectRecordingState("primary encoder preparation failed")
             return
-        }
-        topOffHighResolutionRecordingFallback = topOffHighResolutionInputSize?.let {
-            it to selectedResolutionCameraInputSize
         }
         if (switchableCameraInputSize != null) {
             videoRecorder.setSwitchableCameraInputActive(

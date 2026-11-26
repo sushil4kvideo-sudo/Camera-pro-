@@ -92,11 +92,11 @@ fun FloatingVideoSettingsPanel(
         ?: videoCapabilities.availableFps
     val visibleFpsOptions = fpsOptions.ifEmpty { listOf(videoConfig.fps) }
     val description = when (videoConfig.resolution) {
-        VideoResolutionPreset.UHD_2160P -> "Ultra HD resolution"
-        VideoResolutionPreset.THREE_K -> "3K resolution"
-        VideoResolutionPreset.QHD_1440P -> "2K QHD resolution"
-        VideoResolutionPreset.FHD_1080P -> "Full HD resolution"
-        VideoResolutionPreset.HD_720P -> "720p HD resolution"
+        VideoResolutionPreset.UHD_2160P -> "Ultra HD recording output"
+        VideoResolutionPreset.THREE_K -> "3K recording output"
+        VideoResolutionPreset.QHD_1440P -> "2K QHD recording output"
+        VideoResolutionPreset.FHD_1080P -> "Full HD recording output"
+        VideoResolutionPreset.HD_720P -> "720p HD recording output"
     }
 
     Box(
@@ -158,7 +158,7 @@ fun FloatingVideoSettingsPanel(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "Size",
+                                text = "Output",
                                 color = VideoSelectorLabel,
                                 fontSize = 13.5.sp,
                                 fontWeight = FontWeight.Medium,
