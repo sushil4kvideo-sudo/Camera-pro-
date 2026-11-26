@@ -397,6 +397,11 @@ class Camera2Controller(private val context: Context) {
         specialVideoPreferences.getFloat("top_off_zoom_pan_y", 0f).coerceIn(-1f, 1f)
     )
     val topOffZoomPanYFlow: StateFlow<Float> = _topOffZoomPanY.asStateFlow()
+    private val _topOffZoomRollDegrees = MutableStateFlow(
+        specialVideoPreferences.getFloat("top_off_zoom_roll_degrees", 0f)
+            .takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+    )
+    val topOffZoomRollDegreesFlow: StateFlow<Float> = _topOffZoomRollDegrees.asStateFlow()
     private val _topOffJoystickSpeed = MutableStateFlow(
         specialVideoPreferences.getFloat("top_off_joystick_speed", 1f).coerceIn(0.25f, 4f)
     )
@@ -10587,9 +10592,11 @@ class Camera2Controller(private val context: Context) {
         val safePanY = if (panY.isFinite()) panY.coerceIn(-1f, 1f) else 0f
         _topOffZoomPanX.value = safePanX
         _topOffZoomPanY.value = safePanY
+        _topOffZoomRollDegrees.value = 0f
         specialVideoPreferences.edit()
             .putFloat("top_off_zoom_pan_x", safePanX)
             .putFloat("top_off_zoom_pan_y", safePanY)
+            .putFloat("top_off_zoom_roll_degrees", 0f)
             .apply()
         val now = SystemClock.elapsedRealtime()
         if (now - lastTopOffZoomPanDiagnosticAtMs >= 120L) {
@@ -10631,6 +10638,7 @@ class Camera2Controller(private val context: Context) {
         _topOffZoomLockedRatio.value = baseZoom * safeFactor
         _topOffZoomPanX.value = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         _topOffZoomPanY.value = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        _topOffZoomRollDegrees.value = 0f
         _topOffPanLatencyMs.value =
             ((SystemClock.elapsedRealtimeNanos() - requestedAtNs).coerceAtLeast(0L) / 1_000_000f)
     }
@@ -10642,6 +10650,21 @@ class Camera2Controller(private val context: Context) {
             .putFloat("top_off_zoom_locked_ratio", _topOffZoomLockedRatio.value)
             .putFloat("top_off_zoom_pan_x", _topOffZoomPanX.value)
             .putFloat("top_off_zoom_pan_y", _topOffZoomPanY.value)
+            .putFloat("top_off_zoom_roll_degrees", _topOffZoomRollDegrees.value)
+            .apply()
+    }
+
+    fun finishTopOffGyroPanPreset(panX: Float, panY: Float, rollDegrees: Float) {
+        val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+        _topOffZoomPanX.value = safePanX
+        _topOffZoomPanY.value = safePanY
+        _topOffZoomRollDegrees.value = safeRoll
+        specialVideoPreferences.edit()
+            .putFloat("top_off_zoom_pan_x", safePanX)
+            .putFloat("top_off_zoom_pan_y", safePanY)
+            .putFloat("top_off_zoom_roll_degrees", safeRoll)
             .apply()
     }
 

@@ -413,6 +413,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var topOffZoomCropRatio = 1f
     private var topOffZoomCropPanX = 0f
     private var topOffZoomCropPanY = 0f
+    private var topOffZoomCropRollDegrees = 0f
 
     @Volatile
     var meteringEnabled: Boolean = true
@@ -2081,7 +2082,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             } else {
                 cropRect
             },
-            targetMvpMatrix = targetMvpMatrix,
+            targetMvpMatrix = resolveTopOffZoomRollMvpMatrix(targetMvpMatrix, width, height),
             lutConfig = layerLutConfig,
             lutTextureId = layerLutTextureId,
             lutSize = layerLutSize,
@@ -3205,21 +3206,59 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         updateMVPMatrix()
     }
 
-    /** Apply the same display-space Top-Off crop used by the realtime video encoder. */
-    fun setTopOffZoomCrop(enabled: Boolean, zoomRatio: Float, panX: Float, panY: Float) {
+    /** Apply the same display-space Top-Off crop and roll correction used by the realtime video encoder. */
+    fun setTopOffZoomCrop(
+        enabled: Boolean,
+        zoomRatio: Float,
+        panX: Float,
+        panY: Float,
+        rollDegrees: Float = 0f,
+    ) {
         val safeZoom = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
         val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
         if (topOffZoomCropEnabled == enabled &&
             kotlin.math.abs(topOffZoomCropRatio - safeZoom) <= 0.0001f &&
             kotlin.math.abs(topOffZoomCropPanX - safePanX) <= 0.0001f &&
-            kotlin.math.abs(topOffZoomCropPanY - safePanY) <= 0.0001f
+            kotlin.math.abs(topOffZoomCropPanY - safePanY) <= 0.0001f &&
+            kotlin.math.abs(topOffZoomCropRollDegrees - safeRoll) <= 0.005f
         ) return
         topOffZoomCropEnabled = enabled
         topOffZoomCropRatio = safeZoom
         topOffZoomCropPanX = safePanX
         topOffZoomCropPanY = safePanY
+        topOffZoomCropRollDegrees = safeRoll
         onRequestRender?.invoke()
+    }
+
+    /**
+     * Rotate in output-pixel coordinates and scale enough to keep all corners covered.
+     * This avoids black wedges during horizon correction in portrait or landscape video.
+     */
+    private fun resolveTopOffZoomRollMvpMatrix(
+        baseMatrix: FloatArray,
+        width: Int,
+        height: Int,
+    ): FloatArray {
+        val angle = Math.toRadians(topOffZoomCropRollDegrees.toDouble())
+        if (!topOffZoomCropEnabled || kotlin.math.abs(angle) < 0.0001) return baseMatrix
+        val aspect = (width.toFloat() / height.coerceAtLeast(1).toFloat()).coerceIn(0.1f, 10f)
+        val cosine = kotlin.math.cos(angle).toFloat()
+        val sine = kotlin.math.sin(angle).toFloat()
+        val coverScale = maxOf(
+            kotlin.math.abs(cosine) + kotlin.math.abs(sine) / aspect,
+            kotlin.math.abs(sine) * aspect + kotlin.math.abs(cosine),
+        )
+        val rollMatrix = FloatArray(16)
+        Matrix.setIdentityM(rollMatrix, 0)
+        rollMatrix[0] = cosine * coverScale
+        rollMatrix[1] = sine * aspect * coverScale
+        rollMatrix[4] = -sine / aspect * coverScale
+        rollMatrix[5] = cosine * coverScale
+        val result = FloatArray(16)
+        Matrix.multiplyMM(result, 0, baseMatrix, 0, rollMatrix, 0)
+        return result
     }
 
     /**

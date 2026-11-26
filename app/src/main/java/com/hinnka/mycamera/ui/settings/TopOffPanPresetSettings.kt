@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.camera.GyroPanMode
 import com.hinnka.mycamera.camera.TopOffPanPreset
 import com.hinnka.mycamera.camera.TopOffPanWaypoint
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -123,6 +124,38 @@ internal fun TopOffPanPresetSettings(
             color = Color.White.copy(alpha = 0.12f),
         )
 
+        Text("Built-in gyroscope presets", color = Color.White, fontWeight = FontWeight.SemiBold)
+        GyroPanMode.values().forEach { mode ->
+            Column(modifier = Modifier.padding(top = 7.dp)) {
+                Text(
+                    text = when (mode) {
+                        GyroPanMode.POSITION_LOCK -> "Gyro Position Lock"
+                        GyroPanMode.ANTI_SHAKE -> "Gyro Anti-Shake"
+                        GyroPanMode.HORIZON_LOCK -> "Gyro Horizon Lock"
+                        GyroPanMode.SMOOTH_FOLLOW -> "Gyro Smooth Follow"
+                        GyroPanMode.AUTO_AXIS_BALANCE -> "Auto Axis Balance"
+                    },
+                    color = Color.White,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp,
+                )
+                Text(
+                    text = mode.description,
+                    color = Color.White.copy(alpha = 0.64f),
+                    fontSize = 11.sp,
+                )
+            }
+        }
+        Text(
+            "Choose one from the camera Pan Preset picker and press Run. Start it before recording; gyro correction continues during the video render.",
+            color = Color.White.copy(alpha = 0.68f),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(top = 8.dp, bottom = 10.dp),
+        )
+        HorizontalDivider(
+            modifier = Modifier.padding(vertical = 12.dp),
+            color = Color.White.copy(alpha = 0.12f),
+        )
         Text("Custom pan path", color = Color.White, fontWeight = FontWeight.SemiBold)
         Text(
             text = if (activeArrayWidth > 0 && activeArrayHeight > 0) {

@@ -3586,6 +3586,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val topOffZoomLockedRatio = cameraController.topOffZoomLockedRatioFlow
     val topOffZoomPanX = cameraController.topOffZoomPanXFlow
     val topOffZoomPanY = cameraController.topOffZoomPanYFlow
+    val topOffZoomRollDegrees = cameraController.topOffZoomRollDegreesFlow
     val topOffJoystickSpeed = cameraController.topOffJoystickSpeedFlow
     val topOffShowLatency = cameraController.topOffShowLatencyFlow
     val topOffPanLatencyMs = cameraController.topOffPanLatencyMsFlow
@@ -3669,6 +3670,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun finishTopOffPanPresetPlayback() =
         cameraController.finishTopOffPanPresetPlayback()
+
+    fun finishTopOffGyroPanPreset(panX: Float, panY: Float, rollDegrees: Float) =
+        cameraController.finishTopOffGyroPanPreset(panX, panY, rollDegrees)
 
     fun setTopOffJoystickSpeed(speed: Float) =
         cameraController.setTopOffJoystickSpeed(speed)

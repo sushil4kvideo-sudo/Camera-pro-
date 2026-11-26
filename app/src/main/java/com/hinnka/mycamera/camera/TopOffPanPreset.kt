@@ -3,6 +3,15 @@ package com.hinnka.mycamera.camera
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** Gyroscope-driven pan behaviours available from the Top-Off preset picker. */
+enum class GyroPanMode(val description: String) {
+    POSITION_LOCK("Compensates phone yaw and pitch to keep framing fixed."),
+    ANTI_SHAKE("Rejects quick hand tremors while allowing slow intentional movement."),
+    HORIZON_LOCK("Levels the frame by counter-rotating device roll."),
+    SMOOTH_FOLLOW("Follows broad movement with a damped, delayed response."),
+    AUTO_AXIS_BALANCE("Remaps left/right and up/down when the phone rotates.")
+}
+
 /** A pan waypoint in viewfinder-normalized coordinates and its requested crop magnification. */
 data class TopOffPanWaypoint(
     val panX: Float,
@@ -25,6 +34,7 @@ data class TopOffPanPreset(
     val name: String,
     val points: List<TopOffPanWaypoint>,
     val segmentDurationMs: Long = 1_000L,
+    val gyroMode: GyroPanMode? = null,
 ) {
     fun normalized(): TopOffPanPreset = copy(
         id = id.trim().ifBlank { "custom-pan" }.take(80),
@@ -38,6 +48,19 @@ data class TopOffPanPreset(
         const val MAX_ZOOM_RATIO = 10f
         const val BUILTIN_LEFT_RIGHT_ID = "builtin_left_right"
         const val BUILTIN_UP_DOWN_ID = "builtin_up_down"
+        const val BUILTIN_GYRO_POSITION_LOCK_ID = "builtin_gyro_position_lock"
+        const val BUILTIN_GYRO_ANTI_SHAKE_ID = "builtin_gyro_anti_shake"
+        const val BUILTIN_GYRO_HORIZON_LOCK_ID = "builtin_gyro_horizon_lock"
+        const val BUILTIN_GYRO_SMOOTH_FOLLOW_ID = "builtin_gyro_smooth_follow"
+        const val BUILTIN_GYRO_AXIS_BALANCE_ID = "builtin_gyro_axis_balance"
+
+        private fun gyroPreset(id: String, name: String, mode: GyroPanMode) = TopOffPanPreset(
+            id = id,
+            name = name,
+            points = listOf(TopOffPanWaypoint(0f, 0f, 2f), TopOffPanWaypoint(0f, 0f, 2f)),
+            segmentDurationMs = 0L,
+            gyroMode = mode,
+        )
 
         fun builtInPresets(): List<TopOffPanPreset> = listOf(
             TopOffPanPreset(
@@ -58,6 +81,11 @@ data class TopOffPanPreset(
                 ),
                 segmentDurationMs = 1_500L,
             ),
+            gyroPreset(BUILTIN_GYRO_POSITION_LOCK_ID, "Gyro Position Lock", GyroPanMode.POSITION_LOCK),
+            gyroPreset(BUILTIN_GYRO_ANTI_SHAKE_ID, "Gyro Anti-Shake", GyroPanMode.ANTI_SHAKE),
+            gyroPreset(BUILTIN_GYRO_HORIZON_LOCK_ID, "Gyro Horizon Lock", GyroPanMode.HORIZON_LOCK),
+            gyroPreset(BUILTIN_GYRO_SMOOTH_FOLLOW_ID, "Gyro Smooth Follow", GyroPanMode.SMOOTH_FOLLOW),
+            gyroPreset(BUILTIN_GYRO_AXIS_BALANCE_ID, "Auto Axis Balance", GyroPanMode.AUTO_AXIS_BALANCE),
         )
     }
 }
@@ -81,6 +109,7 @@ object TopOffPanPresetCodec {
                     .put("id", preset.id)
                     .put("name", preset.name)
                     .put("segmentDurationMs", preset.segmentDurationMs)
+                    .put("gyroMode", preset.gyroMode?.name ?: JSONObject.NULL)
                     .put("points", points)
             )
         }
@@ -94,7 +123,7 @@ object TopOffPanPresetCodec {
             buildList {
                 for (index in 0 until array.length().coerceAtMost(64)) {
                     val item = array.optJSONObject(index) ?: continue
-                    val pointsJson = item.optJSONArray("points") ?: continue
+                    val pointsJson = item.optJSONArray("points") ?: JSONArray()
                     val points = buildList {
                         for (pointIndex in 0 until pointsJson.length().coerceAtMost(TopOffPanPreset.MAX_POINTS)) {
                             val point = pointsJson.optJSONObject(pointIndex) ?: continue
@@ -107,13 +136,21 @@ object TopOffPanPresetCodec {
                             )
                         }
                     }
-                    if (points.size < 2) continue
+                    val gyroMode = runCatching {
+                        GyroPanMode.valueOf(item.optString("gyroMode", ""))
+                    }.getOrNull()
+                    if (points.size < 2 && gyroMode == null) continue
+                    val safePoints = if (points.size >= 2) points else listOf(
+                        TopOffPanWaypoint(0f, 0f, 2f),
+                        TopOffPanWaypoint(0f, 0f, 2f),
+                    )
                     add(
                         TopOffPanPreset(
                             id = item.optString("id", "custom-$index"),
                             name = item.optString("name", "Custom pan"),
-                            points = points,
+                            points = safePoints,
                             segmentDurationMs = item.optLong("segmentDurationMs", 1_000L),
+                            gyroMode = gyroMode,
                         ).normalized()
                     )
                 }

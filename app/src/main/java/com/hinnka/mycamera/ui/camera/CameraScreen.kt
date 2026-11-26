@@ -9,6 +9,7 @@ import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.os.Environment
+import android.widget.Toast
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.WindowManager
@@ -86,6 +87,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
+import com.hinnka.mycamera.camera.GyroPanPresetController
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
 import com.hinnka.mycamera.camera.TopOffPanPreset
 import com.hinnka.mycamera.camera.TopOffPanWaypoint
@@ -260,6 +262,7 @@ fun CameraScreen(
     val topOffZoomLockedRatio by viewModel.topOffZoomLockedRatio.collectAsState()
     val topOffZoomPanX by viewModel.topOffZoomPanX.collectAsState()
     val topOffZoomPanY by viewModel.topOffZoomPanY.collectAsState()
+    val topOffZoomRollDegrees by viewModel.topOffZoomRollDegrees.collectAsState()
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
     val spatialVideoPreviewSensorOrientation by
@@ -403,6 +406,7 @@ fun CameraScreen(
         topOffZoomFactor,
         topOffZoomPanX,
         topOffZoomPanY,
+        topOffZoomRollDegrees,
         state.zoomRatio,
         state.currentCameraId,
         state.captureMode,
@@ -437,6 +441,7 @@ fun CameraScreen(
             zoomRatio = if (cropMainGlPreview) lockedZoom else 1f,
             panX = if (cropMainGlPreview) topOffZoomPanX else 0f,
             panY = if (cropMainGlPreview) topOffZoomPanY else 0f,
+            rollDegrees = if (cropMainGlPreview) topOffZoomRollDegrees else 0f,
         )
     }
 
@@ -2624,6 +2629,33 @@ fun CameraScreen(
                 } else {
                     viewModel::panZoomBy
                 },
+                onGyroPanUpdate = { panX, panY, rollDegrees ->
+                    val selectedCameraInfo = state.getCurrentCameraInfo()
+                    val selectedUltraWide = selectedCameraInfo?.let { camera ->
+                        camera.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                            camera.intrinsicZoomRatio.isFinite() &&
+                            camera.intrinsicZoomRatio in 0.2f..0.85f
+                    } == true
+                    val zoomCropActive = topOffZoomEnabled &&
+                        state.captureMode == CaptureMode.VIDEO &&
+                        (state.zoomRatio >= 1f || selectedUltraWide) &&
+                        !spatialVideoEnabled && !dualCaptureEnabled
+                    val zoomCropVisible = zoomCropActive &&
+                        !(normalVideoUltraWideInstantSwitchActive && selectedUltraWide)
+                    val lockedZoom = if (selectedUltraWide) {
+                        topOffZoomFactor.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
+                    } else {
+                        topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
+                            ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
+                    }
+                    cameraGLSurfaceView?.setTopOffZoomCrop(
+                        enabled = zoomCropVisible,
+                        zoomRatio = if (zoomCropVisible) lockedZoom else 1f,
+                        panX = if (zoomCropVisible) panX else 0f,
+                        panY = if (zoomCropVisible) panY else 0f,
+                        rollDegrees = if (zoomCropVisible) rollDegrees else 0f,
+                    )
+                },
                 sideControlInset = if (isXpan) {
                     (xpanSideWidth - CameraControlsLayoutDefaults.SideButtonSize) / 2
                 } else {
@@ -3320,6 +3352,7 @@ private fun Controls(
     showTrackingPad: Boolean,
     showTopOffPanPresetControls: Boolean,
     onTrackingPadPan: (Float, Float) -> Unit,
+    onGyroPanUpdate: (Float, Float, Float) -> Unit,
     sideControlInset: Dp?,
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
@@ -3329,6 +3362,8 @@ private fun Controls(
     val captureProcessingState by viewModel.captureProcessingState.collectAsState()
     val capturedThumbnail by viewModel.capturedThumbnail.collectAsState()
     val topOffJoystickSpeed by viewModel.topOffJoystickSpeed.collectAsState()
+    val topOffZoomPanX by viewModel.topOffZoomPanX.collectAsState()
+    val topOffZoomPanY by viewModel.topOffZoomPanY.collectAsState()
     val topOffShowLatency by viewModel.topOffShowLatency.collectAsState()
     val topOffPanLatencyMs by viewModel.topOffPanLatencyMs.collectAsState()
     val customTopOffPanPresets by viewModel.topOffPanPresets.collectAsState()
@@ -3343,9 +3378,49 @@ private fun Controls(
     val selectedTopOffPanPreset = availableTopOffPanPresets.firstOrNull {
         it.id == selectedTopOffPanPresetId
     } ?: availableTopOffPanPresets.firstOrNull()
+    val latestOnGyroPanUpdate by rememberUpdatedState(onGyroPanUpdate)
+    val runningGyroPreset = runningTopOffPanPreset?.takeIf { it.gyroMode != null }
+
+    DisposableEffect(runningGyroPreset?.id) {
+        val preset = runningGyroPreset
+        val gyroMode = preset?.gyroMode
+        if (gyroMode == null) {
+            onDispose { }
+        } else {
+            val gyroController = GyroPanPresetController(
+                context = context,
+                mode = gyroMode,
+                initialPanX = topOffZoomPanX,
+                initialPanY = topOffZoomPanY,
+            ) { correction ->
+                latestOnGyroPanUpdate(correction.panX, correction.panY, correction.rollDegrees)
+            }
+            val sensorStarted = gyroController.start()
+            if (!sensorStarted) {
+                Toast.makeText(
+                    context,
+                    "Gyroscope rotation sensor is unavailable on this device.",
+                    Toast.LENGTH_LONG,
+                ).show()
+                runningTopOffPanPreset = null
+            }
+            onDispose {
+                gyroController.stop()
+                if (sensorStarted) {
+                    val finalCorrection = gyroController.currentCorrection
+                    viewModel.finishTopOffGyroPanPreset(
+                        finalCorrection.panX,
+                        finalCorrection.panY,
+                        finalCorrection.rollDegrees,
+                    )
+                }
+            }
+        }
+    }
 
     LaunchedEffect(runningTopOffPanPreset) {
         val preset = runningTopOffPanPreset ?: return@LaunchedEffect
+        if (preset.gyroMode != null) return@LaunchedEffect
         try {
             val points = preset.points
             if (points.size < 2) return@LaunchedEffect
@@ -3553,7 +3628,8 @@ private fun Controls(
                                                         },
                                                     )
                                                     Text(
-                                                        text = "${preset.points.size} points · ${preset.segmentDurationMs} ms per segment",
+                                                        text = preset.gyroMode?.let { "Gyroscope · live orientation correction" }
+                                                            ?: "${preset.points.size} points · ${preset.segmentDurationMs} ms per segment",
                                                         fontSize = 11.sp,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                     )
