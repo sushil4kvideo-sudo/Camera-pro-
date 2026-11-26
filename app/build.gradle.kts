@@ -25,6 +25,76 @@ val eyeFocusModelUrl =
     "https://huggingface.co/litert-community/MediaPipe-FaceDetector-BlazeFace-Full-Range/resolve/main/blaze_face_full_range.tflite"
 val eyeFocusModelSha256 = "3698b18f063835bc609069ef052228fbe86d9c9a6dc8dcb7c7c2d69aed2b181b"
 
+/**
+ * AI subject tracking uses the small int8 EfficientDet-Lite0 model. It is downloaded
+ * during asset merge, checksum-verified, and packaged locally; the app never fetches
+ * model data while opening the camera.
+ */
+val subjectTrackingAssetDirectory = layout.buildDirectory.dir("generated/subjectTrackingAssets")
+val subjectTrackingModelFile =
+    subjectTrackingAssetDirectory.map { it.file("efficientdet_lite0_int8.tflite") }
+val subjectTrackingModelUrl =
+    "https://huggingface.co/litert-community/MediaPipe-ObjectDetector-EfficientDet-Lite0/resolve/main/efficientdet_lite0_int8.tflite"
+val subjectTrackingModelSha256 =
+    "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb"
+
+val downloadSubjectTrackingModel by tasks.registering {
+    inputs.property("modelUrl", subjectTrackingModelUrl)
+    inputs.property("modelSha256", subjectTrackingModelSha256)
+    outputs.file(subjectTrackingModelFile)
+
+    doLast {
+        val outputFile = subjectTrackingModelFile.get().asFile
+
+        fun sha256(file: File): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(16 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+            return digest.digest().joinToString("") { byte ->
+                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+            }
+        }
+
+        if (outputFile.isFile && sha256(outputFile) == subjectTrackingModelSha256) {
+            return@doLast
+        }
+
+        outputFile.parentFile.mkdirs()
+        val tempFile = File(outputFile.parentFile, "${outputFile.name}.download")
+        val connection = URL(subjectTrackingModelUrl).openConnection() as HttpURLConnection
+        try {
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 30_000
+            connection.readTimeout = 120_000
+            connection.setRequestProperty("User-Agent", "CameraPro-Android-build")
+            connection.inputStream.use { input ->
+                tempFile.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val actualSha256 = sha256(tempFile)
+            if (actualSha256 != subjectTrackingModelSha256) {
+                throw GradleException(
+                    "Subject-tracking model checksum mismatch: expected " +
+                        "$subjectTrackingModelSha256, got $actualSha256"
+                )
+            }
+            if (!tempFile.renameTo(outputFile)) {
+                tempFile.copyTo(outputFile, overwrite = true)
+            }
+        } finally {
+            connection.disconnect()
+            tempFile.delete()
+        }
+    }
+}
+
+
 val downloadEyeFocusModel by tasks.registering {
     inputs.property("modelUrl", eyeFocusModelUrl)
     inputs.property("modelSha256", eyeFocusModelSha256)
@@ -206,10 +276,11 @@ android {
 
 // Package the generated MediaPipe model as a normal Android asset.
 android.sourceSets.getByName("main").assets.srcDir(eyeFocusAssetDirectory)
+android.sourceSets.getByName("main").assets.srcDir(subjectTrackingAssetDirectory)
 
 tasks.configureEach {
     if (name.startsWith("merge") && name.endsWith("Assets")) {
-        dependsOn(downloadEyeFocusModel)
+        dependsOn(downloadEyeFocusModel, downloadSubjectTrackingModel)
     }
 }
 
