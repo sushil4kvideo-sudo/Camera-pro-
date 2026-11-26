@@ -29,6 +29,7 @@ import com.hinnka.mycamera.raw.RawEnginePreviewPlan
 import kotlinx.coroutines.flow.StateFlow
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
+import com.hinnka.mycamera.preview.PreviewSubjectTrackingProcessor
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
@@ -78,6 +79,7 @@ fun CameraPreviewGL(
     onMeteringUpdated: ((Double, Double) -> Unit)? = null,
     onHighlightPointUpdated: ((Float, Float) -> Unit)? = null,
     onEyeFocusInputAvailable: ((EyeFocusPreviewFrame) -> Unit)? = null,
+    subjectTrackingTarget: PreviewSubjectTrackingProcessor.Target? = null,
     onFirstPreviewFrame: (() -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
@@ -332,6 +334,12 @@ fun CameraPreviewGL(
                     },
                     modifier = Modifier.fillMaxSize()
                 )
+
+            // Draw only the current detector result; inference never runs on the Compose/UI thread.
+            SubjectTrackingOverlay(
+                target = subjectTrackingTarget,
+                modifier = Modifier.fillMaxSize(),
+            )
 
             // 对焦指示器
             FocusIndicator(
