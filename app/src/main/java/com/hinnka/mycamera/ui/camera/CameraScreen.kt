@@ -1985,8 +1985,23 @@ fun CameraScreen(
                                     } else {
                                         if (showUltraWideFullScreen || showUltraWideInset) 1f else 0f
                                     }
-                                    scaleX = handoffScale * ultraWideTopOffCropScale
-                                    scaleY = handoffScale * ultraWideTopOffCropScale
+                                    val wideRollDegrees = if (applyTopOffCropToUltraWideTexture) {
+                                        topOffZoomRollDegrees
+                                    } else {
+                                        0f
+                                    }
+                                    val rollRadians = Math.toRadians(wideRollDegrees.toDouble())
+                                    val aspect = (size.width / size.height.coerceAtLeast(1f))
+                                        .coerceIn(0.1f, 10f)
+                                    val cosine = kotlin.math.cos(rollRadians)
+                                    val sine = kotlin.math.sin(rollRadians)
+                                    val rollCoverScale = maxOf(
+                                        kotlin.math.abs(cosine) + kotlin.math.abs(sine) / aspect,
+                                        kotlin.math.abs(sine) * aspect + kotlin.math.abs(cosine),
+                                    ).toFloat()
+                                    scaleX = handoffScale * ultraWideTopOffCropScale * rollCoverScale
+                                    scaleY = handoffScale * ultraWideTopOffCropScale * rollCoverScale
+                                    rotationZ = wideRollDegrees
                                     translationX = ultraWideTopOffPanTranslation.xFraction *
                                         size.width * handoffScale
                                     translationY = ultraWideTopOffPanTranslation.yFraction *
@@ -2630,32 +2645,9 @@ fun CameraScreen(
                     viewModel::panZoomBy
                 },
                 onGyroPanUpdate = { panX, panY, rollDegrees ->
-                    val selectedCameraInfo = state.getCurrentCameraInfo()
-                    val selectedUltraWide = selectedCameraInfo?.let { camera ->
-                        camera.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
-                            camera.intrinsicZoomRatio.isFinite() &&
-                            camera.intrinsicZoomRatio in 0.2f..0.85f
-                    } == true
-                    val zoomCropActive = topOffZoomEnabled &&
-                        state.captureMode == CaptureMode.VIDEO &&
-                        (state.zoomRatio >= 1f || selectedUltraWide) &&
-                        !spatialVideoEnabled && !dualCaptureEnabled
-                    val zoomCropVisible = zoomCropActive &&
-                        !(normalVideoUltraWideInstantSwitchActive && selectedUltraWide)
-                    val lockedZoom = if (selectedUltraWide) {
-                        topOffZoomFactor.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
-                    } else {
-                        topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
-                            ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
-                    }
+                    // StateFlow is the single preview-update path. The parent effect queues one
+                    // GL update; the controller separately forwards live changes to the encoder.
                     viewModel.setTopOffGyroPanCorrection(panX, panY, rollDegrees)
-                    cameraGLSurfaceView?.setTopOffZoomCrop(
-                        enabled = zoomCropVisible,
-                        zoomRatio = if (zoomCropVisible) lockedZoom else 1f,
-                        panX = if (zoomCropVisible) panX else 0f,
-                        panY = if (zoomCropVisible) panY else 0f,
-                        rollDegrees = if (zoomCropVisible) rollDegrees else 0f,
-                    )
                 },
                 sideControlInset = if (isXpan) {
                     (xpanSideWidth - CameraControlsLayoutDefaults.SideButtonSize) / 2

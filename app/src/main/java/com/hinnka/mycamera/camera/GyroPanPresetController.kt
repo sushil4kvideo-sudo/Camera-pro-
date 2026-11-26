@@ -6,6 +6,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.utils.PLog
 import kotlin.math.PI
 import kotlin.math.abs
 
@@ -16,9 +17,11 @@ data class GyroPanCorrection(
 )
 
 /**
- * Relative orientation tracker for gyro gimbal presets.
- * TYPE_GAME_ROTATION_VECTOR is preferred because it fuses gyro and accelerometer data
- * without magnetometer heading jumps. The output is applied by the realtime LUT renderer.
+ * Relative-orientation controller for Top-Off gyro presets.
+ *
+ * Rotation deltas are calculated in one stable sensor coordinate system first, then remapped
+ * into the current display axes. This avoids multiplying matrices expressed in different
+ * coordinate systems when the device changes between portrait and landscape.
  */
 class GyroPanPresetController(
     context: Context,
@@ -34,14 +37,18 @@ class GyroPanPresetController(
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
 
     private val deviceRotation = FloatArray(9)
-    private val screenRotation = FloatArray(9)
     private val referenceRotation = FloatArray(9)
     private val inverseReferenceRotation = FloatArray(9)
-    private val relativeRotation = FloatArray(9)
+    private val relativeDeviceRotation = FloatArray(9)
+    private val screenRotation = FloatArray(9)
     private val orientationAngles = FloatArray(3)
 
     private var hasReference = false
     private var screenRotationBucket = -1
+    private var lastSensorTimestampNs = 0L
+    private var sensorEventCount = 0L
+    private var lastLoggedError: String? = null
+
     private var basePanX = initialPanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
     private var basePanY = initialPanY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
     private var lowPassHorizontal = 0f
@@ -56,10 +63,22 @@ class GyroPanPresetController(
         get() = lastCorrection
 
     fun start(): Boolean {
-        val sensor = orientationSensor ?: return false
-        return runCatching {
+        val sensor = orientationSensor
+        if (sensor == null) {
+            PLog.e(TAG, "No GAME_ROTATION_VECTOR or ROTATION_VECTOR sensor is available")
+            return false
+        }
+        val registered = runCatching {
             sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        }.onFailure { error ->
+            PLog.e(TAG, "Failed to register orientation sensor listener", error)
         }.getOrDefault(false)
+        PLog.i(
+            TAG,
+            "START mode=$mode sensor=${sensor.name} type=${sensor.type} vendor=${sensor.vendor} " +
+                "delay=GAME registered=$registered"
+        )
+        return registered
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -68,42 +87,58 @@ class GyroPanPresetController(
         ) return
         if (event.values.size < 3) return
 
-        runCatching {
+        try {
             SensorManager.getRotationMatrixFromVector(deviceRotation, event.values)
             val rotationBucket = currentScreenRotationBucket()
+
+            if (!hasReference) {
+                setReference(deviceRotation, rotationBucket)
+                lastSensorTimestampNs = event.timestamp
+                sensorEventCount++
+                PLog.d(TAG, "First orientation sample received; reference locked for mode=$mode")
+                return
+            }
+
+            // Auto Axis Balance intentionally re-anchors at a display-axis change. Preserve
+            // the existing crop position so rotating the handset cannot cause a framing jump.
+            if (mode == GyroPanMode.AUTO_AXIS_BALANCE &&
+                rotationBucket != screenRotationBucket
+            ) {
+                basePanX = lastCorrection.panX
+                basePanY = lastCorrection.panY
+                setReference(deviceRotation, rotationBucket)
+                lastSensorTimestampNs = event.timestamp
+                return
+            }
+
+            // Both matrices here are in the same, un-remapped device coordinate system.
+            multiply3x3(inverseReferenceRotation, deviceRotation, relativeDeviceRotation)
             val axes = screenAxes(rotationBucket)
             if (!SensorManager.remapCoordinateSystem(
-                    deviceRotation,
+                    relativeDeviceRotation,
                     axes.first,
                     axes.second,
                     screenRotation,
                 )
-            ) return
-
-            if (!hasReference || (mode == GyroPanMode.AUTO_AXIS_BALANCE &&
-                    rotationBucket != screenRotationBucket)
             ) {
-                if (hasReference && mode == GyroPanMode.AUTO_AXIS_BALANCE) {
-                    basePanX = lastCorrection.panX
-                    basePanY = lastCorrection.panY
-                }
-                screenRotation.copyInto(referenceRotation)
-                transpose3x3(referenceRotation, inverseReferenceRotation)
-                screenRotationBucket = rotationBucket
-                hasReference = true
-                resetFilters()
+                PLog.w(TAG, "Could not remap gyro delta for display rotation=$rotationBucket")
                 return
             }
+            screenRotationBucket = rotationBucket
+            SensorManager.getOrientation(screenRotation, orientationAngles)
 
-            multiply3x3(inverseReferenceRotation, screenRotation, relativeRotation)
-            SensorManager.getOrientation(relativeRotation, orientationAngles)
-
-            // In display coordinates: yaw is optical-axis roll, pitch is vertical pan,
-            // and roll is horizontal pan. All angles are relative to the lock reference.
+            val deltaSeconds = resolveDeltaSeconds(event.timestamp)
             val opticalRoll = deadZone(wrapRadians(orientationAngles[0]))
             val verticalAngle = deadZone(wrapRadians(orientationAngles[1]))
             val horizontalAngle = deadZone(wrapRadians(orientationAngles[2]))
-            val correction = calculateCorrection(horizontalAngle, verticalAngle, opticalRoll)
+            val correction = calculateCorrection(
+                horizontalAngle = horizontalAngle,
+                verticalAngle = verticalAngle,
+                opticalRoll = opticalRoll,
+                deltaSeconds = deltaSeconds,
+            )
+
+            sensorEventCount++
             if (
                 abs(correction.panX - lastCorrection.panX) >= UPDATE_EPSILON ||
                 abs(correction.panY - lastCorrection.panY) >= UPDATE_EPSILON ||
@@ -112,13 +147,37 @@ class GyroPanPresetController(
                 lastCorrection = correction
                 onCorrection(correction)
             }
+        } catch (error: Exception) {
+            val signature = "${error.javaClass.simpleName}:${error.message}"
+            if (signature != lastLoggedError) {
+                lastLoggedError = signature
+                PLog.e(TAG, "Gyro sample processing failed mode=$mode", error)
+            }
         }
+    }
+
+    private fun resolveDeltaSeconds(timestampNs: Long): Float {
+        val previous = lastSensorTimestampNs
+        lastSensorTimestampNs = timestampNs
+        if (previous <= 0L || timestampNs <= previous) return DEFAULT_DELTA_SECONDS
+        return ((timestampNs - previous).toDouble() / NANOS_PER_SECOND)
+            .toFloat()
+            .coerceIn(MIN_DELTA_SECONDS, MAX_DELTA_SECONDS)
+    }
+
+    private fun setReference(rotation: FloatArray, rotationBucket: Int) {
+        rotation.copyInto(referenceRotation)
+        transpose3x3(referenceRotation, inverseReferenceRotation)
+        screenRotationBucket = rotationBucket
+        hasReference = true
+        resetFilters()
     }
 
     private fun calculateCorrection(
         horizontalAngle: Float,
         verticalAngle: Float,
         opticalRoll: Float,
+        deltaSeconds: Float,
     ): GyroPanCorrection {
         val maxPanRadians = MAX_PAN_ANGLE_DEGREES * DEG_TO_RAD
         return when (mode) {
@@ -130,16 +189,23 @@ class GyroPanPresetController(
             )
 
             GyroPanMode.ANTI_SHAKE -> {
-                lowPassHorizontal += (horizontalAngle - lowPassHorizontal) * ANTI_SHAKE_ALPHA
-                lowPassVertical += (verticalAngle - lowPassVertical) * ANTI_SHAKE_ALPHA
-                lowPassRoll += (opticalRoll - lowPassRoll) * ANTI_SHAKE_ALPHA
+                lowPassHorizontal = GyroPanFilterMath.lowPass(
+                    lowPassHorizontal, horizontalAngle, deltaSeconds, ANTI_SHAKE_TIME_CONSTANT_SECONDS
+                )
+                lowPassVertical = GyroPanFilterMath.lowPass(
+                    lowPassVertical, verticalAngle, deltaSeconds, ANTI_SHAKE_TIME_CONSTANT_SECONDS
+                )
+                lowPassRoll = GyroPanFilterMath.lowPass(
+                    lowPassRoll, opticalRoll, deltaSeconds, ANTI_SHAKE_TIME_CONSTANT_SECONDS
+                )
                 val shakeX = horizontalAngle - lowPassHorizontal
                 val shakeY = verticalAngle - lowPassVertical
                 val shakeRoll = opticalRoll - lowPassRoll
                 GyroPanCorrection(
                     panX = (basePanX - shakeX / maxPanRadians).coerceIn(-1f, 1f),
                     panY = (basePanY + shakeY / maxPanRadians).coerceIn(-1f, 1f),
-                    rollDegrees = (-shakeRoll / DEG_TO_RAD).coerceIn(-MAX_ANTI_SHAKE_ROLL, MAX_ANTI_SHAKE_ROLL),
+                    rollDegrees = (-shakeRoll / DEG_TO_RAD)
+                        .coerceIn(-MAX_ANTI_SHAKE_ROLL, MAX_ANTI_SHAKE_ROLL),
                 )
             }
 
@@ -151,9 +217,15 @@ class GyroPanPresetController(
             )
 
             GyroPanMode.SMOOTH_FOLLOW -> {
-                smoothHorizontal += (horizontalAngle - smoothHorizontal) * SMOOTH_FOLLOW_ALPHA
-                smoothVertical += (verticalAngle - smoothVertical) * SMOOTH_FOLLOW_ALPHA
-                smoothRoll += (opticalRoll - smoothRoll) * SMOOTH_FOLLOW_ALPHA
+                smoothHorizontal = GyroPanFilterMath.lowPass(
+                    smoothHorizontal, horizontalAngle, deltaSeconds, SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS
+                )
+                smoothVertical = GyroPanFilterMath.lowPass(
+                    smoothVertical, verticalAngle, deltaSeconds, SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS
+                )
+                smoothRoll = GyroPanFilterMath.lowPass(
+                    smoothRoll, opticalRoll, deltaSeconds, SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS
+                )
                 GyroPanCorrection(
                     panX = (basePanX - smoothHorizontal / maxPanRadians).coerceIn(-1f, 1f),
                     panY = (basePanY + smoothVertical / maxPanRadians).coerceIn(-1f, 1f),
@@ -190,10 +262,15 @@ class GyroPanPresetController(
         else -> SensorManager.AXIS_X to SensorManager.AXIS_Y
     }
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        if (sensor?.type == orientationSensor?.type) {
+            PLog.d(TAG, "Sensor accuracy changed mode=$mode accuracy=$accuracy")
+        }
+    }
 
     fun stop() {
         sensorManager.unregisterListener(this)
+        PLog.i(TAG, "STOP mode=$mode receivedEvents=$sensorEventCount final=$lastCorrection")
     }
 
     private fun transpose3x3(input: FloatArray, output: FloatArray) {
@@ -223,14 +300,19 @@ class GyroPanPresetController(
         if (abs(value) < DEAD_ZONE_RADIANS) 0f else value
 
     private companion object {
+        const val TAG = "GyroPan"
         const val DEG_TO_RAD = 0.017453292519943295f
         const val MAX_PAN_ANGLE_DEGREES = 18f
         const val MAX_HORIZON_CORRECTION_DEGREES = 15f
         const val MAX_ANTI_SHAKE_ROLL = 6f
-        const val ANTI_SHAKE_ALPHA = 0.10f
-        const val SMOOTH_FOLLOW_ALPHA = 0.075f
-        const val DEAD_ZONE_RADIANS = 0.15f * DEG_TO_RAD
+        const val ANTI_SHAKE_TIME_CONSTANT_SECONDS = 0.18f
+        const val SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS = 0.22f
+        const val DEAD_ZONE_RADIANS = 0.04f * DEG_TO_RAD
         const val UPDATE_EPSILON = 0.0008f
-        const val ROLL_UPDATE_EPSILON = 0.035f
+        const val ROLL_UPDATE_EPSILON = 0.025f
+        const val DEFAULT_DELTA_SECONDS = 1f / 60f
+        const val MIN_DELTA_SECONDS = 1f / 500f
+        const val MAX_DELTA_SECONDS = 0.1f
+        const val NANOS_PER_SECOND = 1_000_000_000.0
     }
 }
