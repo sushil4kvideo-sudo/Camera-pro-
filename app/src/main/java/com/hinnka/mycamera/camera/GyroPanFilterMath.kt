@@ -65,6 +65,12 @@ internal object GyroPanFilterMath {
         }
     }
 
+    /** Crop-window offset required for the virtual camera to follow low-pass orientation. */
+    fun smoothFollowOffset(lowPassAngleRadians: Float, currentAngleRadians: Float): Float {
+        if (!lowPassAngleRadians.isFinite() || !currentAngleRadians.isFinite()) return 0f
+        return lowPassAngleRadians - currentAngleRadians
+    }
+
     /**
      * Converts an angular displacement into the Top-Off crop's normalized pan coordinate.
      *
