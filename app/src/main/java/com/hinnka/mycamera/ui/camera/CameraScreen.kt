@@ -350,7 +350,6 @@ fun CameraScreen(
     var videoEditGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var videoEditPillBounds by remember { mutableStateOf<Rect?>(null) }
     var cameraGLSurfaceView by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
-    var zoomJoystickOpen by remember { mutableStateOf(false) }
     var joystickTopOffPanX by remember { mutableFloatStateOf(topOffZoomPanX) }
     var joystickTopOffPanY by remember { mutableFloatStateOf(topOffZoomPanY) }
     LaunchedEffect(topOffZoomPanX, topOffZoomPanY) {
@@ -1276,13 +1275,7 @@ fun CameraScreen(
         val canShowZoomJoystick = activePanel == ActivePanel.NONE &&
             (zoomJoystickSupported || topOffZoomJoystickSupported)
 
-        LaunchedEffect(canShowZoomJoystick) {
-            if (!canShowZoomJoystick) zoomJoystickOpen = false
-        }
-        LaunchedEffect(zoomJoystickSupported, topOffZoomJoystickSupported) {
-            if (!zoomJoystickSupported && !topOffZoomJoystickSupported) {
-                zoomJoystickOpen = false
-            }
+        LaunchedEffect(zoomJoystickSupported) {
             if (!zoomJoystickSupported) {
                 viewModel.resetZoomPan()
             }
@@ -2573,6 +2566,18 @@ fun CameraScreen(
                 onGalleryClick = {
                     onGalleryClick()
                 },
+                showTrackingPad = canShowZoomJoystick,
+                onTrackingPadPan = if (topOffZoomJoystickSupported) {
+                    { deltaX, deltaY ->
+                        val nextPanX = (joystickTopOffPanX + deltaX).coerceIn(-1f, 1f)
+                        val nextPanY = (joystickTopOffPanY + deltaY).coerceIn(-1f, 1f)
+                        joystickTopOffPanX = nextPanX
+                        joystickTopOffPanY = nextPanY
+                        viewModel.setTopOffZoomPan(nextPanX, nextPanY)
+                    }
+                } else {
+                    viewModel::panZoomBy
+                },
                 sideControlInset = if (isXpan) {
                     (xpanSideWidth - CameraControlsLayoutDefaults.SideButtonSize) / 2
                 } else {
@@ -2623,45 +2628,6 @@ fun CameraScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             zoomBarWithDualCaptureLayout()
-                        }
-                    }
-                    if (canShowZoomJoystick) {
-                        Box(
-                            modifier = Modifier
-                                .width(cardWidth)
-                                .requiredHeight(cardHeight)
-                                .align(Alignment.Center)
-                                .offset(y = -VideoViewfinderAdditionalOffset)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.CenterEnd)
-                                    .padding(end = 12.dp)
-                                    .size(44.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.Black.copy(alpha = 0.68f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.78f), CircleShape)
-                                    .clickable { zoomJoystickOpen = !zoomJoystickOpen },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("🕹", fontSize = 23.sp)
-                            }
-                            if (zoomJoystickOpen) {
-                                ZoomPanJoystick(
-                                    modifier = Modifier.align(Alignment.Center),
-                                    onPanBy = if (topOffZoomJoystickSupported) {
-                                        { deltaX, deltaY ->
-                                            val nextPanX = (joystickTopOffPanX + deltaX).coerceIn(-1f, 1f)
-                                            val nextPanY = (joystickTopOffPanY + deltaY).coerceIn(-1f, 1f)
-                                            joystickTopOffPanX = nextPanX
-                                            joystickTopOffPanY = nextPanY
-                                            viewModel.setTopOffZoomPan(nextPanX, nextPanY)
-                                        }
-                                    } else {
-                                        viewModel::panZoomBy
-                                    },
-                                )
-                            }
                         }
                     }
                 }
@@ -3305,6 +3271,8 @@ private fun Controls(
     onVideoPillBoundsChanged: (Rect) -> Unit,
     onCaptureTap: () -> Unit,
     onGalleryClick: () -> Unit,
+    showTrackingPad: Boolean,
+    onTrackingPadPan: (Float, Float) -> Unit,
     sideControlInset: Dp?,
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
@@ -3365,6 +3333,15 @@ private fun Controls(
                             onCaptureButtonBoundsChanged(coordinates.boundsInRoot())
                         },
                 )
+
+                if (showTrackingPad) {
+                    ZoomPanJoystick(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 24.dp),
+                        onPanBy = onTrackingPadPan,
+                    )
+                }
 
                 if (state.videoRecordingState.isRecording) {
                     IconButton(
