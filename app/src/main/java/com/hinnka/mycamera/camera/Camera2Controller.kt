@@ -7696,7 +7696,9 @@ class Camera2Controller(private val context: Context) {
         }
         val safeZoom = requestedZoom.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
 
-        val characteristics = getActiveOpenCameraCharacteristics()
+        val characteristics = activeOutputPhysicalCameraId
+            ?.let { getCameraCharacteristicsOrNull(it, "Top-Off gyro optics") }
+            ?: getActiveOpenCameraCharacteristics()
         val physicalSize = characteristics?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
         val focalLengthMm = characteristics
             ?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
