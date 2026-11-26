@@ -61,7 +61,8 @@ internal fun ZoomPanJoystick(
             val x = (knobOffset.x / maxTravelPx).coerceIn(-1f, 1f)
             val y = (knobOffset.y / maxTravelPx).coerceIn(-1f, 1f)
             if (abs(x) > 0.04f || abs(y) > 0.04f) {
-                currentOnPanBy(x * 0.006f * currentSpeedMultiplier, y * 0.006f * currentSpeedMultiplier)
+                // Compose pointer Y grows downward; invert it so thumb-up moves the preview up.
+                currentOnPanBy(x * 0.006f * currentSpeedMultiplier, -y * 0.006f * currentSpeedMultiplier)
             }
             delay(16L)
         }
