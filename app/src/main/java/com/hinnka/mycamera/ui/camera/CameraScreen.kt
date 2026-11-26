@@ -424,7 +424,7 @@ fun CameraScreen(
             (state.zoomRatio >= 1f || isSelectedUltraWide) &&
             !spatialVideoEnabled && !dualCaptureEnabled
         val lockedZoom = if (isSelectedUltraWide) {
-            topOffZoomFactor.coerceIn(1f, 4f)
+            topOffZoomFactor.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
         } else {
             topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
                 ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
@@ -3441,64 +3441,70 @@ private fun Controls(
 
                 if (showTrackingPad) {
                     if (showTopOffPanPresetControls) {
-                        Column(
+                        // Keep the pan-pad centered vertically on the shutter row.
+                        // The preset runner sits independently on the shutter's left side.
+                        if (!state.videoRecordingState.isRecording) {
+                            Column(
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .padding(start = 100.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        if (runningTopOffPanPreset != null) {
+                                            runningTopOffPanPreset = null
+                                        } else {
+                                            runningTopOffPanPreset = selectedTopOffPanPreset
+                                        }
+                                    },
+                                    enabled = selectedTopOffPanPreset != null &&
+                                        !state.videoRecordingState.isProcessing,
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .background(
+                                            Color.White.copy(alpha = 0.16f),
+                                            CircleShape,
+                                        ),
+                                ) {
+                                    Icon(
+                                        imageVector = if (runningTopOffPanPreset != null) {
+                                            Icons.Default.Close
+                                        } else {
+                                            Icons.Default.PlayArrow
+                                        },
+                                        contentDescription = if (runningTopOffPanPreset != null) {
+                                            "Stop pan preset"
+                                        } else {
+                                            "Run pan preset"
+                                        },
+                                        tint = Color.White,
+                                        modifier = Modifier.size(25.dp),
+                                    )
+                                }
+                                Text(
+                                    text = if (runningTopOffPanPreset != null) "Stop" else "Run",
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
+                        }
+                        ZoomPanJoystick(
                             modifier = Modifier
                                 .align(Alignment.CenterEnd)
                                 .padding(end = 24.dp),
+                            onPanBy = onTrackingPadPan,
+                            speedMultiplier = topOffJoystickSpeed,
+                            onLongPress = { showTopOffPanPresetPicker = true },
+                        )
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .offset(y = 48.dp)
+                                .padding(end = 24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    IconButton(
-                                        onClick = {
-                                            if (runningTopOffPanPreset != null) {
-                                                runningTopOffPanPreset = null
-                                            } else {
-                                                runningTopOffPanPreset = selectedTopOffPanPreset
-                                            }
-                                        },
-                                        enabled = selectedTopOffPanPreset != null &&
-                                            !state.videoRecordingState.isRecording &&
-                                            !state.videoRecordingState.isProcessing,
-                                        modifier = Modifier
-                                            .size(42.dp)
-                                            .background(
-                                                Color.White.copy(alpha = 0.16f),
-                                                CircleShape,
-                                            ),
-                                    ) {
-                                        Icon(
-                                            imageVector = if (runningTopOffPanPreset != null) {
-                                                Icons.Default.Close
-                                            } else {
-                                                Icons.Default.PlayArrow
-                                            },
-                                            contentDescription = if (runningTopOffPanPreset != null) {
-                                                "Stop pan preset"
-                                            } else {
-                                                "Run pan preset"
-                                            },
-                                            tint = Color.White,
-                                            modifier = Modifier.size(25.dp),
-                                        )
-                                    }
-                                    Text(
-                                        text = if (runningTopOffPanPreset != null) "Stop" else "Run",
-                                        color = Color.White.copy(alpha = 0.85f),
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Medium,
-                                    )
-                                }
-                                ZoomPanJoystick(
-                                    modifier = Modifier,
-                                    onPanBy = onTrackingPadPan,
-                                    speedMultiplier = topOffJoystickSpeed,
-                                    onLongPress = { showTopOffPanPresetPicker = true },
-                                )
-                            }
                             if (topOffShowLatency) {
                                 Text(
                                     text = "Latency ${String.format("%.1f", topOffPanLatencyMs)} ms",
