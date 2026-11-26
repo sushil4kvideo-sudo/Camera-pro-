@@ -389,6 +389,32 @@ fun CameraScreen(
     }
 
     LaunchedEffect(
+        cameraGLSurfaceView,
+        topOffZoomEnabled,
+        topOffZoomLockedRatio,
+        topOffZoomFactor,
+        topOffZoomPanX,
+        topOffZoomPanY,
+        state.zoomRatio,
+        state.captureMode,
+        spatialVideoEnabled,
+        dualCaptureEnabled,
+    ) {
+        val glView = cameraGLSurfaceView ?: return@LaunchedEffect
+        val active = topOffZoomEnabled &&
+            state.captureMode == CaptureMode.VIDEO &&
+            !spatialVideoEnabled && !dualCaptureEnabled
+        val lockedZoom = topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
+            ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
+        glView.setTopOffZoomCrop(
+            enabled = active,
+            zoomRatio = if (active) lockedZoom else 1f,
+            panX = if (active) topOffZoomPanX else 0f,
+            panY = if (active) topOffZoomPanY else 0f,
+        )
+    }
+
+    LaunchedEffect(
         isCameraInitialized,
         isCameraPrepared,
         previewSurfaceTexture,
