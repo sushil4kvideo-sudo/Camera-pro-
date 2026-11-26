@@ -1,3 +1,8 @@
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
+
 
 plugins {
     alias(libs.plugins.android.application)
@@ -29,7 +34,7 @@ val downloadEyeFocusModel by tasks.registering {
         val outputFile = eyeFocusModelFile.get().asFile
 
         fun sha256(file: java.io.File): String {
-            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val digest = MessageDigest.getInstance("SHA-256")
             file.inputStream().use { input ->
                 val buffer = ByteArray(16 * 1024)
                 while (true) {
@@ -38,8 +43,8 @@ val downloadEyeFocusModel by tasks.registering {
                     digest.update(buffer, 0, count)
                 }
             }
-            return digest.digest().joinToString("") {
-                (it.toInt() and 0xff).toString(16).padStart(2, '0')
+            return digest.digest().joinToString("") { byte ->
+                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
             }
         }
 
@@ -48,9 +53,9 @@ val downloadEyeFocusModel by tasks.registering {
         }
 
         outputFile.parentFile.mkdirs()
-        val tempFile = java.io.File(outputFile.parentFile, "${outputFile.name}.download")
-        val connection = java.net.URL(eyeFocusModelUrl).openConnection()
-            as java.net.HttpURLConnection
+        val tempFile = File(outputFile.parentFile, "${outputFile.name}.download")
+        val connection = URL(eyeFocusModelUrl).openConnection()
+            as HttpURLConnection
         try {
             connection.instanceFollowRedirects = true
             connection.connectTimeout = 30_000
