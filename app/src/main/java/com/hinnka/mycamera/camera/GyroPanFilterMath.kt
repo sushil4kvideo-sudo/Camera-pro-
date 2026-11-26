@@ -101,6 +101,31 @@ internal object GyroPanFilterMath {
     }
 
     /**
+     * Horizontal crop compensation for Position Lock.
+     *
+     * The relative yaw angle is expressed in the phone's display frame. A rightward
+     * phone turn produces a negative relative Y angle on the Android device-to-world
+     * rotation matrix. Positive crop pan moves the crop window right (and the image
+     * left), so the crop pan must follow that signed relative angle to oppose the
+     * physical camera movement.
+     */
+    fun positionLockHorizontalPan(
+        basePanX: Float,
+        horizontalAngleRadians: Float,
+        fieldOfViewDegrees: Float,
+        zoomRatio: Float,
+    ): Float {
+        val safeBasePanX = basePanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        return (
+            safeBasePanX + normalizedPanForAngle(
+                horizontalAngleRadians,
+                fieldOfViewDegrees,
+                zoomRatio,
+            )
+        ).coerceIn(-1f, 1f)
+    }
+
+    /**
      * Extracts the shortest axis-angle rotation vector from a row-major 3x3 matrix.
      *
      * The returned X/Y/Z values are signed rotation angles in radians around the matrix's

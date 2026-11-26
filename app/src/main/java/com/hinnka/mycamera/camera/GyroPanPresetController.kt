@@ -254,11 +254,12 @@ class GyroPanPresetController(
         return when (mode) {
             GyroPanMode.POSITION_LOCK,
             GyroPanMode.AUTO_AXIS_BALANCE -> GyroPanCorrection(
-                panX = (
-                    basePanX - GyroPanFilterMath.normalizedPanForAngle(
-                        horizontalAngle, horizontalFieldOfViewDegrees, zoomRatio
-                    )
-                ).coerceIn(-1f, 1f),
+                panX = GyroPanFilterMath.positionLockHorizontalPan(
+                    basePanX = basePanX,
+                    horizontalAngleRadians = horizontalAngle,
+                    fieldOfViewDegrees = horizontalFieldOfViewDegrees,
+                    zoomRatio = zoomRatio,
+                ),
                 panY = (
                     basePanY + GyroPanFilterMath.normalizedPanForAngle(
                         verticalAngle, verticalFieldOfViewDegrees, zoomRatio

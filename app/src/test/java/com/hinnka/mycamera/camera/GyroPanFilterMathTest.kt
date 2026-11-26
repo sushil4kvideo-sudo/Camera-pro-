@@ -129,6 +129,48 @@ class GyroPanFilterMathTest {
     }
 
     @Test
+    fun positionLockHorizontalPanMovesCropAgainstLeftAndRightPhoneYaw() {
+        val yawRadians = 0.25f
+
+        // Android's rotation matrix maps device coordinates to world coordinates.
+        // In upright portrait, device +Y points upward; a rightward phone turn is
+        // a negative rotation around world +Z and therefore a negative relative Y.
+        val uprightPortraitDeviceToWorld = floatArrayOf(
+            1f, 0f, 0f,
+            0f, 0f, -1f,
+            0f, 1f, 0f,
+        )
+        val turnedRight = multiply3x3(
+            rotationZ(-yawRadians),
+            uprightPortraitDeviceToWorld,
+        )
+        val relativeRotation = multiply3x3(
+            transpose3x3(uprightPortraitDeviceToWorld),
+            turnedRight,
+        )
+        val relativeVector = FloatArray(3)
+
+        assertTrue(GyroPanFilterMath.rotationVectorFromMatrix(relativeRotation, relativeVector))
+        assertEquals(-yawRadians, relativeVector[1], 0.0001f)
+
+        val rightTurnPan = GyroPanFilterMath.positionLockHorizontalPan(
+            basePanX = 0f,
+            horizontalAngleRadians = relativeVector[1],
+            fieldOfViewDegrees = 70f,
+            zoomRatio = 2f,
+        )
+        val leftTurnPan = GyroPanFilterMath.positionLockHorizontalPan(
+            basePanX = 0f,
+            horizontalAngleRadians = -relativeVector[1],
+            fieldOfViewDegrees = 70f,
+            zoomRatio = 2f,
+        )
+
+        assertTrue("Right turn must move the crop left to counter camera yaw", rightTurnPan < 0f)
+        assertTrue("Left turn must move the crop right to counter camera yaw", leftTurnPan > 0f)
+    }
+
+    @Test
     fun normalizedPanIsZeroWhenThereIsNoCropTravelAtOneX() {
         assertEquals(
             0f,
@@ -197,6 +239,14 @@ class GyroPanFilterMathTest {
             c, -s, 0f,
             s, c, 0f,
             0f, 0f, 1f,
+        )
+    }
+
+    private fun transpose3x3(matrix: FloatArray): FloatArray {
+        return floatArrayOf(
+            matrix[0], matrix[3], matrix[6],
+            matrix[1], matrix[4], matrix[7],
+            matrix[2], matrix[5], matrix[8],
         )
     }
 
