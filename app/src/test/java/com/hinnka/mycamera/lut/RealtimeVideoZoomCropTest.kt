@@ -29,6 +29,38 @@ class RealtimeVideoZoomCropTest {
     }
 
     @Test
+    fun twoXRightPanMovesTheCropToTheRightEdgeWithoutChangingZoom() {
+        val result = resolveRealtimeVideoZoomCropRect(
+            sourceCropRect = floatArrayOf(0f, 0f, 1f, 1f),
+            zoomRatio = 2f,
+            panX = 1f,
+            panY = 0f,
+        )
+
+        assertArrayEquals(
+            floatArrayOf(0.5f, 0.25f, 1f, 0.75f),
+            result,
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun twoXTopPanMovesTheCropToTheTopEdgeWithoutChangingZoom() {
+        val result = resolveRealtimeVideoZoomCropRect(
+            sourceCropRect = floatArrayOf(0f, 0f, 1f, 1f),
+            zoomRatio = 2f,
+            panX = 0f,
+            panY = -1f,
+        )
+
+        assertArrayEquals(
+            floatArrayOf(0.25f, 0f, 0.75f, 0.5f),
+            result,
+            0.0001f,
+        )
+    }
+
+    @Test
     fun virtualTelephotoPreservesTheCenterOfAnExistingCrop() {
         val result = resolveRealtimeVideoZoomCropRect(
             sourceCropRect = floatArrayOf(0.2f, 0.1f, 0.8f, 0.9f),
