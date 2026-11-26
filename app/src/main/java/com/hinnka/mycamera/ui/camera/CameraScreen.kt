@@ -2865,12 +2865,7 @@ fun CameraScreen(
                             .requiredSize(cardWidth, cardHeight)
                     ) {
                         viewfinder()
-                        if (isVideoMode && activePanel == ActivePanel.NONE) {
-                            AiSubjectTrackingOverlay(
-                                enabled = aiSubjectTrackingEnabled,
-                                target = aiSubjectTrackingTarget,
-                            )
-                        }
+
                     }
                     if (uiStyle == "OPPO" && activePanel == ActivePanel.NONE && !isXpan) {
                         Box(
