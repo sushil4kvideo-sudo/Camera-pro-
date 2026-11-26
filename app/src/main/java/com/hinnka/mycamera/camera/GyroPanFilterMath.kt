@@ -1,13 +1,99 @@
 package com.hinnka.mycamera.camera
 
+import kotlin.math.PI
+import kotlin.math.atan
 import kotlin.math.atan2
 import kotlin.math.exp
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 /**
  * Small, allocation-free rotation helpers used by live gyro pan presets.
  */
 internal object GyroPanFilterMath {
+
+    /**
+     * Display-space field of view after fitting the requested video aspect ratio into the
+     * active physical sensor area. SENSOR_ORIENTATION determines whether the sensor axes
+     * need to be swapped to obtain display-horizontal/display-vertical FOV.
+     */
+    data class GyroPanFieldOfView(
+        val horizontalDegrees: Float,
+        val verticalDegrees: Float,
+    )
+
+    fun fieldOfViewDegrees(
+        activeSensorWidthMm: Float,
+        activeSensorHeightMm: Float,
+        sensorCoordinateAspectRatio: Float,
+        focalLengthMm: Float,
+        sensorOrientationDegrees: Int,
+    ): GyroPanFieldOfView? {
+        val width = activeSensorWidthMm.takeIf { it.isFinite() && it > 0f }?.toDouble()
+            ?: return null
+        val height = activeSensorHeightMm.takeIf { it.isFinite() && it > 0f }?.toDouble()
+            ?: return null
+        val aspect = sensorCoordinateAspectRatio.takeIf { it.isFinite() && it > 0f }?.toDouble()
+            ?: return null
+        val focalLength = focalLengthMm.takeIf { it.isFinite() && it > 0f }?.toDouble()
+            ?: return null
+
+        val cropWidth: Double
+        val cropHeight: Double
+        if (width / height > aspect) {
+            cropHeight = height
+            cropWidth = height * aspect
+        } else {
+            cropWidth = width
+            cropHeight = width / aspect
+        }
+
+        val sensorHorizontalFov = Math.toDegrees(2.0 * atan(cropWidth / (2.0 * focalLength))).toFloat()
+        val sensorVerticalFov = Math.toDegrees(2.0 * atan(cropHeight / (2.0 * focalLength))).toFloat()
+        if (!sensorHorizontalFov.isFinite() || !sensorVerticalFov.isFinite()) return null
+
+        return if (Math.floorMod(sensorOrientationDegrees, 180) == 90) {
+            GyroPanFieldOfView(
+                horizontalDegrees = sensorVerticalFov,
+                verticalDegrees = sensorHorizontalFov,
+            )
+        } else {
+            GyroPanFieldOfView(
+                horizontalDegrees = sensorHorizontalFov,
+                verticalDegrees = sensorVerticalFov,
+            )
+        }
+    }
+
+    /**
+     * Converts an angular displacement into the Top-Off crop's normalized pan coordinate.
+     *
+     * At pan=+/-1 the crop window reaches one edge, so the available travel is
+     * (1 - 1/zoom) of the displayed frame. The tangent mapping keeps the response correct
+     * for each camera's actual field of view instead of assuming a fixed angle per pan unit.
+     */
+    fun normalizedPanForAngle(
+        angleRadians: Float,
+        fieldOfViewDegrees: Float,
+        zoomRatio: Float,
+    ): Float {
+        if (!angleRadians.isFinite()) return 0f
+        val safeFov = fieldOfViewDegrees.takeIf { it.isFinite() && it > 0f }
+            ?.coerceIn(1f, 179f) ?: return 0f
+        val zoom = zoomRatio.takeIf { it.isFinite() }?.coerceAtLeast(1f) ?: 1f
+        val availableTravel = 1.0 - 1.0 / zoom.toDouble()
+        if (availableTravel <= PAN_EPSILON) return 0f
+
+        val halfFovTangent = tan(Math.toRadians(safeFov.toDouble() * 0.5))
+        if (!halfFovTangent.isFinite() || halfFovTangent <= PAN_EPSILON) return 0f
+        val safeAngle = angleRadians.toDouble().coerceIn(
+            -PI * 0.5 + ANGLE_EPSILON,
+            PI * 0.5 - ANGLE_EPSILON,
+        )
+        val pan = tan(safeAngle) / (halfFovTangent * availableTravel)
+        return if (pan.isFinite()) pan.toFloat().coerceIn(-1f, 1f) else 0f
+    }
+
     /**
      * Extracts the shortest axis-angle rotation vector from a row-major 3x3 matrix.
      *
@@ -106,4 +192,6 @@ internal object GyroPanFilterMath {
     }
 
     private const val ROTATION_EPSILON = 1e-7f
+    private const val PAN_EPSILON = 1e-7
+    private const val ANGLE_EPSILON = 1e-5
 }
