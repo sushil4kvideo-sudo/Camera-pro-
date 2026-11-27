@@ -2036,6 +2036,7 @@ fun CameraScreen(
                                 state.videoConfig.stabilizationMode ==
                                     VideoStabilizationMode.ENHANCED,
                             videoPreviewPositionLockEnabled = topOffPositionLockActive,
+                            videoPreviewPositionLockZoom = topOffZoomFactor,
                             videoPreviewStabilizationStrength =
                                 state.videoConfig.enhancedStabilizationStrength,
                             videoPreviewStabilizationLookahead =
@@ -3612,6 +3613,8 @@ private fun Controls(
         it.id == selectedTopOffPanPresetId
     } ?: availableTopOffPanPresets.firstOrNull()
     val latestOnGyroPanUpdate by rememberUpdatedState(onGyroPanUpdate)
+    val latestPanPresetZoomFactor by rememberUpdatedState(topOffZoomFactor)
+    val latestPanPresetBaseZoom by rememberUpdatedState(state.zoomRatio.coerceAtLeast(1f))
     val runningGyroPreset = runningTopOffPanPreset?.takeIf { it.gyroMode != null }
     val gyroControllerRef = remember(runningGyroPreset?.id) {
         mutableStateOf<GyroPanPresetController?>(null)
@@ -3641,8 +3644,10 @@ private fun Controls(
             // first orientation sample arrives.
             val initialPoint = preset.points.firstOrNull()
             if (initialPoint != null) {
+                val menuZoomRatio = (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
+                    .coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
                 viewModel.setTopOffZoomPresetPoint(
-                    initialPoint.zoomRatio,
+                    menuZoomRatio,
                     initialPoint.panX,
                     initialPoint.panY,
                 )
@@ -3711,13 +3716,18 @@ private fun Controls(
                 .toLong()
                 .coerceAtLeast(0L)
             val first = points.first()
-            viewModel.setTopOffZoomPresetPoint(first.zoomRatio, first.panX, first.panY)
+            // Read the slider value on every frame so changing it mid-pan updates zoom immediately.
+            val menuZoomRatio = {
+                (latestPanPresetBaseZoom * latestPanPresetZoomFactor)
+                    .coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
+            }
+            viewModel.setTopOffZoomPresetPoint(menuZoomRatio(), first.panX, first.panY)
 
             for (pointIndex in 1 until points.size) {
                 val start = points[pointIndex - 1]
                 val end = points[pointIndex]
                 if (durationNs == 0L) {
-                    viewModel.setTopOffZoomPresetPoint(end.zoomRatio, end.panX, end.panY)
+                    viewModel.setTopOffZoomPresetPoint(menuZoomRatio(), end.panX, end.panY)
                     continue
                 }
 
@@ -3728,10 +3738,10 @@ private fun Controls(
                         .toFloat()
                         .coerceIn(0f, 1f)
                     val easedProgress = linearProgress * linearProgress * (3f - 2f * linearProgress)
-                    val zoom = start.zoomRatio + (end.zoomRatio - start.zoomRatio) * easedProgress
                     val panX = start.panX + (end.panX - start.panX) * easedProgress
                     val panY = start.panY + (end.panY - start.panY) * easedProgress
-                    viewModel.setTopOffZoomPresetPoint(zoom, panX, panY)
+                    // Historical preset waypoint zoom (fixed at 2x) no longer overrides the menu.
+                    viewModel.setTopOffZoomPresetPoint(menuZoomRatio(), panX, panY)
                     if (linearProgress >= 1f) break
                 }
             }
