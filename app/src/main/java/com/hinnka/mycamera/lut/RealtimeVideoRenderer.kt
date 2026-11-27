@@ -55,6 +55,7 @@ class RealtimeVideoRenderer(
     private val enhancedStabilizationStrength: Float,
     private val enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
     private val positionLockEnabled: Boolean = false,
+    private val positionLockCropZoom: Float = POSITION_LOCK_CROP_ZOOM,
     cameraInputIsHlg10: Boolean = false,
     dualCaptureInputSize: Size? = null,
     dualCaptureSensorOrientationDegrees: Int = 0,
@@ -397,6 +398,8 @@ class RealtimeVideoRenderer(
                 frameWidth = currentCameraInputSize.width,
                 frameHeight = currentCameraInputSize.height,
                 lookaheadFrames = enhancedStabilizationLookahead,
+                positionLockCropZoom = positionLockCropZoom
+                    .takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM,
                 onFrameAvailable = onFrameAvailable,
             )
         }
@@ -506,8 +509,10 @@ class RealtimeVideoRenderer(
         }
         if (timestampNs <= 0L) return null
         if (positionLockEnabled && sourceTextureSource == PreviewColorTextureSource.EXTERNAL_OES) {
-            // Match the native 2.5x crop until the first timestamp-matched MGC frame arrives.
-            sourceCropRect = resolveRealtimeVideoZoomCropRect(sourceCropRect, POSITION_LOCK_CROP_ZOOM, 0f, 0f)
+            // Match the selected Position Lock crop until the first timestamp-matched MGC frame arrives.
+            val safePositionLockZoom = positionLockCropZoom
+                .takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM
+            sourceCropRect = resolveRealtimeVideoZoomCropRect(sourceCropRect, safePositionLockZoom, 0f, 0f)
         }
         // Special Video's virtual telephoto is cropped from the live sensor frame here,
         // before it reaches the dedicated MediaCodec input surface (never after recording).
