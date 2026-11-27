@@ -8213,11 +8213,11 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
-     * 根据当前测光模式设置默认 AE 区域
+     * 根据当前测光模式设置 AE 区域。
      *
-     * 系统默认模式清除自定义 AE 区域，由 Camera2/设备自行决定测光行为；
-     * 点测光和高光优先模式设置加权区域；
-     * 平均测光模式设置全画面 AE 区域。
+     * 系统默认模式通常交由 Camera2/设备决定；Position Lock 例外：默认 AE
+     * 被限制在稳定预览实际可见的裁切区域内，避免画面外的传感器内容影响曝光。
+     * 点测光和高光优先模式设置加权区域；平均测光模式设置整个可见预览区域。
      */
     private fun applyMeteringRegions() {
         val builder = previewRequestBuilder ?: return
