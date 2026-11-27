@@ -367,7 +367,8 @@ object VideoCapabilitiesResolver {
             .filter { size ->
                 if (size.width <= 0 || size.height <= 0) return@filter false
                 val pixels = size.width.toLong() * size.height.toLong()
-                pixels in MIN_12_MP_INPUT_PIXELS..MAX_12_MP_INPUT_PIXELS
+                pixels in MIN_12_MP_INPUT_PIXELS..MAX_12_MP_INPUT_PIXELS &&
+                    maxOf(size.width, size.height) >= VideoResolutionPreset.UHD_2160P.longEdge
             }
             .minWithOrNull(
                 compareBy<Size> {
