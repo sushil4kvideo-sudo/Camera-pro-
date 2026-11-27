@@ -1948,10 +1948,20 @@ fun CameraScreen(
                             onTap = { x, y, w, h ->
                                 if (activePanel != ActivePanel.NONE) {
                                     activePanel = ActivePanel.NONE
-                                } else if (state.isFocusLocked) {
-                                    viewModel.unlockFocus()
                                 } else {
-                                    viewModel.focusOnPoint(x, y, w, h)
+                                    // While AI tracking is active, a preview tap locks that
+                                    // visual region. Autofocus remains available on the same tap.
+                                    if (aiSubjectTrackingActive && w > 0 && h > 0) {
+                                        subjectTrackingProcessor?.selectTargetAt(
+                                            normalizedX = x / w.toFloat(),
+                                            normalizedY = y / h.toFloat(),
+                                        )
+                                    }
+                                    if (state.isFocusLocked) {
+                                        viewModel.unlockFocus()
+                                    } else {
+                                        viewModel.focusOnPoint(x, y, w, h)
+                                    }
                                 }
                             },
                             onLongPress = { x, y, w, h ->
@@ -2779,7 +2789,9 @@ fun CameraScreen(
                     onGalleryClick()
                 },
                 showTrackingPad = canShowZoomJoystick,
-                showTopOffPanPresetControls = topOffZoomJoystickSupported,
+                // Keep the preset picker reachable before Top-Off is enabled.
+                showTopOffPanPresetControls = isVideoMode &&
+                    !spatialVideoEnabled && !dualCaptureEnabled,
                 showAiSubjectTrackingButton = isVideoMode && activePanel == ActivePanel.NONE,
                 aiSubjectTrackingEnabled = aiSubjectTrackingEnabled,
                 onAiSubjectTrackingToggle = {
@@ -3693,6 +3705,63 @@ private fun Controls(
         }
     }
 
+    if (showTopOffPanPresetPicker && !showTrackingPad) {
+        AlertDialog(
+            onDismissRequest = { showTopOffPanPresetPicker = false },
+            title = { Text("Select pan preset") },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    availableTopOffPanPresets.forEach { preset ->
+                        TextButton(
+                            onClick = {
+                                selectedTopOffPanPresetId = preset.id
+                                showTopOffPanPresetPicker = false
+                                val runningPreset = runningTopOffPanPreset
+                                if (runningPreset != null) {
+                                    val wasAiTracking = runningPreset.aiSubjectTracking
+                                    if (wasAiTracking && !preset.aiSubjectTracking && aiSubjectTrackingEnabled) {
+                                        onAiSubjectTrackingToggle()
+                                    } else if (!wasAiTracking && preset.aiSubjectTracking && !aiSubjectTrackingEnabled) {
+                                        onAiSubjectTrackingToggle()
+                                    }
+                                    runningTopOffPanPreset = preset
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.Start,
+                            ) {
+                                Text(
+                                    text = if (preset.id == selectedTopOffPanPresetId) {
+                                        "✓ ${preset.name}"
+                                    } else {
+                                        preset.name
+                                    },
+                                )
+                                Text(
+                                    text = when {
+                                        preset.aiSubjectTracking -> "Tap a subject or object to lock visual tracking"
+                                        preset.gyroMode != null -> "Gyroscope · live orientation correction"
+                                        else -> "${preset.points.size} points · ${preset.segmentDurationMs} ms per segment"
+                                    },
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTopOffPanPresetPicker = false }) {
+                    Text("Done")
+                }
+            },
+        )
+    }
+
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center
@@ -3801,6 +3870,23 @@ private fun Controls(
                                     },
                                     tint = Color.White,
                                     modifier = Modifier.size(24.dp),
+                                )
+                            }
+                        }
+
+                        if (showTopOffPanPresetControls) {
+                            IconButton(
+                                onClick = { showTopOffPanPresetPicker = true },
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .background(Color.White.copy(alpha = 0.16f), CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.55f), CircleShape),
+                            ) {
+                                Text(
+                                    text = "P",
+                                    color = Color.White,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.SemiBold,
                                 )
                             }
                         }
@@ -3941,7 +4027,7 @@ private fun Controls(
                                                     )
                                                     Text(
                                                         text = when {
-                                                            preset.aiSubjectTracking -> "Tracks and pans to keep the subject centered"
+                                                            preset.aiSubjectTracking -> "Tap a subject or object to lock visual tracking"
                                                             preset.gyroMode != null -> "Gyroscope · live orientation correction"
                                                             else -> "${preset.points.size} points · ${preset.segmentDurationMs} ms per segment"
                                                         },

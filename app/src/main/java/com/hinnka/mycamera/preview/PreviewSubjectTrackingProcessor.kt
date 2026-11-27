@@ -65,6 +65,9 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
         private const val MAX_RESULTS = 20
         private const val LOST_FRAMES_BEFORE_RESET = 18
         private const val SMOOTHING_ALPHA = 0.55f
+        private const val VISUAL_TRACK_INTERVAL_MS = 42L
+        private const val DETECTION_INTERVAL_MS = 320L
+        private const val MANUAL_DETECTION_MATCH_RADIUS = 0.24f
         private const val MAX_TARGET_CENTER_DISTANCE = 0.58f
     }
 
@@ -78,7 +81,11 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
         }
     }
     private val frameInFlight = AtomicBoolean(false)
+    private val visualFrameInFlight = AtomicBoolean(false)
     private val generation = AtomicInteger(0)
+    private val patchTracker = PreviewPatchTracker()
+    @Volatile private var lastVisualFrameAtMs = 0L
+    @Volatile private var lastDetectionFrameAtMs = 0L
     private val released = AtomicBoolean(false)
 
     @Volatile
@@ -96,40 +103,166 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
     private var velocityX = 0f
     private var velocityY = 0f
     private var missingFrames = 0
+    private var pendingVisualSeed: Target? = null
+    private var manualSelectionActive = false
 
     /**
      * Consumes [frame.bitmap]. Busy frames are dropped immediately so inference never
      * queues stale images behind the current frame.
      */
+    /**
+     * The viewfinder stream is split into two lightweight paths:
+     * - visual patch tracking runs continuously on fresh frames (throttled to 24 fps);
+     * - MediaPipe runs less often and is used only for first acquisition/reacquisition.
+     *
+     * The incoming bitmap is consumed here. A second bitmap is made only for the slower
+     * detector path, so detector latency never blocks visual tracking.
+     */
     fun processFrame(frame: EyeFocusPreviewFrame) {
         val bitmap = frame.bitmap
-        if (released.get() || detectorInitializationFailed ||
-            !frameInFlight.compareAndSet(false, true)
-        ) {
+        if (released.get()) {
             recycle(bitmap)
             return
         }
 
-        val frameGeneration = generation.get()
-        try {
-            executor.execute {
-                submitFrame(bitmap, frameGeneration)
+        val now = SystemClock.uptimeMillis()
+        var detectorBitmap: Bitmap? = null
+        if (
+            !detectorInitializationFailed &&
+            now - lastDetectionFrameAtMs >= DETECTION_INTERVAL_MS &&
+            frameInFlight.compareAndSet(false, true)
+        ) {
+            detectorBitmap = runCatching {
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            }.getOrNull()
+            if (detectorBitmap != null) {
+                lastDetectionFrameAtMs = now
+            } else {
+                frameInFlight.set(false)
             }
-        } catch (_: RejectedExecutionException) {
-            recycle(bitmap)
-            frameInFlight.set(false)
         }
+
+        val shouldTrack = now - lastVisualFrameAtMs >= VISUAL_TRACK_INTERVAL_MS &&
+            visualFrameInFlight.compareAndSet(false, true)
+        if (shouldTrack) {
+            lastVisualFrameAtMs = now
+            val frameGeneration = generation.get()
+            try {
+                executor.execute {
+                    try {
+                        updateVisualTracking(bitmap, frameGeneration)
+                    } catch (error: RuntimeException) {
+                        Log.w(TAG, "Visual subject tracking failed for this frame", error)
+                    } finally {
+                        recycle(bitmap)
+                        visualFrameInFlight.set(false)
+                    }
+                }
+            } catch (_: RejectedExecutionException) {
+                recycle(bitmap)
+                visualFrameInFlight.set(false)
+            }
+        } else {
+            recycle(bitmap)
+        }
+
+        detectorBitmap?.let { detectionInput ->
+            val frameGeneration = generation.get()
+            try {
+                executor.execute {
+                    submitFrame(detectionInput, frameGeneration)
+                }
+            } catch (_: RejectedExecutionException) {
+                recycle(detectionInput)
+                frameInFlight.set(false)
+            }
+        }
+    }
+
+    /**
+     * Selects the visual region under a viewfinder tap. This path works even when the
+     * object detector cannot classify the item (or cannot detect it at all).
+     */
+    fun selectTargetAt(normalizedX: Float, normalizedY: Float) {
+        if (released.get() || !normalizedX.isFinite() || !normalizedY.isFinite()) return
+        val centerX = normalizedX.coerceIn(0.02f, 0.98f)
+        val centerY = normalizedY.coerceIn(0.02f, 0.98f)
+        val width = 0.32f
+        val height = 0.36f
+        val left = (centerX - width * 0.5f).coerceIn(0f, 1f - width)
+        val top = (centerY - height * 0.5f).coerceIn(0f, 1f - height)
+        val selected = Target(
+            left = left,
+            top = top,
+            right = left + width,
+            bottom = top + height,
+            label = "Selected target",
+            confidence = 1f,
+        )
+        synchronized(lock) {
+            manualSelectionActive = true
+            lastBounds = Candidate(
+                left = selected.left,
+                top = selected.top,
+                right = selected.right,
+                bottom = selected.bottom,
+                label = selected.label,
+                confidence = selected.confidence,
+            )
+            pendingVisualSeed = selected
+            velocityX = 0f
+            velocityY = 0f
+            missingFrames = 0
+        }
+        dispatchTarget(selected)
     }
 
     fun resetTracking() {
         generation.incrementAndGet()
         synchronized(lock) {
             lastBounds = null
+            pendingVisualSeed = null
+            manualSelectionActive = false
             velocityX = 0f
             velocityY = 0f
             missingFrames = 0
+            patchTracker.reset()
         }
         dispatchTarget(null)
+    }
+
+    private fun updateVisualTracking(bitmap: Bitmap, frameGeneration: Int) {
+        val nextTarget = synchronized(lock) {
+            if (released.get() || frameGeneration != generation.get()) {
+                return@synchronized null
+            }
+            val seed = pendingVisualSeed
+            if (seed != null) {
+                pendingVisualSeed = null
+                patchTracker.initialize(bitmap, seed)
+                seed
+            } else {
+                val fallback = lastBounds?.toTarget() ?: return@synchronized null
+                val tracked = patchTracker.track(bitmap, fallback)
+                if (tracked == null) {
+                    lastBounds = null
+                    manualSelectionActive = false
+                } else {
+                    lastBounds = Candidate(
+                        left = tracked.left,
+                        top = tracked.top,
+                        right = tracked.right,
+                        bottom = tracked.bottom,
+                        label = tracked.label,
+                        confidence = tracked.confidence,
+                    )
+                }
+                tracked
+            }
+        }
+        if (!released.get() && frameGeneration == generation.get()) {
+            dispatchTarget(nextTarget)
+        }
     }
 
     private fun submitFrame(sourceBitmap: Bitmap, frameGeneration: Int) {
@@ -271,42 +404,55 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
 
     private fun selectTargetLocked(candidates: List<Candidate>): Target? {
         val previous = lastBounds
-        val selected = if (previous == null) {
-            // Do not hard-code "person": any COCO category can become the initial target.
-            // Confidence, object size and distance from the viewfinder centre determine
-            // which visible object is the most useful automatic lock candidate.
-            candidates.maxByOrNull { candidate ->
-                val centrePenalty = centerDistanceToViewfinderCentre(candidate)
-                candidate.confidence *
-                    (0.45f + sqrt(candidate.area.coerceAtLeast(0f))) *
-                    (1f - (centrePenalty * 0.30f).coerceIn(0f, 0.30f))
+        val selected = when {
+            previous == null -> {
+                // Automatic acquisition still works when the user has not tapped a target.
+                candidates.maxByOrNull { candidate ->
+                    val centrePenalty = centerDistanceToViewfinderCentre(candidate)
+                    candidate.confidence *
+                        (0.45f + sqrt(candidate.area.coerceAtLeast(0f))) *
+                        (1f - (centrePenalty * 0.30f).coerceIn(0f, 0.30f))
+                }
             }
-        } else {
-            // Constant-velocity prediction keeps the association gate around a moving
-            // object instead of around its stale last-detected rectangle.
-            val predictionFrames = 1f + missingFrames.coerceAtMost(5) * 0.65f
-            val predicted = previous.translated(
-                velocityX * predictionFrames,
-                velocityY * predictionFrames,
-            )
-            // Match on location, overlap, motion and approximate size—not the detector's
-            // category label. This prevents a label flip (e.g. person/chair) from dropping
-            // the lock on the same physical subject.
-            val maxDistance = (MAX_TARGET_CENTER_DISTANCE + missingFrames * 0.025f)
-                .coerceAtMost(0.82f)
-            candidates.maxByOrNull { candidate ->
-                val overlap = intersectionOverUnion(predicted, candidate)
-                val distance = centerDistance(predicted, candidate)
-                val motionSimilarity = 1f - (distance / maxDistance).coerceIn(0f, 1f)
-                val sizeSimilarity = minOf(predicted.area, candidate.area) /
-                    maxOf(predicted.area, candidate.area, 1e-4f)
-                overlap * 2.4f +
-                    motionSimilarity * 2.1f +
-                    sizeSimilarity * 0.35f +
-                    candidate.confidence * 0.15f
-            }?.takeIf { candidate ->
-                intersectionOverUnion(predicted, candidate) >= 0.001f ||
-                    centerDistance(predicted, candidate) <= maxDistance
+            manualSelectionActive -> {
+                // A tap locks the visual region first. If the detector sees an object nearby,
+                // use its tighter box; otherwise keep tracking the tapped region without
+                // requiring a category match.
+                val nearest = candidates.minByOrNull { centerDistance(previous, it) }
+                val match = nearest?.takeIf {
+                    centerDistance(previous, it) <= MANUAL_DETECTION_MATCH_RADIUS
+                }
+                if (match == null) {
+                    missingFrames = 0
+                    return previous.toTarget()
+                }
+                manualSelectionActive = false
+                match
+            }
+            else -> {
+                // The visual tracker updates lastBounds between detector results, so this
+                // association gate stays around the moving object rather than a stale box.
+                val predictionFrames = 1f + missingFrames.coerceAtMost(5) * 0.65f
+                val predicted = previous.translated(
+                    velocityX * predictionFrames,
+                    velocityY * predictionFrames,
+                )
+                val maxDistance = (MAX_TARGET_CENTER_DISTANCE + missingFrames * 0.025f)
+                    .coerceAtMost(0.82f)
+                candidates.maxByOrNull { candidate ->
+                    val overlap = intersectionOverUnion(predicted, candidate)
+                    val distance = centerDistance(predicted, candidate)
+                    val motionSimilarity = 1f - (distance / maxDistance).coerceIn(0f, 1f)
+                    val sizeSimilarity = minOf(predicted.area, candidate.area) /
+                        maxOf(predicted.area, candidate.area, 1e-4f)
+                    overlap * 2.4f +
+                        motionSimilarity * 2.1f +
+                        sizeSimilarity * 0.35f +
+                        candidate.confidence * 0.15f
+                }?.takeIf { candidate ->
+                    intersectionOverUnion(predicted, candidate) >= 0.001f ||
+                        centerDistance(predicted, candidate) <= maxDistance
+                }
             }
         }
 
@@ -314,14 +460,14 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
             missingFrames++
             if (missingFrames >= LOST_FRAMES_BEFORE_RESET) {
                 lastBounds = null
+                pendingVisualSeed = null
                 velocityX = 0f
                 velocityY = 0f
                 missingFrames = 0
                 return null
             }
 
-            // Extrapolate briefly through detector dropouts/partial occlusion so the
-            // overlay and pan controller do not freeze on the last stale box.
+            // Brief detector dropouts do not remove the current visual lock.
             velocityX *= 0.82f
             velocityY *= 0.82f
             val predicted = previous?.translated(velocityX, velocityY)
@@ -355,6 +501,7 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
             )
         }
         lastBounds = smoothed
+        pendingVisualSeed = smoothed.toTarget()
         return smoothed.toTarget()
     }
 
