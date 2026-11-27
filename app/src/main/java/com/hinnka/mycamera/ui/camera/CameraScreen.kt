@@ -2792,7 +2792,6 @@ fun CameraScreen(
                 // Keep the preset picker reachable before Top-Off is enabled.
                 showTopOffPanPresetControls = isVideoMode &&
                     !spatialVideoEnabled && !dualCaptureEnabled,
-                showAiSubjectTrackingButton = isVideoMode && activePanel == ActivePanel.NONE,
                 aiSubjectTrackingEnabled = aiSubjectTrackingEnabled,
                 onAiSubjectTrackingToggle = {
                     if (!aiSubjectTrackingEnabled) {
@@ -3576,7 +3575,6 @@ private fun Controls(
     onGalleryClick: () -> Unit,
     showTrackingPad: Boolean,
     showTopOffPanPresetControls: Boolean,
-    showAiSubjectTrackingButton: Boolean,
     aiSubjectTrackingEnabled: Boolean,
     onAiSubjectTrackingToggle: () -> Unit,
     onTrackingPadPan: (Float, Float) -> Unit,
@@ -3842,11 +3840,7 @@ private fun Controls(
                         },
                 )
 
-                // Keep Run, AI tracking, and recording pause in one non-overlapping
-                // left-side control row. AI tracking uses an icon-only button.
-                if (showTopOffPanPresetControls || showAiSubjectTrackingButton ||
-                    state.videoRecordingState.isRecording
-                ) {
+
                     Row(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
@@ -3899,44 +3893,6 @@ private fun Controls(
                                     tint = Color.White,
                                     modifier = Modifier.size(24.dp),
                                 )
-                            }
-                        }
-
-                        if (showTopOffPanPresetControls) {
-                            IconButton(
-                                onClick = { showTopOffPanPresetPicker = true },
-                                modifier = Modifier
-                                    .size(42.dp)
-                                    .background(Color.White.copy(alpha = 0.16f), CircleShape)
-                                    .border(1.dp, Color.White.copy(alpha = 0.55f), CircleShape),
-                            ) {
-                                Text(
-                                    text = "P",
-                                    color = Color.White,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                        }
-
-                        if (showAiSubjectTrackingButton) {
-                            IconButton(
-                                onClick = onAiSubjectTrackingToggle,
-                                modifier = Modifier
-                                    .size(42.dp)
-                                    .background(
-                                        if (aiSubjectTrackingEnabled) Color(0xDD145A3B)
-                                        else Color.White.copy(alpha = 0.16f),
-                                        CircleShape,
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (aiSubjectTrackingEnabled) Color(0xFF6EF0A7)
-                                        else Color.White.copy(alpha = 0.55f),
-                                        CircleShape,
-                                    ),
-                            ) {
-                                AiTrackingPersonIcon()
                             }
                         }
 
