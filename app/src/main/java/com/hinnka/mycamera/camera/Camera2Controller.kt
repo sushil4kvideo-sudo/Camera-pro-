@@ -8299,6 +8299,10 @@ class Camera2Controller(private val context: Context) {
                 ?: getSensorOrientation(),
             isFrontFacing = (characteristics.get(CameraCharacteristics.LENS_FACING) ?: getLensFacing()) ==
                 CameraCharacteristics.LENS_FACING_FRONT,
+            previewCropZoom = if (
+                _topOffPositionLockActive.value &&
+                _state.value.captureMode == CaptureMode.VIDEO
+            ) _topOffZoomFactor.value else 1f,
         )
     }
 
