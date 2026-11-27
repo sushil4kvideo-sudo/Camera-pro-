@@ -87,6 +87,7 @@ import com.hinnka.mycamera.preview.PreviewSubjectTrackingProcessor
 import com.hinnka.mycamera.ui.theme.accentContentColor
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.camera.AiSubjectTrackingController
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.camera.CameraState
@@ -250,6 +251,14 @@ fun CameraScreen(
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
     var aiSubjectTrackingEnabled by rememberSaveable { mutableStateOf(false) }
+    val aiSubjectPanController = remember {
+        AiSubjectTrackingController(
+            deadZone = 0.025f,
+            proportionalGain = 0.22f,
+            smoothingAlpha = 0.62f,
+            maxStepPerDetection = 0.055f,
+        )
+    }
     var aiSubjectTarget by remember {
         mutableStateOf<PreviewSubjectTrackingProcessor.Target?>(null)
     }
@@ -1386,6 +1395,7 @@ fun CameraScreen(
             if (!aiSubjectTrackingActive) {
                 aiSubjectTarget = null
                 subjectTrackingProcessor?.resetTracking()
+                aiSubjectPanController.reset()
                 aiTrackingLastPanAtMs = 0L
             }
         }
@@ -1396,21 +1406,23 @@ fun CameraScreen(
                 if (target != null && aiSubjectTrackingActive && aiSubjectAutoPanMode != 0) {
                     val now = SystemClock.elapsedRealtime()
                     if (now - aiTrackingLastPanAtMs >= 50L) {
-                        fun correction(error: Float): Float {
-                            if (kotlin.math.abs(error) <= 0.025f) return 0f
-                            return (error * 0.14f).coerceIn(-0.035f, 0.035f)
-                        }
-                        val panDeltaX = correction(target.centerX - 0.5f)
-                        val panDeltaY = correction(target.centerY - 0.5f)
-                        if (panDeltaX != 0f || panDeltaY != 0f) {
-                            aiTrackingLastPanAtMs = now
+                        val currentPanX = if (aiSubjectAutoPanMode == 1) topOffZoomPanX else state.zoomPanX
+                        val currentPanY = if (aiSubjectAutoPanMode == 1) topOffZoomPanY else state.zoomPanY
+                        val update = aiSubjectPanController.update(
+                            subjectCenterX = target.centerX,
+                            subjectCenterY = target.centerY,
+                            currentPanX = currentPanX,
+                            currentPanY = currentPanY,
+                        )
+                        aiTrackingLastPanAtMs = now
+                        if (update.changed) {
                             if (aiSubjectAutoPanMode == 1) {
-                                viewModel.setTopOffZoomPan(
-                                    (topOffZoomPanX + panDeltaX).coerceIn(-1f, 1f),
-                                    (topOffZoomPanY + panDeltaY).coerceIn(-1f, 1f),
-                                )
+                                viewModel.setTopOffZoomPan(update.panX, update.panY)
                             } else {
-                                viewModel.panZoomBy(panDeltaX, panDeltaY)
+                                viewModel.panZoomBy(
+                                    update.panX - currentPanX,
+                                    update.panY - currentPanY,
+                                )
                             }
                         }
                     }
@@ -2810,6 +2822,7 @@ fun CameraScreen(
                     aiSubjectTarget = null
                     aiTrackingLastPanAtMs = 0L
                     subjectTrackingProcessor?.resetTracking()
+                    aiSubjectPanController.reset()
                 },
                 onTrackingPadPan = if (topOffZoomJoystickSupported) {
                     { deltaX, deltaY ->
@@ -3632,7 +3645,7 @@ private fun Controls(
 
     LaunchedEffect(runningTopOffPanPreset) {
         val preset = runningTopOffPanPreset ?: return@LaunchedEffect
-        if (preset.gyroMode != null) return@LaunchedEffect
+        if (preset.gyroMode != null || preset.aiSubjectTracking) return@LaunchedEffect
         try {
             val points = preset.points
             if (points.size < 2) return@LaunchedEffect
@@ -3671,6 +3684,12 @@ private fun Controls(
             if (runningTopOffPanPreset?.id == preset.id) {
                 runningTopOffPanPreset = null
             }
+        }
+    }
+
+    LaunchedEffect(aiSubjectTrackingEnabled) {
+        if (!aiSubjectTrackingEnabled && runningTopOffPanPreset?.aiSubjectTracking == true) {
+            runningTopOffPanPreset = null
         }
     }
 
@@ -3741,10 +3760,18 @@ private fun Controls(
                         if (showTopOffPanPresetControls) {
                             IconButton(
                                 onClick = {
-                                    if (runningTopOffPanPreset != null) {
+                                    val runningPreset = runningTopOffPanPreset
+                                    if (runningPreset != null) {
+                                        if (runningPreset.aiSubjectTracking && aiSubjectTrackingEnabled) {
+                                            onAiSubjectTrackingToggle()
+                                        }
                                         runningTopOffPanPreset = null
                                     } else {
-                                        runningTopOffPanPreset = selectedTopOffPanPreset
+                                        val nextPreset = selectedTopOffPanPreset
+                                        runningTopOffPanPreset = nextPreset
+                                        if (nextPreset?.aiSubjectTracking == true && !aiSubjectTrackingEnabled) {
+                                            onAiSubjectTrackingToggle()
+                                        }
                                     }
                                 },
                                 enabled = selectedTopOffPanPreset != null &&

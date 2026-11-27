@@ -35,6 +35,7 @@ data class TopOffPanPreset(
     val points: List<TopOffPanWaypoint>,
     val segmentDurationMs: Long = 1_000L,
     val gyroMode: GyroPanMode? = null,
+    val aiSubjectTracking: Boolean = false,
 ) {
     fun normalized(): TopOffPanPreset = copy(
         id = id.trim().ifBlank { "custom-pan" }.take(80),
@@ -53,6 +54,7 @@ data class TopOffPanPreset(
         const val BUILTIN_GYRO_HORIZON_LOCK_ID = "builtin_gyro_horizon_lock"
         const val BUILTIN_GYRO_SMOOTH_FOLLOW_ID = "builtin_gyro_smooth_follow"
         const val BUILTIN_GYRO_AXIS_BALANCE_ID = "builtin_gyro_axis_balance"
+        const val BUILTIN_AI_SUBJECT_TRACKING_ID = "builtin_ai_subject_tracking"
 
         private fun gyroPreset(id: String, name: String, mode: GyroPanMode) = TopOffPanPreset(
             id = id,
@@ -86,6 +88,16 @@ data class TopOffPanPreset(
             gyroPreset(BUILTIN_GYRO_HORIZON_LOCK_ID, "Gyro Horizon Lock", GyroPanMode.HORIZON_LOCK),
             gyroPreset(BUILTIN_GYRO_SMOOTH_FOLLOW_ID, "Gyro Smooth Follow", GyroPanMode.SMOOTH_FOLLOW),
             gyroPreset(BUILTIN_GYRO_AXIS_BALANCE_ID, "Auto Axis Balance", GyroPanMode.AUTO_AXIS_BALANCE),
+            TopOffPanPreset(
+                id = BUILTIN_AI_SUBJECT_TRACKING_ID,
+                name = "AI Subject Tracking",
+                points = listOf(
+                    TopOffPanWaypoint(0f, 0f, 2f),
+                    TopOffPanWaypoint(0f, 0f, 2f),
+                ),
+                segmentDurationMs = 0L,
+                aiSubjectTracking = true,
+            ),
         )
     }
 }
@@ -110,6 +122,7 @@ object TopOffPanPresetCodec {
                     .put("name", preset.name)
                     .put("segmentDurationMs", preset.segmentDurationMs)
                     .put("gyroMode", preset.gyroMode?.name ?: JSONObject.NULL)
+                    .put("aiSubjectTracking", preset.aiSubjectTracking)
                     .put("points", points)
             )
         }
@@ -151,6 +164,7 @@ object TopOffPanPresetCodec {
                             points = safePoints,
                             segmentDurationMs = item.optLong("segmentDurationMs", 1_000L),
                             gyroMode = gyroMode,
+                            aiSubjectTracking = item.optBoolean("aiSubjectTracking", false),
                         ).normalized()
                     )
                 }

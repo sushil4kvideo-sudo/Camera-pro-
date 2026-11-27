@@ -63,9 +63,9 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
         private const val MODEL_ASSET = "efficientdet_lite0_int8.tflite"
         private const val MIN_SCORE = 0.32f
         private const val MAX_RESULTS = 20
-        private const val LOST_FRAMES_BEFORE_RESET = 7
-        private const val SMOOTHING_ALPHA = 0.48f
-        private const val MAX_TARGET_CENTER_DISTANCE = 0.42f
+        private const val LOST_FRAMES_BEFORE_RESET = 18
+        private const val SMOOTHING_ALPHA = 0.55f
+        private const val MAX_TARGET_CENTER_DISTANCE = 0.58f
     }
 
     private val appContext = context.applicationContext
@@ -261,7 +261,9 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
                 top = top,
                 right = right,
                 bottom = bottom,
-                label = category.categoryName().takeIf { it.isNotBlank() } ?: "Object",
+                // Category names are deliberately not part of target identity. The same
+            // physical object must remain tracked even when the detector changes labels.
+            label = "Subject",
                 confidence = confidence.coerceIn(0f, 1f),
             )
         }
@@ -282,37 +284,28 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
         } else {
             // Constant-velocity prediction keeps the association gate around a moving
             // object instead of around its stale last-detected rectangle.
-            val predictionFrames = 1f + missingFrames.coerceAtMost(3) * 0.35f
+            val predictionFrames = 1f + missingFrames.coerceAtMost(5) * 0.65f
             val predicted = previous.translated(
                 velocityX * predictionFrames,
                 velocityY * predictionFrames,
             )
-            val sameClass = candidates.filter {
-                it.label.equals(previous.label, ignoreCase = true)
-            }
-            // A detector can briefly change a category label. Permit class re-acquisition
-            // only after a missed frame, and only close to the predicted object position.
-            val pool = if (sameClass.isNotEmpty()) {
-                sameClass
-            } else if (missingFrames >= 1) {
-                candidates
-            } else {
-                emptyList()
-            }
-            val maxDistance = (MAX_TARGET_CENTER_DISTANCE + missingFrames * 0.035f)
-                .coerceAtMost(0.55f)
-            pool.maxByOrNull { candidate ->
+            // Match on location, overlap, motion and approximate size—not the detector's
+            // category label. This prevents a label flip (e.g. person/chair) from dropping
+            // the lock on the same physical subject.
+            val maxDistance = (MAX_TARGET_CENTER_DISTANCE + missingFrames * 0.025f)
+                .coerceAtMost(0.82f)
+            candidates.maxByOrNull { candidate ->
                 val overlap = intersectionOverUnion(predicted, candidate)
                 val distance = centerDistance(predicted, candidate)
                 val motionSimilarity = 1f - (distance / maxDistance).coerceIn(0f, 1f)
                 val sizeSimilarity = minOf(predicted.area, candidate.area) /
                     maxOf(predicted.area, candidate.area, 1e-4f)
-                overlap * 2.2f +
-                    motionSimilarity * 1.8f +
-                    sizeSimilarity * 0.45f +
-                    candidate.confidence * 0.25f
+                overlap * 2.4f +
+                    motionSimilarity * 2.1f +
+                    sizeSimilarity * 0.35f +
+                    candidate.confidence * 0.15f
             }?.takeIf { candidate ->
-                intersectionOverUnion(predicted, candidate) >= 0.005f ||
+                intersectionOverUnion(predicted, candidate) >= 0.001f ||
                     centerDistance(predicted, candidate) <= maxDistance
             }
         }
@@ -349,7 +342,7 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
 
         val movement = previous?.let { centerDistance(it, selected) } ?: 0f
         val smoothing = if (movement > 0.075f) 0.68f else SMOOTHING_ALPHA
-        val smoothed = if (previous == null || !selected.label.equals(previous.label, true)) {
+        val smoothed = if (previous == null) {
             selected
         } else {
             Candidate(
