@@ -131,9 +131,6 @@ internal fun TopOffPanPresetSettings(
                     text = when (mode) {
                         GyroPanMode.POSITION_LOCK -> "Gyro Position Lock"
                         GyroPanMode.ANTI_SHAKE -> "Gyro Anti-Shake"
-                        GyroPanMode.HORIZON_LOCK -> "Gyro Horizon Lock"
-                        GyroPanMode.SMOOTH_FOLLOW -> "Gyro Smooth Follow"
-                        GyroPanMode.AUTO_AXIS_BALANCE -> "Auto Axis Balance"
                     },
                     color = Color.White,
                     fontWeight = FontWeight.Medium,

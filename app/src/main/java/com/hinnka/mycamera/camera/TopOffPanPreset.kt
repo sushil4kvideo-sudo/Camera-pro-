@@ -9,10 +9,7 @@ const val POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG = "PositionLockUltraWide"
 /** Gyroscope-driven pan behaviours available from the Top-Off preset picker. */
 enum class GyroPanMode(val description: String) {
     POSITION_LOCK("Compensates phone yaw and pitch to keep framing fixed."),
-    ANTI_SHAKE("Rejects quick hand tremors while allowing slow intentional movement."),
-    HORIZON_LOCK("Levels the frame by counter-rotating device roll."),
-    SMOOTH_FOLLOW("Follows broad movement with a damped, delayed response."),
-    AUTO_AXIS_BALANCE("Remaps left/right and up/down when the phone rotates.")
+    ANTI_SHAKE("Rejects quick hand tremors while allowing slow intentional movement.")
 }
 
 /** A pan waypoint in viewfinder-normalized coordinates and its requested crop magnification. */
@@ -54,9 +51,6 @@ data class TopOffPanPreset(
         const val BUILTIN_UP_DOWN_ID = "builtin_up_down"
         const val BUILTIN_GYRO_POSITION_LOCK_ID = "builtin_gyro_position_lock"
         const val BUILTIN_GYRO_ANTI_SHAKE_ID = "builtin_gyro_anti_shake"
-        const val BUILTIN_GYRO_HORIZON_LOCK_ID = "builtin_gyro_horizon_lock"
-        const val BUILTIN_GYRO_SMOOTH_FOLLOW_ID = "builtin_gyro_smooth_follow"
-        const val BUILTIN_GYRO_AXIS_BALANCE_ID = "builtin_gyro_axis_balance"
         const val BUILTIN_AI_SUBJECT_TRACKING_ID = "builtin_ai_subject_tracking"
 
         private fun gyroPreset(id: String, name: String, mode: GyroPanMode) = TopOffPanPreset(
@@ -88,9 +82,6 @@ data class TopOffPanPreset(
             ),
             gyroPreset(BUILTIN_GYRO_POSITION_LOCK_ID, "Gyro Position Lock", GyroPanMode.POSITION_LOCK),
             gyroPreset(BUILTIN_GYRO_ANTI_SHAKE_ID, "Gyro Anti-Shake", GyroPanMode.ANTI_SHAKE),
-            gyroPreset(BUILTIN_GYRO_HORIZON_LOCK_ID, "Gyro Horizon Lock", GyroPanMode.HORIZON_LOCK),
-            gyroPreset(BUILTIN_GYRO_SMOOTH_FOLLOW_ID, "Gyro Smooth Follow", GyroPanMode.SMOOTH_FOLLOW),
-            gyroPreset(BUILTIN_GYRO_AXIS_BALANCE_ID, "Auto Axis Balance", GyroPanMode.AUTO_AXIS_BALANCE),
             TopOffPanPreset(
                 id = BUILTIN_AI_SUBJECT_TRACKING_ID,
                 name = "AI Subject Tracking",
@@ -139,6 +130,13 @@ object TopOffPanPresetCodec {
             buildList {
                 for (index in 0 until array.length().coerceAtMost(64)) {
                     val item = array.optJSONObject(index) ?: continue
+                    val presetId = item.optString("id", "custom-$index")
+                    if (presetId in setOf(
+                            "builtin_gyro_horizon_lock",
+                            "builtin_gyro_smooth_follow",
+                            "builtin_gyro_axis_balance",
+                        )
+                    ) continue
                     val pointsJson = item.optJSONArray("points") ?: JSONArray()
                     val points = buildList {
                         for (pointIndex in 0 until pointsJson.length().coerceAtMost(TopOffPanPreset.MAX_POINTS)) {
@@ -162,7 +160,7 @@ object TopOffPanPresetCodec {
                     )
                     add(
                         TopOffPanPreset(
-                            id = item.optString("id", "custom-$index"),
+                            id = presetId,
                             name = item.optString("name", "Custom pan"),
                             points = safePoints,
                             segmentDurationMs = item.optLong("segmentDurationMs", 1_000L),

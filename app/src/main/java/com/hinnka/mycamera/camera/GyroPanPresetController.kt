@@ -70,9 +70,6 @@ class GyroPanPresetController(
     private var lowPassHorizontal = 0f
     private var lowPassVertical = 0f
     private var lowPassRoll = 0f
-    private var smoothHorizontal = 0f
-    private var smoothVertical = 0f
-    private var smoothRoll = 0f
     @Volatile private var lastCorrection = GyroPanCorrection(basePanX, basePanY, 0f)
 
     val currentCorrection: GyroPanCorrection
@@ -151,18 +148,6 @@ class GyroPanPresetController(
                 lastSensorTimestampNs = event.timestamp
                 sensorEventCount++
                 PLog.d(TAG, "First orientation sample received; reference locked for mode=$mode")
-                return
-            }
-
-            // Auto Axis Balance intentionally re-anchors at a display-axis change. Preserve
-            // the existing crop position so rotating the handset cannot cause a framing jump.
-            if (mode == GyroPanMode.AUTO_AXIS_BALANCE &&
-                rotationBucket != screenRotationBucket
-            ) {
-                basePanX = lastCorrection.panX
-                basePanY = lastCorrection.panY
-                setReference(deviceRotation, rotationBucket)
-                lastSensorTimestampNs = event.timestamp
                 return
             }
 
@@ -286,8 +271,7 @@ class GyroPanPresetController(
         deltaSeconds: Float,
     ): GyroPanCorrection {
         return when (mode) {
-            GyroPanMode.POSITION_LOCK,
-            GyroPanMode.AUTO_AXIS_BALANCE -> GyroPanCorrection(
+            GyroPanMode.POSITION_LOCK -> GyroPanCorrection(
                 panX = GyroPanFilterMath.positionLockHorizontalPan(
                     basePanX = basePanX,
                     horizontalAngleRadians = horizontalAngle,
@@ -332,49 +316,6 @@ class GyroPanPresetController(
                 )
             }
 
-            GyroPanMode.HORIZON_LOCK -> GyroPanCorrection(
-                panX = basePanX,
-                panY = basePanY,
-                rollDegrees = (-opticalRoll / DEG_TO_RAD)
-                    .coerceIn(-MAX_HORIZON_CORRECTION_DEGREES, MAX_HORIZON_CORRECTION_DEGREES),
-            )
-
-            GyroPanMode.SMOOTH_FOLLOW -> {
-                smoothHorizontal = GyroPanFilterMath.lowPass(
-                    smoothHorizontal, horizontalAngle, deltaSeconds, SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS
-                )
-                smoothVertical = GyroPanFilterMath.lowPass(
-                    smoothVertical, verticalAngle, deltaSeconds, SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS
-                )
-                smoothRoll = GyroPanFilterMath.lowPass(
-                    smoothRoll, opticalRoll, deltaSeconds, SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS
-                )
-                // The virtual camera follows lowPass(orientation). The crop-window offset
-                // relative to the physical camera is lowPass(angle) - angle, not lowPass(angle).
-                val followHorizontalOffset = GyroPanFilterMath.smoothFollowOffset(
-                    smoothHorizontal, horizontalAngle
-                )
-                val followVerticalOffset = GyroPanFilterMath.smoothFollowOffset(
-                    smoothVertical, verticalAngle
-                )
-                val followRollOffset = GyroPanFilterMath.smoothFollowOffset(
-                    smoothRoll, opticalRoll
-                )
-                GyroPanCorrection(
-                    panX = (
-                        basePanX + GyroPanFilterMath.normalizedPanForAngle(
-                            followHorizontalOffset, horizontalFieldOfViewDegrees, zoomRatio
-                        )
-                    ).coerceIn(-1f, 1f),
-                    panY = (
-                        basePanY - GyroPanFilterMath.normalizedPanForAngle(
-                            followVerticalOffset, verticalFieldOfViewDegrees, zoomRatio
-                        )
-                    ).coerceIn(-1f, 1f),
-                    rollDegrees = (followRollOffset / DEG_TO_RAD)
-                        .coerceIn(-MAX_HORIZON_CORRECTION_DEGREES, MAX_HORIZON_CORRECTION_DEGREES),
-                )
-            }
         }
     }
 
@@ -382,9 +323,6 @@ class GyroPanPresetController(
         lowPassHorizontal = 0f
         lowPassVertical = 0f
         lowPassRoll = 0f
-        smoothHorizontal = 0f
-        smoothVertical = 0f
-        smoothRoll = 0f
     }
 
     private fun currentScreenRotationBucket(): Int {
@@ -441,10 +379,8 @@ class GyroPanPresetController(
         const val DEG_TO_RAD = 0.017453292519943295f
         const val DEFAULT_HORIZONTAL_FOV_DEGREES = 60f
         const val DEFAULT_VERTICAL_FOV_DEGREES = 45f
-        const val MAX_HORIZON_CORRECTION_DEGREES = 15f
         const val MAX_ANTI_SHAKE_ROLL = 6f
         const val ANTI_SHAKE_TIME_CONSTANT_SECONDS = 0.18f
-        const val SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS = 0.22f
         const val DEAD_ZONE_RADIANS = 0.04f * DEG_TO_RAD
         const val UPDATE_EPSILON = 0.0008f
         const val POSITION_LOCK_UPDATE_EPSILON = 0.000005f
