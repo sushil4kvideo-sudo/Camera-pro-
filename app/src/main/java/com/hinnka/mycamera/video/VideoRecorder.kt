@@ -24,6 +24,7 @@ import com.hinnka.mycamera.lut.RealtimeVideoRenderer
 import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
@@ -161,6 +162,7 @@ class VideoRecorder(
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
     private var requestedEnhancedStabilization = false
     private var requestedPositionLockStabilization = false
+    private var requestedPositionLockCropZoom = POSITION_LOCK_CROP_ZOOM
     private var requestedEnhancedStabilizationStrength = DEFAULT_VIDEO_STABILIZATION_STRENGTH
     private var requestedEnhancedStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
     private var requestedDualCaptureInputSize: Size? = null
@@ -289,6 +291,7 @@ class VideoRecorder(
         flipEncodedFrame: Boolean = false,
         enhancedStabilization: Boolean = false,
         positionLockStabilization: Boolean = false,
+        positionLockCropZoom: Float = POSITION_LOCK_CROP_ZOOM,
         enhancedStabilizationStrength: Float = DEFAULT_VIDEO_STABILIZATION_STRENGTH,
         enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
         recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
@@ -373,6 +376,8 @@ class VideoRecorder(
         requestedFlipEncodedFrame = flipEncodedFrame
         requestedEnhancedStabilization = enhancedStabilization
         requestedPositionLockStabilization = enhancedStabilization && positionLockStabilization
+        requestedPositionLockCropZoom = positionLockCropZoom
+            .takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM
         requestedEnhancedStabilizationStrength =
             normalizeStabilizationStrength(enhancedStabilizationStrength)
         requestedEnhancedStabilizationLookahead =
@@ -817,6 +822,7 @@ class VideoRecorder(
             stabilizationCoordinator = stabilizationCoordinator,
             enhancedStabilizationEnabled = requestedEnhancedStabilization,
             positionLockEnabled = requestedPositionLockStabilization,
+            positionLockCropZoom = requestedPositionLockCropZoom,
             enhancedStabilizationStrength = requestedEnhancedStabilizationStrength,
             enhancedStabilizationLookahead = requestedEnhancedStabilizationLookahead,
             dualCaptureInputSize = requestedDualCaptureInputSize,
