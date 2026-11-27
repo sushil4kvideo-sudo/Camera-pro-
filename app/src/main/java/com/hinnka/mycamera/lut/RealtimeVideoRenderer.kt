@@ -16,6 +16,7 @@ import android.util.Size
 import android.view.Surface
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.utils.MediaWatermark
@@ -499,8 +500,8 @@ class RealtimeVideoRenderer(
         }
         if (timestampNs <= 0L) return null
         if (positionLockEnabled && sourceTextureSource == PreviewColorTextureSource.EXTERNAL_OES) {
-            // Keep the fixed 2x center crop until the first timestamp-matched MGC frame arrives.
-            sourceCropRect = resolveRealtimeVideoZoomCropRect(sourceCropRect, 2f, 0f, 0f)
+            // Match the native 2.5x crop until the first timestamp-matched MGC frame arrives.
+            sourceCropRect = resolveRealtimeVideoZoomCropRect(sourceCropRect, POSITION_LOCK_CROP_ZOOM, 0f, 0f)
         }
         // Special Video's virtual telephoto is cropped from the live sensor frame here,
         // before it reaches the dedicated MediaCodec input surface (never after recording).
