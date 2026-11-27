@@ -92,6 +92,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
+import com.hinnka.mycamera.camera.GyroPanMode
 import com.hinnka.mycamera.camera.GyroPanPresetController
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
 import com.hinnka.mycamera.camera.TopOffPanPreset
