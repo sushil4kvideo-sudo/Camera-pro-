@@ -31,6 +31,7 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.preview.PreviewSubjectTrackingProcessor
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.ui.components.FocusIndicator
@@ -93,6 +94,7 @@ fun CameraPreviewGL(
     photoPreviewStabilizationEnabled: Boolean = false,
     videoPreviewStabilizationEnabled: Boolean = false,
     videoPreviewPositionLockEnabled: Boolean = false,
+    videoPreviewPositionLockZoom: Float = POSITION_LOCK_CROP_ZOOM,
     videoPreviewStabilizationStrength: Float = 0f,
     videoPreviewStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
     modifier: Modifier = Modifier
@@ -269,6 +271,7 @@ fun CameraPreviewGL(
                             } else {
                                 DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
                             },
+                            positionLockCropZoom = videoPreviewPositionLockZoom,
                         )
 
                         // 强制在所有的条件分支之外读取这几个 State，让 Compose 确保能监听到变化！
