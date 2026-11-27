@@ -57,6 +57,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
     private var lensIntrinsicsCount = 0L
     private var frameCallCount = 0L
     private var positionLockMode = false
+    private var positionLockCropZoomMode = POSITION_LOCK_CROP_ZOOM
     private val diagnosticTrace = MgcEisDiagnosticTrace(cacheDirectory)
 
     @Synchronized
@@ -67,10 +68,18 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
         strength: Float,
         lookaheadFrames: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
         positionLockEnabled: Boolean = false,
+        positionLockCropZoom: Float = POSITION_LOCK_CROP_ZOOM,
     ): Boolean {
+        val normalizedPositionLockCropZoom = if (positionLockEnabled) {
+            positionLockCropZoom.takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM
+        } else {
+            POSITION_LOCK_CROP_ZOOM
+        }
         if (handle != 0L) {
             return frameWidth == width && frameHeight == height &&
-                positionLockMode == positionLockEnabled
+                positionLockMode == positionLockEnabled &&
+                (!positionLockEnabled ||
+                    kotlin.math.abs(positionLockCropZoomMode - normalizedPositionLockCropZoom) <= 0.0001f)
         }
         if (width <= 0 || height <= 0) return false
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
@@ -82,6 +91,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
                 strength,
                 normalizedLookahead,
                 positionLockEnabled,
+                normalizedPositionLockCropZoom,
             )
             if (created == 0L) return false
             handle = created
@@ -93,6 +103,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
             lensIntrinsicsCount = 0L
             frameCallCount = 0L
             positionLockMode = positionLockEnabled
+            positionLockCropZoomMode = normalizedPositionLockCropZoom
             diagnosticTrace.start(width, height, frontFacing, strength)
             PLog.i(
                 TAG,
@@ -121,6 +132,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
         lensIntrinsicsCount = 0L
         frameCallCount = 0L
         positionLockMode = false
+        positionLockCropZoomMode = POSITION_LOCK_CROP_ZOOM
         if (current != 0L) {
             runCatching { MgcEisNativeBridge.release(current) }
                 .onFailure { PLog.e(TAG, "Unable to release reconstructed MGC EIS", it) }
