@@ -297,6 +297,7 @@ fun CameraScreen(
     val topOffZoomPanX by viewModel.topOffZoomPanX.collectAsState()
     val topOffZoomPanY by viewModel.topOffZoomPanY.collectAsState()
     val topOffZoomRollDegrees by viewModel.topOffZoomRollDegrees.collectAsState()
+    val topOffZoomFixedRollCover by viewModel.topOffZoomFixedRollCover.collectAsState()
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
     val spatialVideoPreviewSensorOrientation by
@@ -481,6 +482,7 @@ fun CameraScreen(
             panX = if (cropMainGlPreview) topOffZoomPanX else 0f,
             panY = if (cropMainGlPreview) topOffZoomPanY else 0f,
             rollDegrees = if (cropMainGlPreview) topOffZoomRollDegrees else 0f,
+            fixedRollCover = cropMainGlPreview && topOffZoomFixedRollCover,
         )
     }
 
@@ -2846,7 +2848,7 @@ fun CameraScreen(
                 } else {
                     viewModel::panZoomBy
                 },
-                onGyroPanUpdate = { panX, panY, rollDegrees ->
+                onGyroPanUpdate = { panX, panY, rollDegrees, fixedRollCover ->
                     // Push the preview correction straight to GL from the sensor callback.
                     // Waiting for StateFlow -> Compose recomposition -> LaunchedEffect adds
                     // avoidable frame latency to a closed-loop position stabilizer.
@@ -2875,9 +2877,10 @@ fun CameraScreen(
                         panX = if (cropActive) panX else 0f,
                         panY = if (cropActive) panY else 0f,
                         rollDegrees = if (cropActive) rollDegrees else 0f,
+                        fixedRollCover = cropActive && fixedRollCover,
                     )
                     // The ViewModel keeps Compose state and the recording renderer in sync.
-                    viewModel.setTopOffGyroPanCorrection(panX, panY, rollDegrees)
+                    viewModel.setTopOffGyroPanCorrection(panX, panY, rollDegrees, fixedRollCover)
                 },
                 sideControlInset = if (isXpan) {
                     (xpanSideWidth - CameraControlsLayoutDefaults.SideButtonSize) / 2
@@ -3578,7 +3581,7 @@ private fun Controls(
     aiSubjectTrackingEnabled: Boolean,
     onAiSubjectTrackingToggle: () -> Unit,
     onTrackingPadPan: (Float, Float) -> Unit,
-    onGyroPanUpdate: (Float, Float, Float) -> Unit,
+    onGyroPanUpdate: (Float, Float, Float, Boolean) -> Unit,
     sideControlInset: Dp?,
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
@@ -3639,7 +3642,12 @@ private fun Controls(
                 initialVerticalFieldOfViewDegrees = initialOptics.verticalFieldOfViewDegrees,
                 initialZoomRatio = initialOptics.zoomRatio,
             ) { correction ->
-                latestOnGyroPanUpdate(correction.panX, correction.panY, correction.rollDegrees)
+                latestOnGyroPanUpdate(
+                    correction.panX,
+                    correction.panY,
+                    correction.rollDegrees,
+                    correction.fixedRollCover,
+                )
             }
             gyroControllerRef.value = gyroController
             val sensorStarted = gyroController.start()

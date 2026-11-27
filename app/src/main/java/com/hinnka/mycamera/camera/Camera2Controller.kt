@@ -400,9 +400,11 @@ class Camera2Controller(private val context: Context) {
     val topOffZoomPanYFlow: StateFlow<Float> = _topOffZoomPanY.asStateFlow()
     private val _topOffZoomRollDegrees = MutableStateFlow(
         specialVideoPreferences.getFloat("top_off_zoom_roll_degrees", 0f)
-            .takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+            .takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
     )
     val topOffZoomRollDegreesFlow: StateFlow<Float> = _topOffZoomRollDegrees.asStateFlow()
+    private val _topOffZoomFixedRollCover = MutableStateFlow(false)
+    val topOffZoomFixedRollCoverFlow: StateFlow<Boolean> = _topOffZoomFixedRollCover.asStateFlow()
     private val _topOffJoystickSpeed = MutableStateFlow(
         specialVideoPreferences.getFloat("top_off_joystick_speed", 1f).coerceIn(0.25f, 4f)
     )
@@ -10780,10 +10782,15 @@ class Camera2Controller(private val context: Context) {
      * Frame-rate gyro updates. Unlike the manual pan control this remains valid during
      * recording and updates the dedicated encoder renderer without rebuilding Camera2.
      */
-    fun setTopOffGyroPanCorrection(panX: Float, panY: Float, rollDegrees: Float) {
+    fun setTopOffGyroPanCorrection(
+        panX: Float,
+        panY: Float,
+        rollDegrees: Float,
+        fixedRollCover: Boolean = false,
+    ) {
         val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+        val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
         _topOffZoomPanX.value = safePanX
         _topOffZoomPanY.value = safePanY
         _topOffZoomRollDegrees.value = safeRoll
@@ -10792,6 +10799,8 @@ class Camera2Controller(private val context: Context) {
         val canApplySoftwareCrop = _topOffZoomEnabled.value &&
             current.captureMode == CaptureMode.VIDEO &&
             !spatialVideoEnabled && !dualCaptureEnabled
+        val safeFixedRollCover = fixedRollCover && canApplySoftwareCrop
+        _topOffZoomFixedRollCover.value = safeFixedRollCover
         if (!canApplySoftwareCrop) return
 
         val zoom = (
@@ -10799,10 +10808,10 @@ class Camera2Controller(private val context: Context) {
                 ?: (current.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value)
             ).coerceIn(1f, 20f)
         if (videoRecorder.isRecording()) {
-            videoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll)
+            videoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, safeFixedRollCover)
         }
         if (dualAspectRecordingActive && spatialVideoRecorder.isRecording()) {
-            spatialVideoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll)
+            spatialVideoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, safeFixedRollCover)
         }
         _topOffPanLatencyMs.value = 0f
     }
@@ -10810,10 +10819,32 @@ class Camera2Controller(private val context: Context) {
     fun finishTopOffGyroPanPreset(panX: Float, panY: Float, rollDegrees: Float) {
         val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+        val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
         _topOffZoomPanX.value = safePanX
         _topOffZoomPanY.value = safePanY
         _topOffZoomRollDegrees.value = safeRoll
+        _topOffZoomFixedRollCover.value = false
+
+        // Release the fixed Horizon Lock envelope in the active encoder as soon as the
+        // preset stops, while preserving the final crop/roll position.
+        val current = _state.value
+        val canApplySoftwareCrop = _topOffZoomEnabled.value &&
+            current.captureMode == CaptureMode.VIDEO &&
+            !spatialVideoEnabled && !dualCaptureEnabled
+        if (canApplySoftwareCrop) {
+            val zoom = (
+                _topOffZoomLockedRatio.value.takeIf { it.isFinite() && it >= 1f }
+                    ?: (current.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value)
+                ).coerceIn(1f, 20f)
+            if (videoRecorder.isRecording()) {
+                videoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, false)
+            }
+            if (dualAspectRecordingActive && spatialVideoRecorder.isRecording()) {
+                spatialVideoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, false)
+            }
+        }
+        _topOffPanLatencyMs.value = 0f
+
         specialVideoPreferences.edit()
             .putFloat("top_off_zoom_factor", _topOffZoomFactor.value)
             .putFloat("top_off_zoom_locked_ratio", _topOffZoomLockedRatio.value)
@@ -12612,11 +12643,14 @@ class Camera2Controller(private val context: Context) {
             cameraInputZoomRatio = topOffSoftwareZoomForRecording,
             cameraInputPanX = topOffSoftwarePanXForRecording,
             cameraInputPanY = topOffSoftwarePanYForRecording,
-            cameraInputRollDegrees = if (topOffSoftwareZoomForRecording > 1f) {
+            cameraInputRollDegrees = if (
+                topOffSoftwareZoomForRecording > 1f || _topOffZoomFixedRollCover.value
+            ) {
                 _topOffZoomRollDegrees.value
             } else {
                 0f
             },
+            cameraInputFixedRollCover = _topOffZoomFixedRollCover.value,
             fps = _state.value.videoConfig.fps.fps,
             bitrateMbps = if (_state.value.videoConfig.fps == VideoFpsPreset.FPS_120) {
                 minOf(_state.value.videoConfig.bitrate.bitrateMbps, 100)
@@ -12788,11 +12822,14 @@ class Camera2Controller(private val context: Context) {
                 cameraInputZoomRatio = topOffSoftwareZoomForRecording,
                 cameraInputPanX = topOffSoftwarePanXForRecording,
                 cameraInputPanY = topOffSoftwarePanYForRecording,
-                cameraInputRollDegrees = if (topOffSoftwareZoomForRecording > 1f) {
+                cameraInputRollDegrees = if (
+                    topOffSoftwareZoomForRecording > 1f || _topOffZoomFixedRollCover.value
+                ) {
                     _topOffZoomRollDegrees.value
                 } else {
                     0f
                 },
+                cameraInputFixedRollCover = _topOffZoomFixedRollCover.value,
                 fps = _state.value.videoConfig.fps.fps,
                 bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
                 codecMime = _state.value.videoConfig.codec.mimeType,

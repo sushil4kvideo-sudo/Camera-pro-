@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.camera.GyroPanFilterMath
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
@@ -414,6 +415,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var topOffZoomCropPanX = 0f
     private var topOffZoomCropPanY = 0f
     private var topOffZoomCropRollDegrees = 0f
+    private var topOffZoomCropFixedRollCover = false
 
     @Volatile
     var meteringEnabled: Boolean = true
@@ -3213,22 +3215,25 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         panX: Float,
         panY: Float,
         rollDegrees: Float = 0f,
+        fixedRollCover: Boolean = false,
     ) {
         val safeZoom = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
         val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+        val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
         if (topOffZoomCropEnabled == enabled &&
             kotlin.math.abs(topOffZoomCropRatio - safeZoom) <= 0.0001f &&
             kotlin.math.abs(topOffZoomCropPanX - safePanX) <= 0.000001f &&
             kotlin.math.abs(topOffZoomCropPanY - safePanY) <= 0.000001f &&
-            kotlin.math.abs(topOffZoomCropRollDegrees - safeRoll) <= 0.005f
+            kotlin.math.abs(topOffZoomCropRollDegrees - safeRoll) <= 0.005f &&
+            topOffZoomCropFixedRollCover == fixedRollCover
         ) return
         topOffZoomCropEnabled = enabled
         topOffZoomCropRatio = safeZoom
         topOffZoomCropPanX = safePanX
         topOffZoomCropPanY = safePanY
         topOffZoomCropRollDegrees = safeRoll
+        topOffZoomCropFixedRollCover = fixedRollCover
         onRequestRender?.invoke()
     }
 
@@ -3242,14 +3247,19 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         height: Int,
     ): FloatArray {
         val angle = Math.toRadians(topOffZoomCropRollDegrees.toDouble())
-        if (!topOffZoomCropEnabled || kotlin.math.abs(angle) < 0.0001) return baseMatrix
+        if (!topOffZoomCropEnabled) return baseMatrix
+        if (kotlin.math.abs(angle) < 0.0001 && !topOffZoomCropFixedRollCover) return baseMatrix
         val aspect = (width.toFloat() / height.coerceAtLeast(1).toFloat()).coerceIn(0.1f, 10f)
         val cosine = kotlin.math.cos(angle).toFloat()
         val sine = kotlin.math.sin(angle).toFloat()
-        val coverScale = maxOf(
-            kotlin.math.abs(cosine) + kotlin.math.abs(sine) / aspect,
-            kotlin.math.abs(sine) * aspect + kotlin.math.abs(cosine),
-        )
+        val coverScale = if (topOffZoomCropFixedRollCover) {
+            GyroPanFilterMath.horizonLockCoverScale(aspect)
+        } else {
+            maxOf(
+                kotlin.math.abs(cosine) + kotlin.math.abs(sine) / aspect,
+                kotlin.math.abs(sine) * aspect + kotlin.math.abs(cosine),
+            )
+        }
         val rollMatrix = FloatArray(16)
         Matrix.setIdentityM(rollMatrix, 0)
         rollMatrix[0] = cosine * coverScale

@@ -50,6 +50,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         val panX: Float,
         val panY: Float,
         val rollDegrees: Float,
+        val fixedRollCover: Boolean,
     )
 
     private val renderer: LutRenderer = LutRenderer(context.applicationContext)
@@ -216,11 +217,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         panX: Float,
         panY: Float,
         rollDegrees: Float = 0f,
+        fixedRollCover: Boolean = false,
     ) {
         // Sensor updates can arrive faster than the GL thread can render. Keep only the
         // newest transform instead of queuing every obsolete intermediate correction.
         pendingTopOffZoomCrop.set(
-            PendingTopOffZoomCrop(enabled, zoomRatio, panX, panY, rollDegrees)
+            PendingTopOffZoomCrop(enabled, zoomRatio, panX, panY, rollDegrees, fixedRollCover)
         )
         scheduleTopOffZoomCropUpdate()
     }
@@ -236,6 +238,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
                         update.panX,
                         update.panY,
                         update.rollDegrees,
+                        update.fixedRollCover,
                     )
                 }
             } finally {

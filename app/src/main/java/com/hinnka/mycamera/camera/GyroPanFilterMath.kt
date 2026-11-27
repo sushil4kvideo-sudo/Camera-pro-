@@ -1,9 +1,12 @@
 package com.hinnka.mycamera.camera
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan
 import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tan
 
@@ -202,6 +205,27 @@ internal object GyroPanFilterMath {
         }
 
         return output[0].isFinite() && output[1].isFinite() && output[2].isFinite()
+    }
+
+    /**
+     * Maximum roll that Horizon Lock promises to correct. The matching cover scale is
+     * calculated once from the output aspect ratio and remains unchanged while rolling.
+     */
+    const val HORIZON_LOCK_MAX_CORRECTION_DEGREES = 45f
+
+    /**
+     * Minimum uniform scale that keeps the output fully covered for every roll angle
+     * between -45 and +45 degrees. Reusing this fixed value prevents zoom breathing.
+     */
+    fun horizonLockCoverScale(aspectRatio: Float): Float {
+        val aspect = aspectRatio.takeIf { it.isFinite() && it > 0f }
+            ?.coerceIn(0.1f, 10f)
+            ?: 1f
+        val angle = Math.toRadians(HORIZON_LOCK_MAX_CORRECTION_DEGREES.toDouble())
+        val cosine = abs(cos(angle))
+        val sine = abs(sin(angle))
+        val scale = maxOf(cosine + sine / aspect, sine * aspect + cosine)
+        return if (scale.isFinite() && scale >= 1.0) scale.toFloat() else 1f
     }
 
     /**
