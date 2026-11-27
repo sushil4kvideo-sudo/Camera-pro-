@@ -213,6 +213,37 @@ class GyroPanFilterMathTest {
         assertEquals(sensorHorizontal, result.verticalDegrees, 0.0001f)
     }
 
+    @Test
+    fun horizonLockCoverScaleStaysConstantAndCoversEverySupportedRollAngle() {
+        val aspects = listOf(16f / 9f, 9f / 16f, 1f)
+        for (aspect in aspects) {
+            val fixedScale = GyroPanFilterMath.horizonLockCoverScale(aspect)
+            for (degrees in 0..45 step 3) {
+                val angle = Math.toRadians(degrees.toDouble())
+                val cosine = abs(cos(angle))
+                val sine = abs(sin(angle))
+                val requiredAtThisAngle = maxOf(
+                    cosine + sine / aspect,
+                    sine * aspect + cosine,
+                )
+                assertTrue(
+                    "Fixed cover $fixedScale must cover $degrees degrees at aspect $aspect",
+                    fixedScale + 0.0001f >= requiredAtThisAngle.toFloat(),
+                )
+            }
+            assertTrue("Cover scale should be the minimum practical 45-degree fill", fixedScale < 2.1f)
+        }
+    }
+
+    @Test
+    fun horizonLockCoverScaleFallsBackSafelyForInvalidAspectRatio() {
+        assertEquals(
+            GyroPanFilterMath.horizonLockCoverScale(1f),
+            GyroPanFilterMath.horizonLockCoverScale(Float.NaN),
+            0.0001f,
+        )
+    }
+
     private fun runFilter(sampleCount: Int, deltaSeconds: Float): Float {
         var value = 0f
         repeat(sampleCount) {
