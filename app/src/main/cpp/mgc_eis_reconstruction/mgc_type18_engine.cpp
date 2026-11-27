@@ -22,8 +22,8 @@ constexpr double kMaximumAllowedProtrusion = 0.0;
 // projection crop scale after construction.
 constexpr double kLookaheadCropMargin = 0.05;
 constexpr double kAllowedInnerMargin = 0.025;
-// Position Lock retains the central 50% of the source width and height (2x crop).
-constexpr double kPositionLockCropMargin = 0.25;
+// Position Lock trims 60% of each frame dimension, retaining the central 40% (2.5x crop).
+constexpr double kPositionLockCropMargin = 0.30;
 constexpr double kProjectionDenominatorEpsilon = 0.000001;
 constexpr std::int64_t kMaximumLensSampleInterpolationGapNs = 50'000'000;
 constexpr std::int64_t kMinimumSupportedFramePeriodNs = 1'000'000;
