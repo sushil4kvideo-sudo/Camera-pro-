@@ -47,6 +47,8 @@ internal data class PreviewMeteringMapping(
 
 /**
  * 把最终显示画面的归一化坐标映射到 Camera2 AF/AE region 坐标。
+ *
+ * @param previewCropZoom Position Lock renderer 在 Camera2 zoom 之后追加的预览裁切倍率。
  */
 internal object PreviewMeteringMapper {
     fun mapPoint(
@@ -58,7 +60,6 @@ internal object PreviewMeteringMapper {
         previewViewAspectRatio: Float,
         sensorOrientationDegrees: Int,
         isFrontFacing: Boolean,
-        /** Additional crop applied by the live Position Lock renderer after Camera2 zoom. */
         previewCropZoom: Float = 1f,
     ): PreviewMeteringMapping? {
         if (activeArray.isEmpty) return null
