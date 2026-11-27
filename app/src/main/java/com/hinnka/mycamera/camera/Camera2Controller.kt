@@ -379,6 +379,10 @@ class Camera2Controller(private val context: Context) {
     val topOffZoomEnabledFlow: StateFlow<Boolean> = _topOffZoomEnabled.asStateFlow()
     private val _topOffPositionLockActive = MutableStateFlow(false)
     val topOffPositionLockActiveFlow: StateFlow<Boolean> = _topOffPositionLockActive.asStateFlow()
+    @Volatile
+    private var topOffPositionLockCapabilityCacheKey: String? = null
+    @Volatile
+    private var topOffPositionLockCapabilityCacheAvailable = false
 
     private val _topOffZoomFactor = MutableStateFlow(
         specialVideoPreferences.getFloat("top_off_zoom_factor", 2f).coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
@@ -2911,26 +2915,43 @@ class Camera2Controller(private val context: Context) {
             afModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO)
     }
 
-    private fun refreshVideoCapabilities(characteristics: CameraCharacteristics? = null): Size {
+    private fun refreshVideoCapabilities(
+        characteristics: CameraCharacteristics? = null,
+        timingCharacteristics: CameraCharacteristics? = null,
+    ): Size {
         val openCameraId = getCurrentOpenCameraId()
         if (openCameraId.isEmpty()) {
             return _state.value.currentPreviewSize
         }
 
+        // A physical output is the real source for preview and the MGC YUV input.
+        // Resolve stream sizes against that sensor, not the logical parent camera.
+        val capabilityCameraId = activeOutputPhysicalCameraId
+            ?.takeIf { it.isNotBlank() && !logicalMultiCameraAutoSwitchActive }
+            ?: openCameraId
         val resolvedCharacteristics = characteristics
-            ?: getCameraCharacteristicsOrNull(openCameraId, "video capabilities")
+            ?: getCameraCharacteristicsOrNull(capabilityCameraId, "video capabilities")
         if (resolvedCharacteristics == null) {
-            PLog.e(TAG, "Failed to load video capabilities")
+            PLog.e(TAG, "Failed to load video capabilities for $capabilityCameraId")
             return _state.value.currentPreviewSize
         }
+        val resolvedTimingCharacteristics = timingCharacteristics
+            ?: if (capabilityCameraId == openCameraId) {
+                resolvedCharacteristics
+            } else {
+                getCameraCharacteristicsOrNull(openCameraId, "video capability timestamp source")
+                    ?: resolvedCharacteristics
+            }
 
         val requestedConfig = _state.value.videoConfig
         val snapshot = VideoCapabilitiesResolver.resolve(
             characteristics = resolvedCharacteristics,
             requestedConfig = requestedConfig,
             algorithmicStabilizationSupported =
-                realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics) &&
-                    !isEnhancedStabilizationUnavailableForCurrentCamera(),
+                realtimeStabilizationCoordinator.isCameraSupported(
+                    resolvedCharacteristics,
+                    resolvedTimingCharacteristics,
+                ) && !isEnhancedStabilizationUnavailableForCurrentCamera(),
         )
         if (snapshot.config.logProfile != requestedConfig.logProfile) {
             PLog.w(
@@ -3563,7 +3584,10 @@ class Camera2Controller(private val context: Context) {
                         (outputPhysicalCameraId?.let {
                             !isPhysicalOutputProfileFailed(it, ImageFormat.YCBCR_P010)
                         } ?: true)
-                val resolvedVideoPreviewSize = refreshVideoCapabilities(openCharacteristics)
+                val resolvedVideoPreviewSize = refreshVideoCapabilities(
+                    characteristics = capabilityCharacteristics,
+                    timingCharacteristics = openCharacteristics,
+                )
                 previewSize = when (captureMode) {
                     CaptureMode.VIDEO -> resolvedVideoPreviewSize
                     CaptureMode.PHOTO -> CameraUtils.getFixedPreviewSize(openCharacteristics, _state.value.aspectRatio)
@@ -3949,7 +3973,7 @@ class Camera2Controller(private val context: Context) {
         state: CameraState,
         highSpeedVideo: Boolean,
     ): String? {
-        if (!keepUltraWideAeReady || ultraWideAeMeteringSuppressed) return null
+        if (!keepUltraWideAeReady || ultraWideAeMeteringSuppressed || _topOffPositionLockActive.value) return null
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || highSpeedVideo) return null
         if (spatialVideoEnabled || dualCaptureEnabled) return null
 
@@ -4109,6 +4133,11 @@ class Camera2Controller(private val context: Context) {
      * to normal AE as soon as that first frame completes.
      */
     private fun applyPendingUltraWideAeHandoff(builder: CaptureRequest.Builder) {
+        if (_topOffPositionLockActive.value) {
+            pendingUltraWideAeHandoff = null
+            ultraWideAeHandoffActiveForSession = false
+            return
+        }
         val reading = pendingUltraWideAeHandoff ?: return
         val ageMs = SystemClock.elapsedRealtime() - reading.sampledAtElapsedRealtimeMs
         val currentState = _state.value
@@ -4245,14 +4274,16 @@ class Camera2Controller(private val context: Context) {
         // createCaptureSession closes the previous session before onConfigured runs.
         // Stop exposing it while the replacement is being configured.
         invalidateCaptureSession(captureSession, "preview session replacement")
-        if (!keepUltraWideAeReady) {
+        if (!keepUltraWideAeReady || _topOffPositionLockActive.value) {
             closeUltraWideAeMeteringReader()
             activeUltraWideAeMeteringPhysicalCameraId = null
             ultraWideAeMeteringSessionAttached = false
             latestUltraWideAeReading = null
             pendingUltraWideAeHandoff = null
             ultraWideAeHandoffActiveForSession = false
-            ultraWideAeMeteringSuppressed = false
+            if (!keepUltraWideAeReady) {
+                ultraWideAeMeteringSuppressed = false
+            }
         }
         val captureMode = _state.value.captureMode
         val reader = imageReader
@@ -4317,7 +4348,9 @@ class Camera2Controller(private val context: Context) {
         val ultraWidePreviewSurface = if (usesUltraWideDualCapture) dualCapturePreviewSurface else null
         val ultraWideRecordSurface = if (usesUltraWideDualCapture) dualCaptureRecordSurface else null
         val ultraWidePhysicalCameraId = dualCapturePhysicalCameraId
-        val ultraWideAeMeteringPhysicalCameraId = if (dualAspectRecordingActive) {
+        val ultraWideAeMeteringPhysicalCameraId = if (
+            dualAspectRecordingActive || _topOffPositionLockActive.value
+        ) {
             null
         } else {
             resolveUltraWideAeMeteringPhysicalCameraId(
@@ -4801,8 +4834,8 @@ class Camera2Controller(private val context: Context) {
                 _topOffPositionLockActive.value = false
                 if (_state.value.videoRecordingState.isRecording || videoRecorder.isRecording()) {
                     videoRecorder.forceStop()
-                } else if (cameraDevice != null && previewSurface != null) {
-                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                } else {
+                    reconfigureCameraForPositionLockModeChange("MGC stabilization input unavailable")
                 }
             }
 
@@ -10542,22 +10575,87 @@ class Camera2Controller(private val context: Context) {
             return false
         }
         val cameraInfo = currentState.getCurrentCameraInfo() ?: return false
-        // A lens in the Normal Video pair becomes the selected standalone physical source
-        // when Position Lock shuts down the auxiliary standby stream.
+        // Position Lock can deliberately pin the physical sensor selected by the current
+        // zoom ratio, even while the normal preview is using logical multi-camera switching.
+        val selectedPhysicalCameraCanBePinned =
+            resolveRequestedPhysicalCameraId(currentState, cameraInfo)?.isNotBlank() == true
         val normalVideoPairLensSelected =
             normalVideoUltraWideInstantSwitchActive &&
                 isCurrentNormalVideoPairLens(cameraInfo)
-        // Once Position Lock takes over, the pair standby is closed and the selected sensor
-        // is pinned as an explicit physical output. Keep Top-Off controls available on it.
         val explicitlyPinnedPhysicalLens =
             activeOutputPhysicalCameraId?.isNotBlank() == true &&
                 !logicalMultiCameraAutoSwitchActive
         if (
             shouldUseLogicalMultiCameraZoom(currentState, cameraInfo) &&
+            !selectedPhysicalCameraCanBePinned &&
             !normalVideoPairLensSelected && !explicitlyPinnedPhysicalLens
         ) return false
         val activeArray = cameraInfo.activeArraySize ?: return false
         return activeArray.width() > 0 && activeArray.height() > 0
+    }
+
+    /**
+     * Validate the exact sensor that Position Lock will pin. In the normal instant-switch
+     * path the visible ultra-wide may be a standby output, so the active MGC calibration
+     * can still belong to the main sensor; validate the selected sensor directly instead.
+     */
+    private fun isTopOffPositionLockCameraSupported(): Boolean {
+        val state = _state.value
+        val cameraInfo = state.getCurrentCameraInfo() ?: return false
+        val openCameraId = runCatching { cameraInfo.getOpenCameraId() }.getOrNull()
+            ?.takeIf { it.isNotBlank() } ?: return false
+        val physicalCameraId = resolveRequestedPhysicalCameraId(state, cameraInfo)
+            ?.takeIf { it.isNotBlank() }
+        val capabilityCameraId = physicalCameraId ?: openCameraId
+        val sensorCharacteristics = getCameraCharacteristicsOrNull(
+            capabilityCameraId,
+            "MGC Position Lock selected sensor",
+        ) ?: return false
+        val timingCharacteristics = if (capabilityCameraId == openCameraId) {
+            sensorCharacteristics
+        } else {
+            getCameraCharacteristicsOrNull(
+                openCameraId,
+                "MGC Position Lock timestamp source",
+            ) ?: return false
+        }
+        if (!realtimeStabilizationCoordinator.isCameraSupported(
+                sensorCharacteristics,
+                timingCharacteristics,
+            )
+        ) return false
+        if (capabilityCameraId == currentStabilizationCameraId() &&
+            !realtimeStabilizationCoordinator.isCurrentCameraSupported
+        ) return false
+        if (capabilityCameraId in enhancedStabilizationUnavailableCameraIds) return false
+
+        val activeCapabilityCameraId = activeOutputPhysicalCameraId
+            ?.takeIf { it.isNotBlank() && !logicalMultiCameraAutoSwitchActive }
+            ?: activeOpenCameraId
+        if (capabilityCameraId == activeCapabilityCameraId) {
+            return state.videoCapabilities.enhancedStabilizationInputSizesByResolution[
+                state.videoConfig.resolution
+            ]?.let { it.width > 0 && it.height > 0 } == true
+        }
+
+        val cacheKey = "${capabilityCameraId}|${state.videoConfig.hashCode()}"
+        if (topOffPositionLockCapabilityCacheKey == cacheKey) {
+            return topOffPositionLockCapabilityCacheAvailable
+        }
+        val candidateCapabilities = runCatching {
+            VideoCapabilitiesResolver.resolve(
+                characteristics = sensorCharacteristics,
+                requestedConfig = state.videoConfig,
+                algorithmicStabilizationSupported = true,
+            ).capabilities
+        }.getOrNull()
+        val available = candidateCapabilities
+            ?.enhancedStabilizationInputSizesByResolution
+            ?.get(state.videoConfig.resolution)
+            ?.let { it.width > 0 && it.height > 0 } == true
+        topOffPositionLockCapabilityCacheKey = cacheKey
+        topOffPositionLockCapabilityCacheAvailable = available
+        return available
     }
 
     fun isTopOffPositionLockAvailable(): Boolean {
@@ -10570,16 +10668,38 @@ class Camera2Controller(private val context: Context) {
             dualCaptureEnabled || dualAspectRecordingActive ||
             !isTopOffZoomAvailable()
         ) return false
-        return current.videoCapabilities.enhancedStabilizationInputSizesByResolution[
-            current.videoConfig.resolution
-        ]?.let { it.width > 0 && it.height > 0 } == true &&
-            realtimeStabilizationCoordinator.isCurrentCameraSupported
+        return isTopOffPositionLockCameraSupported()
+    }
+
+    /**
+     * Reopen Camera2 so logical zoom is disabled and the selected physical sensor is
+     * applied consistently to preview, MGC YUV input, Camera2 metadata and calibration.
+     */
+    private fun reconfigureCameraForPositionLockModeChange(reason: String) {
+        if (_topOffPositionLockActive.value && normalVideoUltraWideInstantSwitchActive) {
+            clearNormalVideoUltraWideInstantSwitchRuntime(
+                "MGC Position Lock requires one active physical lens: $reason",
+                reopenSelectedCamera = false,
+            )
+        } else if (_topOffPositionLockActive.value && !spatialVideoEnabled) {
+            // Defensive cleanup for a stale concurrent standby left by a previous session.
+            stopSpatialVideoStandbyCamera("MGC Position Lock requires one active camera: $reason")
+        }
+
+        val texture = previewSurfaceTexture
+        if (texture != null) {
+            openCamera(texture, preserveVideoRecording = false)
+        } else if (cameraDevice != null && previewSurface != null) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+        } else {
+            PLog.w(TAG, "Position Lock mode changed before the preview surface was ready: $reason")
+        }
     }
 
     /** Activates MGC's fixed-reference pose renderer for the live preview. */
     fun setTopOffPositionLockActive(enabled: Boolean): Boolean {
         if (enabled && !isTopOffPositionLockAvailable()) {
-            PLog.w(TAG, "Position Lock rejected: unsupported camera, FPS, or recording state")
+            PLog.w(TAG, "Position Lock rejected: selected physical sensor or input stream is unsupported")
             return false
         }
         if (!enabled && (_state.value.videoRecordingState.isRecording || videoRecorder.isRecording())) {
@@ -10588,39 +10708,25 @@ class Camera2Controller(private val context: Context) {
         }
         if (_topOffPositionLockActive.value == enabled) return true
 
+        _topOffPositionLockActive.value = enabled
+        PLog.i(
+            TAG,
+            "MGC Position Lock " + (if (enabled) "enabled" else "disabled") + "; " +
+                "selected=${_state.value.currentCameraId}, " +
+                "physical=${resolveRequestedPhysicalCameraId(_state.value, _state.value.getCurrentCameraInfo())}",
+        )
+
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
-            // Set this guard before posting so openCamera() cannot start a new standby stream.
-            _topOffPositionLockActive.value = enabled
-            PLog.i(TAG, "MGC Position Lock ${if (enabled) "enabled" else "disabled"}")
             handler.post {
-                if (enabled && normalVideoUltraWideInstantSwitchActive) {
-                    clearNormalVideoUltraWideInstantSwitchRuntime(
-                        "MGC Position Lock requires one active physical lens",
-                        reopenSelectedCamera = true,
-                    )
-                } else if (
-                    cameraDevice != null && previewSurface != null &&
-                    !_state.value.videoRecordingState.isRecording && !videoRecorder.isRecording()
-                ) {
-                    createPreviewSession(openGeneration = cameraOpenGeneration)
-                }
+                reconfigureCameraForPositionLockModeChange(
+                    if (enabled) "enabled" else "disabled",
+                )
             }
-            return true
-        }
-
-        _topOffPositionLockActive.value = enabled
-        PLog.i(TAG, "MGC Position Lock ${if (enabled) "enabled" else "disabled"}")
-        if (enabled && normalVideoUltraWideInstantSwitchActive) {
-            clearNormalVideoUltraWideInstantSwitchRuntime(
-                "MGC Position Lock requires one active physical lens",
-                reopenSelectedCamera = true,
+        } else {
+            reconfigureCameraForPositionLockModeChange(
+                if (enabled) "enabled" else "disabled",
             )
-        } else if (
-            cameraDevice != null && previewSurface != null &&
-            !_state.value.videoRecordingState.isRecording && !videoRecorder.isRecording()
-        ) {
-            createPreviewSession(openGeneration = cameraOpenGeneration)
         }
         return true
     }
