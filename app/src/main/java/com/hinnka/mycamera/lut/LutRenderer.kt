@@ -1238,10 +1238,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                                 previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
                                     completedFrame.transform == null &&
                                     currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
-                            if (holdPreviousPhotoPreviewFrame) {
-                                // A dropped photo-preview frame has no pose. Showing it with an identity
-                                // transform would make the view jump for one frame; retain the last fully
-                                // stabilized texture until a frame with matching metadata is available.
+                            val droppedPositionLockFrame =
+                                previewStabilizationUseCase == StabilizationUseCase.POSITION_LOCK &&
+                                    completedFrame.transform == null
+                            if (holdPreviousPhotoPreviewFrame || droppedPositionLockFrame) {
+                                // A dropped frame has no valid pose. Never synthesize a centered crop
+                                // for Position Lock: before the first valid pose keep the already-cropped
+                                // OES preview, then retain the last stabilized texture until pose coverage
+                                // returns. This prevents a one-frame jump away from the locked anchor.
                                 completedFrame.image.close()
                             } else {
                                 renderMgcEisFrame(completedFrame)?.let { rendered ->
