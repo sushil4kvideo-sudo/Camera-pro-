@@ -56,10 +56,18 @@ data class TopOffPanPreset(
         const val BUILTIN_GYRO_AXIS_BALANCE_ID = "builtin_gyro_axis_balance"
         const val BUILTIN_AI_SUBJECT_TRACKING_ID = "builtin_ai_subject_tracking"
 
-        private fun gyroPreset(id: String, name: String, mode: GyroPanMode) = TopOffPanPreset(
+        private fun gyroPreset(
+            id: String,
+            name: String,
+            mode: GyroPanMode,
+            zoomRatio: Float = 2f,
+        ) = TopOffPanPreset(
             id = id,
             name = name,
-            points = listOf(TopOffPanWaypoint(0f, 0f, 2f), TopOffPanWaypoint(0f, 0f, 2f)),
+            points = listOf(
+                TopOffPanWaypoint(0f, 0f, zoomRatio),
+                TopOffPanWaypoint(0f, 0f, zoomRatio),
+            ),
             segmentDurationMs = 0L,
             gyroMode = mode,
         )
@@ -85,7 +93,14 @@ data class TopOffPanPreset(
             ),
             gyroPreset(BUILTIN_GYRO_POSITION_LOCK_ID, "Gyro Position Lock", GyroPanMode.POSITION_LOCK),
             gyroPreset(BUILTIN_GYRO_ANTI_SHAKE_ID, "Gyro Anti-Shake", GyroPanMode.ANTI_SHAKE),
-            gyroPreset(BUILTIN_GYRO_HORIZON_LOCK_ID, "Gyro Horizon Lock", GyroPanMode.HORIZON_LOCK),
+            // Horizon Lock has its own fixed roll-cover scale; start at 1x so the two
+            // crop multipliers do not stack and unnecessarily magnify the image.
+            gyroPreset(
+                BUILTIN_GYRO_HORIZON_LOCK_ID,
+                "Gyro Horizon Lock",
+                GyroPanMode.HORIZON_LOCK,
+                zoomRatio = 1f,
+            ),
             gyroPreset(BUILTIN_GYRO_SMOOTH_FOLLOW_ID, "Gyro Smooth Follow", GyroPanMode.SMOOTH_FOLLOW),
             gyroPreset(BUILTIN_GYRO_AXIS_BALANCE_ID, "Auto Axis Balance", GyroPanMode.AUTO_AXIS_BALANCE),
             TopOffPanPreset(
