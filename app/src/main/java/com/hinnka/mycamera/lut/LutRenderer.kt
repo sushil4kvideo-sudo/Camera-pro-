@@ -3122,8 +3122,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     ) {
         val normalizedStrength = normalizeStabilizationStrength(strength)
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
-        val normalizedPositionLockCropZoom = positionLockCropZoom
-            .takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM
+        val normalizedPositionLockCropZoom =
+            if (useCase == StabilizationUseCase.POSITION_LOCK) {
+                positionLockCropZoom.takeIf { it.isFinite() }?.coerceIn(1f, 10f)
+                    ?: POSITION_LOCK_CROP_ZOOM
+            } else {
+                POSITION_LOCK_CROP_ZOOM
+            }
         if (previewStabilizationUseCase == useCase &&
             abs(previewStabilizationStrength - normalizedStrength) <= 0.0001f &&
             previewStabilizationLookahead == normalizedLookahead &&
