@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.camera.GyroPanFilterMath
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
@@ -65,6 +66,7 @@ class RealtimeVideoRenderer(
     cameraInputPanX: Float = 0f,
     cameraInputPanY: Float = 0f,
     cameraInputRollDegrees: Float = 0f,
+    cameraInputFixedRollCover: Boolean = false,
     private val watermarkLabel: String? = null,
     private val switchableCameraInputSize: Size? = null,
     private val switchableCameraSensorOrientationDegrees: Int = 0,
@@ -153,7 +155,8 @@ class RealtimeVideoRenderer(
     @Volatile private var currentCameraInputPanY =
         cameraInputPanY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
     @Volatile private var currentCameraInputRollDegrees =
-        cameraInputRollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+        cameraInputRollDegrees.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
+    @Volatile private var currentCameraInputFixedRollCover = cameraInputFixedRollCover
     @Volatile private var cameraTransformAxesSwapped: Boolean? = null
     @Volatile private var currentCameraSensorOrientationDegrees = sensorOrientationDegrees
     @Volatile private var cameraSensorOrientationFallbackApplied = false
@@ -233,11 +236,13 @@ class RealtimeVideoRenderer(
         panX: Float,
         panY: Float,
         rollDegrees: Float = 0f,
+        fixedRollCover: Boolean = false,
     ) {
         currentCameraInputZoomRatio = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
         currentCameraInputPanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         currentCameraInputPanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        currentCameraInputRollDegrees = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+        currentCameraInputRollDegrees = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
+        currentCameraInputFixedRollCover = fixedRollCover
         PLog.d(
             TAG,
             "Live software crop updated: zoom=$currentCameraInputZoomRatio, " +
@@ -1031,14 +1036,18 @@ class RealtimeVideoRenderer(
         height: Int,
     ): FloatArray {
         val angle = Math.toRadians(currentCameraInputRollDegrees.toDouble())
-        if (kotlin.math.abs(angle) < 0.0001) return baseMatrix
+        if (kotlin.math.abs(angle) < 0.0001 && !currentCameraInputFixedRollCover) return baseMatrix
         val aspect = (width.toFloat() / height.coerceAtLeast(1).toFloat()).coerceIn(0.1f, 10f)
         val cosine = kotlin.math.cos(angle).toFloat()
         val sine = kotlin.math.sin(angle).toFloat()
-        val coverScale = maxOf(
-            kotlin.math.abs(cosine) + kotlin.math.abs(sine) / aspect,
-            kotlin.math.abs(sine) * aspect + kotlin.math.abs(cosine),
-        )
+        val coverScale = if (currentCameraInputFixedRollCover) {
+            GyroPanFilterMath.horizonLockCoverScale(aspect)
+        } else {
+            maxOf(
+                kotlin.math.abs(cosine) + kotlin.math.abs(sine) / aspect,
+                kotlin.math.abs(sine) * aspect + kotlin.math.abs(cosine),
+            )
+        }
         val rollMatrix = FloatArray(16)
         Matrix.setIdentityM(rollMatrix, 0)
         rollMatrix[0] = cosine * coverScale
