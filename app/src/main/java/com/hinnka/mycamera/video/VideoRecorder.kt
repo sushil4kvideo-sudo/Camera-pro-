@@ -44,6 +44,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class VideoRecorder(
     private val context: Context,
@@ -103,10 +105,19 @@ class VideoRecorder(
         val endFrameExclusive: Int,
     )
 
+    private data class CameraInputCropUpdate(
+        val zoomRatio: Float,
+        val panX: Float,
+        val panY: Float,
+        val rollDegrees: Float,
+    )
+
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val renderDispatcher: ExecutorCoroutineDispatcher =
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    private val pendingCameraInputCrop = AtomicReference<CameraInputCropUpdate?>(null)
+    private val cameraInputCropDispatchScheduled = AtomicBoolean(false)
     private val muxerLock = Any()
     private val timelineLock = Any()
     private val realtimeFrameLock = Any()
@@ -711,13 +722,38 @@ class VideoRecorder(
         requestedCameraInputPanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         requestedCameraInputPanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         requestedCameraInputRollDegrees = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
-        val safeZoom = requestedCameraInputZoomRatio
-        val safePanX = requestedCameraInputPanX
-        val safePanY = requestedCameraInputPanY
-        val safeRoll = requestedCameraInputRollDegrees
+        pendingCameraInputCrop.set(
+            CameraInputCropUpdate(
+                requestedCameraInputZoomRatio,
+                requestedCameraInputPanX,
+                requestedCameraInputPanY,
+                requestedCameraInputRollDegrees,
+            )
+        )
+        dispatchPendingCameraInputCrop()
+    }
+
+    private fun dispatchPendingCameraInputCrop() {
+        if (!cameraInputCropDispatchScheduled.compareAndSet(false, true)) return
         scope.launch(renderDispatcher) {
-            if (!isRecording || stopRequested) return@launch
-            renderer?.updateCameraInputCrop(safeZoom, safePanX, safePanY, safeRoll)
+            try {
+                // A queued gyro update is replaceable: applying an old crop after a newer
+                // orientation sample is what makes the recorded frame visibly catch up/jump.
+                val update = pendingCameraInputCrop.getAndSet(null)
+                if (update != null && isRecording && !stopRequested) {
+                    renderer?.updateCameraInputCrop(
+                        update.zoomRatio,
+                        update.panX,
+                        update.panY,
+                        update.rollDegrees,
+                    )
+                }
+            } finally {
+                cameraInputCropDispatchScheduled.set(false)
+                if (pendingCameraInputCrop.get() != null && isRecording && !stopRequested) {
+                    dispatchPendingCameraInputCrop()
+                }
+            }
         }
     }
 

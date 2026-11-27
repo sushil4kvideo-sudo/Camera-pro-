@@ -2848,8 +2848,36 @@ fun CameraScreen(
                     viewModel::panZoomBy
                 },
                 onGyroPanUpdate = { panX, panY, rollDegrees ->
-                    // StateFlow is the single preview-update path. The parent effect queues one
-                    // GL update; the controller separately forwards live changes to the encoder.
+                    // Push the preview correction straight to GL from the sensor callback.
+                    // Waiting for StateFlow -> Compose recomposition -> LaunchedEffect adds
+                    // avoidable frame latency to a closed-loop position stabilizer.
+                    val selectedCameraInfo = state.getCurrentCameraInfo()
+                    val isSelectedUltraWide = selectedCameraInfo?.let { camera ->
+                        camera.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                            camera.intrinsicZoomRatio.isFinite() &&
+                            camera.intrinsicZoomRatio in 0.2f..0.85f
+                    } == true
+                    val normalUltraWideTextureIsVisible =
+                        normalVideoUltraWideInstantSwitchActive && isSelectedUltraWide
+                    val cropActive = topOffZoomEnabled &&
+                        state.captureMode == CaptureMode.VIDEO &&
+                        (state.zoomRatio >= 1f || isSelectedUltraWide) &&
+                        !spatialVideoEnabled && !dualCaptureEnabled &&
+                        !normalUltraWideTextureIsVisible
+                    val lockedZoom = if (isSelectedUltraWide) {
+                        topOffZoomFactor.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
+                    } else {
+                        topOffZoomLockedRatio.takeIf { it.isFinite() && it >= 1f }
+                            ?: (state.zoomRatio.coerceAtLeast(1f) * topOffZoomFactor)
+                    }
+                    cameraGLSurfaceView?.setTopOffZoomCrop(
+                        enabled = cropActive,
+                        zoomRatio = if (cropActive) lockedZoom else 1f,
+                        panX = if (cropActive) panX else 0f,
+                        panY = if (cropActive) panY else 0f,
+                        rollDegrees = if (cropActive) rollDegrees else 0f,
+                    )
+                    // The ViewModel keeps Compose state and the recording renderer in sync.
                     viewModel.setTopOffGyroPanCorrection(panX, panY, rollDegrees)
                 },
                 sideControlInset = if (isXpan) {

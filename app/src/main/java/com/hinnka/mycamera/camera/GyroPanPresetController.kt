@@ -99,13 +99,26 @@ class GyroPanPresetController(
             return false
         }
         val callbackThread = HandlerThread("GyroPanSensor-$mode").apply { start() }
+        val samplingHandler = Handler(callbackThread.looper)
         val registered = runCatching {
-            sensorManager.registerListener(
-                this,
-                sensor,
-                SensorManager.SENSOR_DELAY_GAME,
-                Handler(callbackThread.looper),
-            )
+            if (mode == GyroPanMode.POSITION_LOCK) {
+                // Position Lock is a stabilization loop, not a gesture recognizer. Request
+                // low-latency samples and do not let Android batch them behind old samples.
+                sensorManager.registerListener(
+                    this,
+                    sensor,
+                    POSITION_LOCK_SAMPLING_PERIOD_US,
+                    0,
+                    samplingHandler,
+                )
+            } else {
+                sensorManager.registerListener(
+                    this,
+                    sensor,
+                    SensorManager.SENSOR_DELAY_GAME,
+                    samplingHandler,
+                )
+            }
         }.onFailure { error ->
             PLog.e(TAG, "Failed to register orientation sensor listener", error)
         }.getOrDefault(false)
@@ -117,7 +130,8 @@ class GyroPanPresetController(
         PLog.i(
             TAG,
             "START mode=$mode sensor=${sensor.name} type=${sensor.type} vendor=${sensor.vendor} " +
-                "delay=GAME thread=dedicated registered=$registered"
+                "delay=${if (mode == GyroPanMode.POSITION_LOCK) "${POSITION_LOCK_SAMPLING_PERIOD_US}us" else "GAME"} " +
+                "thread=dedicated registered=$registered"
         )
         return registered
     }
@@ -199,9 +213,24 @@ class GyroPanPresetController(
             val deltaSeconds = resolveDeltaSeconds(event.timestamp)
             // SensorManager's historical orientation convention is negative X pitch,
             // positive Y roll, and negative Z azimuth for a positive matrix rotation.
-            val opticalRoll = deadZone(-relativeRotationVector[2])
-            val verticalAngle = deadZone(-relativeRotationVector[0])
-            val horizontalAngle = deadZone(relativeRotationVector[1])
+            // Position Lock must react to sub-pixel angular changes. The shared dead-zone
+            // used by the other presets was suppressing the first 0.04 degrees of motion.
+            val precisePositionLock = mode == GyroPanMode.POSITION_LOCK
+            val opticalRoll = if (precisePositionLock) {
+                -relativeRotationVector[2]
+            } else {
+                deadZone(-relativeRotationVector[2])
+            }
+            val verticalAngle = if (precisePositionLock) {
+                -relativeRotationVector[0]
+            } else {
+                deadZone(-relativeRotationVector[0])
+            }
+            val horizontalAngle = if (precisePositionLock) {
+                relativeRotationVector[1]
+            } else {
+                deadZone(relativeRotationVector[1])
+            }
             val correction = calculateCorrection(
                 horizontalAngle = horizontalAngle,
                 verticalAngle = verticalAngle,
@@ -210,9 +239,14 @@ class GyroPanPresetController(
             )
 
             sensorEventCount++
+            val panUpdateEpsilon = if (precisePositionLock) {
+                POSITION_LOCK_UPDATE_EPSILON
+            } else {
+                UPDATE_EPSILON
+            }
             if (
-                abs(correction.panX - lastCorrection.panX) >= UPDATE_EPSILON ||
-                abs(correction.panY - lastCorrection.panY) >= UPDATE_EPSILON ||
+                abs(correction.panX - lastCorrection.panX) >= panUpdateEpsilon ||
+                abs(correction.panY - lastCorrection.panY) >= panUpdateEpsilon ||
                 abs(correction.rollDegrees - lastCorrection.rollDegrees) >= ROLL_UPDATE_EPSILON
             ) {
                 lastCorrection = correction
@@ -413,6 +447,8 @@ class GyroPanPresetController(
         const val SMOOTH_FOLLOW_TIME_CONSTANT_SECONDS = 0.22f
         const val DEAD_ZONE_RADIANS = 0.04f * DEG_TO_RAD
         const val UPDATE_EPSILON = 0.0008f
+        const val POSITION_LOCK_UPDATE_EPSILON = 0.000005f
+        const val POSITION_LOCK_SAMPLING_PERIOD_US = 5_000
         const val ROLL_UPDATE_EPSILON = 0.025f
         const val DEFAULT_DELTA_SECONDS = 1f / 60f
         const val MIN_DELTA_SECONDS = 1f / 500f

@@ -26,6 +26,8 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 相机预览 GLSurfaceView
@@ -42,7 +44,17 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         private const val TAG = "CameraGLSurfaceView"
     }
 
+    private data class PendingTopOffZoomCrop(
+        val enabled: Boolean,
+        val zoomRatio: Float,
+        val panX: Float,
+        val panY: Float,
+        val rollDegrees: Float,
+    )
+
     private val renderer: LutRenderer = LutRenderer(context.applicationContext)
+    private val pendingTopOffZoomCrop = AtomicReference<PendingTopOffZoomCrop?>(null)
+    private val topOffZoomCropUpdateQueued = AtomicBoolean(false)
     private var currentStabilizationCoordinator: RealtimeStabilizationCoordinator? = null
     private var currentPreviewStabilizationUseCase: StabilizationUseCase? = null
     private var currentPreviewStabilizationStrength = 0f
@@ -205,9 +217,35 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         panY: Float,
         rollDegrees: Float = 0f,
     ) {
+        // Sensor updates can arrive faster than the GL thread can render. Keep only the
+        // newest transform instead of queuing every obsolete intermediate correction.
+        pendingTopOffZoomCrop.set(
+            PendingTopOffZoomCrop(enabled, zoomRatio, panX, panY, rollDegrees)
+        )
+        scheduleTopOffZoomCropUpdate()
+    }
+
+    private fun scheduleTopOffZoomCropUpdate() {
+        if (!topOffZoomCropUpdateQueued.compareAndSet(false, true)) return
         queueEvent {
-            renderer.setTopOffZoomCrop(enabled, zoomRatio, panX, panY, rollDegrees)
-            requestRender()
+            try {
+                pendingTopOffZoomCrop.getAndSet(null)?.let { update ->
+                    renderer.setTopOffZoomCrop(
+                        update.enabled,
+                        update.zoomRatio,
+                        update.panX,
+                        update.panY,
+                        update.rollDegrees,
+                    )
+                }
+            } finally {
+                topOffZoomCropUpdateQueued.set(false)
+                // Close the race where a new sample arrived while the GL task was running.
+                if (pendingTopOffZoomCrop.get() != null) {
+                    scheduleTopOffZoomCropUpdate()
+                }
+                requestRender()
+            }
         }
     }
 

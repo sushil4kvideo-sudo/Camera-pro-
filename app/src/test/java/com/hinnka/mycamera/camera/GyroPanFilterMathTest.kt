@@ -171,6 +171,20 @@ class GyroPanFilterMathTest {
     }
 
     @Test
+    fun positionLockRespondsToSubPixelAngularChanges() {
+        val smallAngleRadians = Math.toRadians(0.005).toFloat()
+        val pan = GyroPanFilterMath.positionLockHorizontalPan(
+            basePanX = 0f,
+            horizontalAngleRadians = smallAngleRadians,
+            fieldOfViewDegrees = 70f,
+            zoomRatio = 2f,
+        )
+
+        assertTrue("A tiny but real angular change must not be rounded to zero", pan > 0f)
+        assertTrue("Tiny movement must stay proportional, not jump", pan < 0.001f)
+    }
+
+    @Test
     fun normalizedPanIsZeroWhenThereIsNoCropTravelAtOneX() {
         assertEquals(
             0f,

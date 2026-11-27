@@ -3220,8 +3220,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
         if (topOffZoomCropEnabled == enabled &&
             kotlin.math.abs(topOffZoomCropRatio - safeZoom) <= 0.0001f &&
-            kotlin.math.abs(topOffZoomCropPanX - safePanX) <= 0.0001f &&
-            kotlin.math.abs(topOffZoomCropPanY - safePanY) <= 0.0001f &&
+            kotlin.math.abs(topOffZoomCropPanX - safePanX) <= 0.000001f &&
+            kotlin.math.abs(topOffZoomCropPanY - safePanY) <= 0.000001f &&
             kotlin.math.abs(topOffZoomCropRollDegrees - safeRoll) <= 0.005f
         ) return
         topOffZoomCropEnabled = enabled
