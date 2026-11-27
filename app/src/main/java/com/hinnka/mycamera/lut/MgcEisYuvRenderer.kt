@@ -3,6 +3,7 @@ package com.hinnka.mycamera.lut
 import android.media.Image
 import android.opengl.GLES30
 import android.opengl.GLES31
+import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
 import com.hinnka.mycamera.stabilization.STABILIZATION_ROW_COUNT
 import com.hinnka.mycamera.stabilization.StabilizationFrame
 import com.hinnka.mycamera.utils.PLog
@@ -21,7 +22,7 @@ internal class MgcEisYuvRenderer(private val tag: String) {
     // Preserve the active mode's crop even if an individual timestamp loses pose coverage.
     private fun droppedFrameHomographies(positionLock: Boolean): FloatArray =
         FloatArray(STABILIZATION_ROW_COUNT * 9).also { values ->
-            val h22 = if (positionLock) 0.5f else 0.9f
+            val h22 = if (positionLock) 1f / POSITION_LOCK_CROP_ZOOM else 0.9f
             repeat(STABILIZATION_ROW_COUNT) { row ->
                 val offset = row * 9
                 values[offset] = 1f
