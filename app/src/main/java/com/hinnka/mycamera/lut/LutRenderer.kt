@@ -272,6 +272,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var stabilizationOutputAvailable = false
     private var previewStabilizationUseCase: StabilizationUseCase? = null
     private var previewStabilizationStrength = 0f
+    private var previewPositionLockCropZoom = POSITION_LOCK_CROP_ZOOM
     private var currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
     private var currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
     private var currentCameraTextureId = 0
@@ -1573,7 +1574,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             stabilizationCoordinator?.isCurrentCameraSupported == true
         val pendingStabilizationCropZoom = if (
             previewStabilizationUseCase == StabilizationUseCase.POSITION_LOCK
-        ) POSITION_LOCK_CROP_ZOOM else EIS_OUTPUT_CROP_ZOOM
+        ) previewPositionLockCropZoom else EIS_OUTPUT_CROP_ZOOM
         val baseMatrix = if (targetWidth == viewportWidth && targetHeight == viewportHeight) {
             when {
                 stabilized -> stabilizationMvpMatrix
@@ -3117,18 +3118,23 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         useCase: StabilizationUseCase?,
         strength: Float,
         lookaheadFrames: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+        positionLockCropZoom: Float = POSITION_LOCK_CROP_ZOOM,
     ) {
         val normalizedStrength = normalizeStabilizationStrength(strength)
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
+        val normalizedPositionLockCropZoom = positionLockCropZoom
+            .takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM
         if (previewStabilizationUseCase == useCase &&
             abs(previewStabilizationStrength - normalizedStrength) <= 0.0001f &&
-            previewStabilizationLookahead == normalizedLookahead
+            previewStabilizationLookahead == normalizedLookahead &&
+            abs(previewPositionLockCropZoom - normalizedPositionLockCropZoom) <= 0.0001f
         ) {
             return
         }
         previewStabilizationUseCase = useCase
         previewStabilizationStrength = normalizedStrength
         previewStabilizationLookahead = normalizedLookahead
+        previewPositionLockCropZoom = normalizedPositionLockCropZoom
         PLog.i(
             TAG,
             "Preview stabilization useCase=${useCase?.name ?: "OFF"}, " +
@@ -3157,6 +3163,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 frameWidth = stabilizationInputWidth,
                 frameHeight = stabilizationInputHeight,
                 lookaheadFrames = previewStabilizationLookahead,
+                positionLockCropZoom = previewPositionLockCropZoom,
                 onFrameAvailable = {
                     if (cameraGeneration == sessionGeneration) {
                         onRequestRender?.invoke()
