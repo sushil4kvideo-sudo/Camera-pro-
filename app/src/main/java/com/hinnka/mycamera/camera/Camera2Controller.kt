@@ -10518,34 +10518,6 @@ class Camera2Controller(private val context: Context) {
         return pair != null
     }
 
-    fun setNormalVideoUltraWideInstantSwitchEnabled(enabled: Boolean) {
-        val handler = cameraHandler
-        if (handler != null && Looper.myLooper() != handler.looper) {
-            handler.post { setNormalVideoUltraWideInstantSwitchEnabled(enabled) }
-            return
-        }
-        if (_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isProcessing) {
-            PLog.i(TAG, "Normal Video instant-switch setting is locked while recording")
-            onCameraError?.invoke(-1, "Stop recording before changing the Normal Video instant-switch setting.", false)
-            return
-        }
-        normalVideoUltraWideInstantSwitchEnabled = enabled
-        if (!enabled) {
-            clearNormalVideoUltraWideInstantSwitchRuntime("setting disabled", reopenSelectedCamera = true)
-            return
-        }
-        if (spatialVideoEnabled ||
-            (_state.value.captureMode != CaptureMode.VIDEO && _state.value.captureMode != CaptureMode.PHOTO)
-        ) return
-        if (_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isProcessing) {
-            PLog.i(TAG, "Normal Video instant-switch setting will apply after recording finishes")
-            return
-        }
-        activateNormalVideoUltraWideInstantSwitch(
-            reopenPrimaryIfNeeded = cameraDeviceLifecycle != CameraDeviceLifecycle.OPENING
-        )
-    }
-
     fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) {
         _spatialVideoShowUltraWidePreview.value = enabled
         specialVideoPreferences.edit().putBoolean("show_ultra_wide_preview", enabled).apply()
