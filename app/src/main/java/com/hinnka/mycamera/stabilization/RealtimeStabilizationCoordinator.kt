@@ -23,6 +23,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 const val STABILIZATION_ROW_COUNT = MgcEisNativeEngine.STRIP_COUNT
 const val STABILIZATION_LOOKAHEAD_FRAME_COUNT = MgcEisNativeEngine.LOOKAHEAD_FRAME_COUNT
+// Shared crop ceiling for native output, dropped frames, and the temporary camera-input fallback.
+const val POSITION_LOCK_CROP_ZOOM = 2.5f
 // MGC profile 7 passes 1.0 to setStabilizationStrength. The value is consumed by the packed
 // method-4 look-ahead pose blend; the outer full-grid feasibility correction is independent.
 const val DEFAULT_VIDEO_STABILIZATION_STRENGTH = 1f
@@ -71,7 +73,7 @@ data class StabilizationFrame(
     val transform: AlgorithmicStabilizationTransform?,
     /** Exact Camera2 image whose SENSOR_TIMESTAMP equals [timestampNs]. */
     val image: StabilizationImage,
-    /** True when native MGC holds a fixed virtual-camera pose with a 2x crop. */
+    /** True when native MGC holds a fixed virtual-camera pose with a 2.5x crop. */
     val positionLock: Boolean = false,
 )
 
