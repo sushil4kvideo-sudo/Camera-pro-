@@ -15,6 +15,7 @@ import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
@@ -71,7 +72,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         // Match MGC's fixed 5% per-edge safety crop while the first timestamp-matched
         // stabilization frame is pending, avoiding a visible crop jump at EIS handoff.
         private const val EIS_OUTPUT_CROP_ZOOM = 1.1111112f
-        private const val POSITION_LOCK_OUTPUT_CROP_ZOOM = 2f
         // SurfaceTexture and the timestamp-matched ImageReader output share Camera2 SENSOR_TIMESTAMP.
         // EIS may trail the live OES stream by several lookahead frames.
         private const val MAX_EIS_ORIENTATION_TIMESTAMP_LEAD_NS = 1_000_000_000L
@@ -1569,7 +1569,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             stabilizationCoordinator?.isCurrentCameraSupported == true
         val pendingStabilizationCropZoom = if (
             previewStabilizationUseCase == StabilizationUseCase.POSITION_LOCK
-        ) POSITION_LOCK_OUTPUT_CROP_ZOOM else EIS_OUTPUT_CROP_ZOOM
+        ) POSITION_LOCK_CROP_ZOOM else EIS_OUTPUT_CROP_ZOOM
         val baseMatrix = if (targetWidth == viewportWidth && targetHeight == viewportHeight) {
             when {
                 stabilized -> stabilizationMvpMatrix
