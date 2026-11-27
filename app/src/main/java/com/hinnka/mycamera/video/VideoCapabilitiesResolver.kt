@@ -385,7 +385,8 @@ object VideoCapabilitiesResolver {
 
     private fun isNear12MpInputSize(size: Size): Boolean {
         val pixels = size.width.toLong() * size.height.toLong()
-        return pixels in MIN_12_MP_INPUT_PIXELS..MAX_12_MP_INPUT_PIXELS
+        return pixels in MIN_12_MP_INPUT_PIXELS..MAX_12_MP_INPUT_PIXELS &&
+            maxOf(size.width, size.height) >= VideoResolutionPreset.UHD_2160P.longEdge
     }
 
     private fun findBestOutputSize(
