@@ -10794,12 +10794,13 @@ class Camera2Controller(private val context: Context) {
         _topOffZoomPanX.value = safePanX
         _topOffZoomPanY.value = safePanY
         _topOffZoomRollDegrees.value = safeRoll
-        _topOffZoomFixedRollCover.value = fixedRollCover
 
         val current = _state.value
         val canApplySoftwareCrop = _topOffZoomEnabled.value &&
             current.captureMode == CaptureMode.VIDEO &&
             !spatialVideoEnabled && !dualCaptureEnabled
+        val safeFixedRollCover = fixedRollCover && canApplySoftwareCrop
+        _topOffZoomFixedRollCover.value = safeFixedRollCover
         if (!canApplySoftwareCrop) return
 
         val zoom = (
@@ -10807,10 +10808,10 @@ class Camera2Controller(private val context: Context) {
                 ?: (current.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value)
             ).coerceIn(1f, 20f)
         if (videoRecorder.isRecording()) {
-            videoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, fixedRollCover)
+            videoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, safeFixedRollCover)
         }
         if (dualAspectRecordingActive && spatialVideoRecorder.isRecording()) {
-            spatialVideoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, fixedRollCover)
+            spatialVideoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, safeFixedRollCover)
         }
         _topOffPanLatencyMs.value = 0f
     }
