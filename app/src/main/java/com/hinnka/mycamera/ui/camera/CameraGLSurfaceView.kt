@@ -18,6 +18,7 @@ import com.hinnka.mycamera.lut.PreviewCaptureSource
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
@@ -266,25 +267,36 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     }
 
     private var currentPreviewStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+    private var currentPreviewPositionLockCropZoom = POSITION_LOCK_CROP_ZOOM
 
     fun setPreviewStabilization(
         useCase: StabilizationUseCase?,
         strength: Float,
         lookaheadFrames: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+        positionLockCropZoom: Float = POSITION_LOCK_CROP_ZOOM,
     ) {
         val normalizedStrength = normalizeStabilizationStrength(strength)
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
+        val normalizedPositionLockCropZoom = positionLockCropZoom
+            .takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM
         if (currentPreviewStabilizationUseCase == useCase &&
             kotlin.math.abs(currentPreviewStabilizationStrength - normalizedStrength) <= 0.0001f &&
-            currentPreviewStabilizationLookahead == normalizedLookahead
+            currentPreviewStabilizationLookahead == normalizedLookahead &&
+            kotlin.math.abs(currentPreviewPositionLockCropZoom - normalizedPositionLockCropZoom) <= 0.0001f
         ) {
             return
         }
         currentPreviewStabilizationUseCase = useCase
         currentPreviewStabilizationStrength = normalizedStrength
         currentPreviewStabilizationLookahead = normalizedLookahead
+        currentPreviewPositionLockCropZoom = normalizedPositionLockCropZoom
         queueEvent {
-            renderer.setPreviewStabilization(useCase, normalizedStrength, normalizedLookahead)
+            renderer.setPreviewStabilization(
+                useCase = useCase,
+                strength = normalizedStrength,
+                lookaheadFrames = normalizedLookahead,
+                positionLockCropZoom = normalizedPositionLockCropZoom,
+            )
             requestRender()
         }
     }
