@@ -12821,11 +12821,14 @@ class Camera2Controller(private val context: Context) {
                 cameraInputZoomRatio = topOffSoftwareZoomForRecording,
                 cameraInputPanX = topOffSoftwarePanXForRecording,
                 cameraInputPanY = topOffSoftwarePanYForRecording,
-                cameraInputRollDegrees = if (topOffSoftwareZoomForRecording > 1f) {
+                cameraInputRollDegrees = if (
+                    topOffSoftwareZoomForRecording > 1f || _topOffZoomFixedRollCover.value
+                ) {
                     _topOffZoomRollDegrees.value
                 } else {
                     0f
                 },
+                cameraInputFixedRollCover = _topOffZoomFixedRollCover.value,
                 fps = _state.value.videoConfig.fps.fps,
                 bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
                 codecMime = _state.value.videoConfig.codec.mimeType,
