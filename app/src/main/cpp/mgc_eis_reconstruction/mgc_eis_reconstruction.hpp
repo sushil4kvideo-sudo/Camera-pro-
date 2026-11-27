@@ -146,8 +146,9 @@ struct EngineConfig {
   int num_strips = 12;
   int lookahead_frames = 10;
   double stabilization_strength = 1.0;
-  // Position Lock holds a fixed virtual-camera pose and spends a larger crop budget.
+  // Position Lock holds a fixed virtual-camera pose and uses the menu-selected output crop.
   bool position_lock_enabled = false;
+  double position_lock_crop_zoom = 2.5;
 };
 
 struct StabilizedFrame {
