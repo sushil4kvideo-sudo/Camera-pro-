@@ -10574,6 +10574,14 @@ class Camera2Controller(private val context: Context) {
             )
         }
         val activeArray = sensorCharacteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        val yuvOutputSizes = sensorCharacteristics?.let { characteristics ->
+            runCatching {
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?.getOutputSizes(ImageFormat.YUV_420_888)
+                    ?.toList()
+                    .orEmpty()
+            }.getOrDefault(emptyList())
+        }.orEmpty()
         val physicalSize = sensorCharacteristics?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
         val lensFacing = sensorCharacteristics?.get(CameraCharacteristics.LENS_FACING)
             ?: timingCharacteristics?.get(CameraCharacteristics.LENS_FACING)
@@ -10652,6 +10660,7 @@ class Camera2Controller(private val context: Context) {
             "STREAM selectedSensorIsActive=$selectedSensorIsActive " +
                 "inputSize=${inputSize?.let { "${it.width}x${it.height}" } ?: "missing"} " +
                 "inputAvailable=$hasInputSize resolution=${current.videoConfig.resolution} " +
+                "yuvCandidates=$yuvOutputSizes " +
                 "activeSizes=${sensorVideoCapabilities?.enhancedStabilizationInputSizesByResolution}",
         )
 
@@ -10690,7 +10699,14 @@ class Camera2Controller(private val context: Context) {
                 add("Selected sensor is in enhancedStabilizationUnavailableCameraIds")
             }
             if (!hasInputSize) {
-                add("No enhanced-stabilization input stream for requested resolution ${current.videoConfig.resolution}")
+                if (yuvOutputSizes.isEmpty()) {
+                    add("Selected sensor exposes no YUV_420_888 output stream")
+                } else {
+                    add(
+                        "No YUV_420_888 stream can supply ${current.videoConfig.resolution}; " +
+                            "available candidates=$yuvOutputSizes"
+                    )
+                }
             }
         }
         if (reasons.isEmpty()) {
