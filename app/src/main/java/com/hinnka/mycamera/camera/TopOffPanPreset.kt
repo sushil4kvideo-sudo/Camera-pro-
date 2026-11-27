@@ -3,6 +3,9 @@ package com.hinnka.mycamera.camera
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** Dedicated log category opened when ultra-wide Position Lock cannot start. */
+const val POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG = "PositionLockUltraWide"
+
 /** Gyroscope-driven pan behaviours available from the Top-Off preset picker. */
 enum class GyroPanMode(val description: String) {
     POSITION_LOCK("Compensates phone yaw and pitch to keep framing fixed."),

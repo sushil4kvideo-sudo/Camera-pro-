@@ -27,6 +27,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.camera.POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG
 import com.hinnka.mycamera.ui.icons.AppIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -50,7 +51,11 @@ fun LogViewerDialog(
         PLog.getAllLogs().filter { filterTag == null || it.tag == filterTag }
     }
     val logStats = remember(logs) { PLog.getLogStats(logs) }
-    val viewerTitle = if (filterTag == "TopOffZoom") "Top Off Zoom diagnostics" else "日志查看器"
+    val viewerTitle = when (filterTag) {
+        "TopOffZoom" -> "Top Off Zoom diagnostics"
+        POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG -> "Ultra-Wide Position Lock diagnostics"
+        else -> "日志查看器"
+    }
     val downloadSuccessMessage = stringResource(R.string.log_download_success)
     val downloadFailedMessage = stringResource(R.string.log_download_failed)
 

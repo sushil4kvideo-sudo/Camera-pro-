@@ -93,6 +93,7 @@ import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.GyroPanMode
+import com.hinnka.mycamera.camera.POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG
 import com.hinnka.mycamera.camera.GyroPanPresetController
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
 import com.hinnka.mycamera.camera.TopOffPanPreset
@@ -251,6 +252,7 @@ fun CameraScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
+    var showPositionLockUltraWideDiagnostics by rememberSaveable { mutableStateOf(false) }
     var aiSubjectTrackingEnabled by rememberSaveable { mutableStateOf(false) }
     val aiSubjectPanController = remember {
         AiSubjectTrackingController(
@@ -285,6 +287,12 @@ fun CameraScreen(
         PhotoCaptureCrashDialog(
             report = report,
             onDismiss = { PhotoCaptureCrashLogger.dismissPendingReport() },
+        )
+    }
+    if (showPositionLockUltraWideDiagnostics) {
+        LogViewerDialog(
+            onDismiss = { showPositionLockUltraWideDiagnostics = false },
+            filterTag = POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG,
         )
     }
     var dualCaptureEnabled by remember { mutableStateOf(false) }
@@ -3628,11 +3636,21 @@ private fun Controls(
             // MGC fixed-pose 12-strip correction replaces the old gyro-to-pan crop controller.
             val started = viewModel.setTopOffPositionLockActive(true)
             if (!started) {
-                Toast.makeText(
-                    context,
-                    "Position Lock needs a supported camera and standard frame rate. Start it before recording.",
-                    Toast.LENGTH_LONG,
-                ).show()
+                val selectedCamera = state.getCurrentCameraInfo()
+                val selectedUltraWide = selectedCamera?.let {
+                    it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                        (it.lensType == com.hinnka.mycamera.camera.LensType.BACK_ULTRA_WIDE ||
+                            (it.intrinsicZoomRatio.isFinite() && it.intrinsicZoomRatio in 0.2f..0.85f))
+                } == true
+                if (selectedUltraWide) {
+                    showPositionLockUltraWideDiagnostics = true
+                } else {
+                    Toast.makeText(
+                        context,
+                        "Position Lock needs a supported camera and standard frame rate. Start it before recording.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
                 runningTopOffPanPreset = null
             }
             onDispose {

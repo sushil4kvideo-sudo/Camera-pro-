@@ -10511,6 +10511,161 @@ class Camera2Controller(private val context: Context) {
         return available
     }
 
+
+    /**
+     * Capture a complete rejection snapshot for the selected ultra-wide lens.
+     * This is diagnostic-only: it does not change camera routing or stabilization state.
+     */
+    private fun logUltraWidePositionLockDiagnostics() {
+        val tag = POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG
+        val current = _state.value
+        val cameraInfo = current.getCurrentCameraInfo()
+        val openCameraId = runCatching { cameraInfo?.getOpenCameraId() }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+        val physicalCameraId = cameraInfo?.let {
+            runCatching { resolveRequestedPhysicalCameraId(current, it) }.getOrNull()
+        }?.takeIf { it.isNotBlank() }
+        val capabilityCameraId = physicalCameraId ?: openCameraId
+        val sensorCharacteristics = capabilityCameraId?.let {
+            getCameraCharacteristicsOrNull(it, "Ultra-wide Position Lock diagnostic sensor")
+        }
+        val timingCharacteristics = when {
+            sensorCharacteristics == null -> null
+            capabilityCameraId == openCameraId -> sensorCharacteristics
+            openCameraId == null -> null
+            else -> getCameraCharacteristicsOrNull(
+                openCameraId,
+                "Ultra-wide Position Lock diagnostic timestamp source",
+            )
+        }
+        val activeArray = sensorCharacteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        val physicalSize = sensorCharacteristics?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        val lensFacing = sensorCharacteristics?.get(CameraCharacteristics.LENS_FACING)
+            ?: timingCharacteristics?.get(CameraCharacteristics.LENS_FACING)
+        val timestampSource = timingCharacteristics?.get(
+            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE,
+        ) ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+        val staticMgcSupported = sensorCharacteristics != null && timingCharacteristics != null &&
+            realtimeStabilizationCoordinator.isCameraSupported(
+                sensorCharacteristics,
+                timingCharacteristics,
+            )
+        val isCurrentCalibration = capabilityCameraId != null &&
+            capabilityCameraId == currentStabilizationCameraId()
+        val currentMgcSupported = isCurrentCalibration &&
+            realtimeStabilizationCoordinator.isCurrentCameraSupported
+        val activeCapabilityCameraId = activeOutputPhysicalCameraId
+            ?.takeIf { it.isNotBlank() && !logicalMultiCameraAutoSwitchActive }
+            ?: activeOpenCameraId
+        val selectedSensorIsActive = capabilityCameraId != null &&
+            capabilityCameraId == activeCapabilityCameraId
+        val sensorVideoCapabilities = when {
+            sensorCharacteristics == null -> null
+            selectedSensorIsActive -> current.videoCapabilities
+            else -> runCatching {
+                VideoCapabilitiesResolver.resolve(
+                    characteristics = sensorCharacteristics,
+                    requestedConfig = current.videoConfig,
+                    algorithmicStabilizationSupported = true,
+                ).capabilities
+            }.getOrNull()
+        }
+        val inputSize = sensorVideoCapabilities
+            ?.enhancedStabilizationInputSizesByResolution
+            ?.get(current.videoConfig.resolution)
+        val hasInputSize = inputSize?.let { it.width > 0 && it.height > 0 } == true
+        val topOffZoomAvailable = isTopOffZoomAvailable()
+        val isRecording = current.videoRecordingState.isRecording ||
+            videoRecorder.isRecording() ||
+            spatialVideoRecorder.isRecording() ||
+            spatialVideoTelephotoRecorder.isRecording()
+        val isUltraWide = cameraInfo?.let {
+            it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                (it.lensType == LensType.BACK_ULTRA_WIDE ||
+                    (it.intrinsicZoomRatio.isFinite() && it.intrinsicZoomRatio in 0.2f..0.85f))
+        } == true
+
+        PLog.i(
+            tag,
+            "REQUEST ultraWide=$isUltraWide captureMode=${current.captureMode} " +
+                "fps=${current.videoConfig.fps} resolution=${current.videoConfig.resolution} " +
+                "recording=$isRecording processing=${current.videoRecordingState.isProcessing} " +
+                "spatialVideo=$spatialVideoEnabled dualCapture=$dualCaptureEnabled " +
+                "dualAspect=$dualAspectRecordingActive zoomAvailable=$topOffZoomAvailable",
+        )
+        PLog.i(
+            tag,
+            "CAMERAS selectedId=${cameraInfo?.cameraId} lens=${cameraInfo?.lensType} " +
+                "intrinsicZoom=${cameraInfo?.intrinsicZoomRatio} minZoom=${cameraInfo?.minZoom} " +
+                "logicalOpenId=$openCameraId requestedPhysicalId=$physicalCameraId " +
+                "capabilityId=$capabilityCameraId activeOpenId=$activeOpenCameraId " +
+                "activeOutputPhysicalId=$activeOutputPhysicalCameraId " +
+                "normalUltraWideBackgroundStream=$normalVideoUltraWideInstantSwitchActive " +
+                "logicalAutoSwitch=$logicalMultiCameraAutoSwitchActive " +
+                "physicalIds=${cameraInfo?.physicalCameraIds}",
+        )
+        PLog.i(
+            tag,
+            "MGC gyroAvailable=${realtimeStabilizationCoordinator.isGyroscopeAvailable} " +
+                "staticCameraSupported=$staticMgcSupported currentCalibration=$isCurrentCalibration " +
+                "currentCalibrationSupported=$currentMgcSupported lensFacing=$lensFacing " +
+                "timestampSource=$timestampSource activeArray=$activeArray physicalSizeMm=$physicalSize " +
+                "enhancedUnavailable=${capabilityCameraId != null && capabilityCameraId in enhancedStabilizationUnavailableCameraIds}",
+        )
+        PLog.i(
+            tag,
+            "STREAM selectedSensorIsActive=$selectedSensorIsActive " +
+                "inputSize=${inputSize?.let { "${it.width}x${it.height}" } ?: "missing"} " +
+                "inputAvailable=$hasInputSize resolution=${current.videoConfig.resolution} " +
+                "activeSizes=${sensorVideoCapabilities?.enhancedStabilizationInputSizesByResolution}",
+        )
+
+        val reasons = buildList {
+            if (current.captureMode != CaptureMode.VIDEO) add("Capture mode is not VIDEO: ${current.captureMode}")
+            if (current.videoConfig.fps == VideoFpsPreset.FPS_120) add("120 FPS is not supported by Position Lock")
+            if (isRecording) add("A video recorder is already active")
+            if (current.videoRecordingState.isProcessing) add("A recording is still processing")
+            if (spatialVideoEnabled || dualCaptureEnabled || dualAspectRecordingActive) {
+                add("Spatial Video, Dual Capture, or Dual Aspect is active")
+            }
+            if (!topOffZoomAvailable) add("Top-Off Zoom prerequisite is unavailable for the current camera/mode")
+            if (cameraInfo == null) add("No selected CameraInfo is available")
+            if (openCameraId == null) add("Logical/open Camera2 ID could not be resolved")
+            if (capabilityCameraId == null) add("Selected physical sensor ID could not be resolved")
+            if (sensorCharacteristics == null) add("Selected ultra-wide CameraCharacteristics could not be read")
+            if (timingCharacteristics == null) add("Timestamp-source CameraCharacteristics could not be read")
+            if (sensorCharacteristics != null) {
+                if (!realtimeStabilizationCoordinator.isGyroscopeAvailable) add("Device gyroscope is unavailable")
+                if (activeArray == null) add("Ultra-wide active array metadata is missing")
+                if (physicalSize == null) add("Ultra-wide physical sensor size metadata is missing")
+                if (lensFacing != CameraCharacteristics.LENS_FACING_BACK &&
+                    lensFacing != CameraCharacteristics.LENS_FACING_FRONT
+                ) add("MGC does not accept this lens-facing value: $lensFacing")
+            }
+            if (timestampSource != CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
+                add("Timestamp source is not REALTIME: $timestampSource")
+            }
+            if (sensorCharacteristics != null && timingCharacteristics != null && !staticMgcSupported) {
+                add("MGC static sensor/timestamp capability validation failed")
+            }
+            if (isCurrentCalibration && !currentMgcSupported) {
+                add("Current MGC calibration is unsupported or has a HAL stabilization conflict")
+            }
+            if (capabilityCameraId != null && capabilityCameraId in enhancedStabilizationUnavailableCameraIds) {
+                add("Selected sensor is in enhancedStabilizationUnavailableCameraIds")
+            }
+            if (!hasInputSize) {
+                add("No enhanced-stabilization input stream for requested resolution ${current.videoConfig.resolution}")
+            }
+        }
+        if (reasons.isEmpty()) {
+            PLog.w(tag, "Availability returned false without a single explicit rejection predicate; inspect the snapshot above")
+        } else {
+            reasons.forEach { PLog.w(tag, "REJECTED: $it") }
+        }
+    }
+
     fun isTopOffPositionLockAvailable(): Boolean {
         val current = _state.value
         if (current.captureMode != CaptureMode.VIDEO ||
@@ -10552,7 +10707,17 @@ class Camera2Controller(private val context: Context) {
     /** Activates MGC's fixed-reference pose renderer for the live preview. */
     fun setTopOffPositionLockActive(enabled: Boolean): Boolean {
         if (enabled && !isTopOffPositionLockAvailable()) {
-            PLog.w(TAG, "Position Lock rejected: selected physical sensor or input stream is unsupported")
+            val selectedCamera = _state.value.getCurrentCameraInfo()
+            val selectedUltraWide = selectedCamera?.let {
+                it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                    (it.lensType == LensType.BACK_ULTRA_WIDE ||
+                        (it.intrinsicZoomRatio.isFinite() && it.intrinsicZoomRatio in 0.2f..0.85f))
+            } == true
+            if (selectedUltraWide) {
+                logUltraWidePositionLockDiagnostics()
+            } else {
+                PLog.w(TAG, "Position Lock rejected: selected physical sensor or input stream is unsupported")
+            }
             return false
         }
         if (!enabled && (_state.value.videoRecordingState.isRecording || videoRecorder.isRecording())) {
