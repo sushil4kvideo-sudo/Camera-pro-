@@ -66,21 +66,13 @@ object VideoCapabilitiesResolver {
                 openGateAspect,
             )
             ?: previewOutputSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
-        // Position Lock uses a dedicated YUV source. Prefer the same ~12 MP class
-        // when available, then retain the previous 4K-capable fallback for older cameras.
-        val fixedEnhancedStabilizationInputSize =
+        // Position Lock uses a dedicated YUV source. Prefer one high-detail ~12 MP
+        // stream for every preset when the sensor exposes it. Otherwise resolve a native
+        // YUV input independently for each output preset. Requiring a 4K-sized YUV stream
+        // for every preset incorrectly rejects ultra-wide sensors that expose native FHD
+        // YUV but no 4K YUV output.
+        val preferredEnhancedStabilizationInputSize =
             findPreferred12MpInputSize(yuvOutputSizes, activeArray)
-                ?: findBestOutputSize(
-                    yuvOutputSizes,
-                    VideoResolutionPreset.UHD_2160P,
-                    requestedConfig.aspectRatio,
-                    openGateAspect,
-                )?.takeIf { source ->
-                    canProduceOutputWithoutUpscaling(
-                        source,
-                        VideoResolutionPreset.UHD_2160P.resolveOutputSize(targetPortraitAspect),
-                    )
-                }
         val threeKOutputSize = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
             null
         } else {
@@ -175,8 +167,24 @@ object VideoCapabilitiesResolver {
             fixedCameraInputSize?.let { preset to it }
         }.toMap()
         val enhancedStabilizationInputSizesByResolution = availableResolutions.mapNotNull { preset ->
-            fixedEnhancedStabilizationInputSize?.let { preset to it }
+            val presetOutputSize = preset.resolveOutputSize(targetPortraitAspect)
+            val inputSize = preferredEnhancedStabilizationInputSize
+                ?: findBestOutputSize(
+                    yuvOutputSizes,
+                    preset,
+                    requestedConfig.aspectRatio,
+                    openGateAspect,
+                )?.takeIf { source ->
+                    canProduceOutputWithoutUpscaling(source, presetOutputSize)
+                }
+            inputSize?.let { preset to it }
         }.toMap()
+        PLog.i(
+            TAG,
+            "MGC YUV inputs by resolution: candidates=$yuvOutputSizes, " +
+                "preferred12MP=$preferredEnhancedStabilizationInputSize, " +
+                "selected=$enhancedStabilizationInputSizesByResolution",
+        )
 
         val resolvedResolution = requestedConfig.resolution.takeIf { availableResolutions.contains(it) }
             ?: VideoResolutionPreset.FHD_1080P.takeIf { it in availableResolutions }
