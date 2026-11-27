@@ -339,6 +339,7 @@ class Camera2Controller(private val context: Context) {
     private var spatialVideoPrimaryCameraId: String? = null
     private var spatialVideoStreamingMode: SpatialVideoStreamingMode? = null
     // A dedicated alternate OES input feeds the normal-video encoder when 0.5x is selected.
+    private var normalVideoUltraWideInstantSwitchEnabled = false
     private var normalVideoUltraWideInstantSwitchActive = false
     private var normalVideoMainPhysicalCameraId: String? = null
     private var normalVideoUltraWidePhysicalCameraId: String? = null
@@ -451,6 +452,36 @@ class Camera2Controller(private val context: Context) {
         spatialVideoStreamingMode.takeIf { spatialVideoEnabled }
             ?: normalVideoStreamingMode.takeIf { normalVideoUltraWideInstantSwitchActive }
 
+    private fun cameraBelongsToSpatialPair(camera: CameraInfo?, pair: SpatialVideoCameraPair): Boolean {
+        camera ?: return false
+        if (camera.lensFacing != CameraCharacteristics.LENS_FACING_BACK) return false
+        val ids = buildSet {
+            add(camera.cameraId)
+            camera.outputPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+            runCatching { camera.getOpenCameraId() }.getOrNull()?.takeIf { it.isNotBlank() }?.let(::add)
+            camera.physicalCameras.mapTo(this) { it.cameraId }
+        }
+        val mainIds = buildSet {
+            add(pair.mainCameraInfo.cameraId)
+            pair.mainPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+            pair.mainCameraInfo.outputPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+            pair.mainCameraInfo.physicalCameras.mapTo(this) { it.cameraId }
+        }
+        val wideIds = buildSet {
+            add(pair.ultraWideCameraId)
+            _state.value.availableCameras.filter { info ->
+                info.cameraId == pair.ultraWideCameraId ||
+                    info.outputPhysicalCameraId == pair.ultraWideCameraId ||
+                    info.physicalCameras.any { it.cameraId == pair.ultraWideCameraId }
+            }.forEach { info ->
+                add(info.cameraId)
+                info.outputPhysicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+                info.physicalCameras.mapTo(this) { it.cameraId }
+            }
+        }
+        return ids.any { it in mainIds || it in wideIds }
+    }
+
     private fun isNormalVideoUltraWideLens(camera: CameraInfo?): Boolean {
         camera ?: return false
         val wideId = normalVideoUltraWidePhysicalCameraId ?: return false
@@ -516,6 +547,88 @@ class Camera2Controller(private val context: Context) {
         } else if (cameraDevice != null) {
             createPreviewSession(openGeneration = cameraOpenGeneration)
         }
+    }
+
+    private fun activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded: Boolean): Boolean {
+        val captureMode = _state.value.captureMode
+        if (!normalVideoUltraWideInstantSwitchEnabled || normalVideoUltraWideInstantSwitchActive ||
+            _topOffPositionLockActive.value || spatialVideoEnabled ||
+            (captureMode != CaptureMode.VIDEO && captureMode != CaptureMode.PHOTO) ||
+            _state.value.videoRecordingState.isRecording ||
+            _state.value.videoRecordingState.isProcessing
+        ) return normalVideoUltraWideInstantSwitchActive
+        val selected = _state.value.getCurrentCameraInfo() ?: return false
+        if (selected.lensFacing != CameraCharacteristics.LENS_FACING_BACK) return false
+        val pair = resolveSpatialVideoConfiguration() ?: run {
+            PLog.w(TAG, "Normal Video instant switch unavailable: ${spatialVideoUnsupportedReason ?: "rear 1x/0.5x pair not found"}")
+            return false
+        }
+        if (!cameraBelongsToSpatialPair(selected, pair)) return false
+
+        // Photo mode can share the logical CameraDevice with the ultra-wide physical
+        // preview, but its ImageReader must remain on that logical device so still
+        // captures follow CONTROL_ZOOM_RATIO. Do not enable this path for independent
+        // CameraDevices or RAW configurations that cannot be served by the logical parent.
+        val photoLogicalHandoffState = _state.value.copy(
+            currentCameraId = pair.mainCameraInfo.cameraId,
+            currentLensType = pair.mainCameraInfo.lensType,
+        )
+        val photoLogicalHandoffSupported = captureMode == CaptureMode.PHOTO &&
+            pair.mode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+            shouldUseLogicalMultiCameraZoom(photoLogicalHandoffState, pair.mainCameraInfo)
+        if (captureMode == CaptureMode.PHOTO && !photoLogicalHandoffSupported) {
+            PLog.i(
+                TAG,
+                "Photo instant ultra-wide handoff unavailable: logical still-capture output is not supported"
+            )
+            return false
+        }
+
+        normalVideoMainPhysicalCameraId = pair.mainPhysicalCameraId
+            ?: pair.mainCameraInfo.outputPhysicalCameraId ?: pair.mainCameraInfo.cameraId
+        normalVideoUltraWidePhysicalCameraId = pair.ultraWideCameraId
+        normalVideoPrimaryCameraId = pair.primaryCameraId
+        normalVideoStreamingMode = pair.mode
+        normalVideoUltraWideInstantSwitchActive = true
+        _normalVideoUltraWideInstantSwitchActive.value = true
+        if (dualCaptureEnabled) setDualCaptureEnabled(false)
+        // Keep the 1x physical camera as the primary GL/encoder path; the wide TextureView
+        // is already streaming in parallel and is only promoted by the UI on a lens tap.
+        _state.value = _state.value.copy(
+            currentCameraId = pair.mainCameraInfo.cameraId,
+            currentLensType = pair.mainCameraInfo.lensType,
+            zoomRatio = 1f,
+            zoomPanX = 0f,
+            zoomPanY = 0f,
+            zoomPanEnabled = false,
+        )
+        activeOutputPhysicalCameraId = when {
+            pair.mode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ->
+                if (captureMode == CaptureMode.PHOTO) null else normalVideoMainPhysicalCameraId
+            pair.logicalParentCameraId != null -> null
+            else -> pair.mainCameraInfo.outputPhysicalCameraId
+        }
+        logicalMultiCameraAutoSwitchActive = photoLogicalHandoffSupported
+        PLog.i(
+            TAG,
+            "Normal Video instant switch enabled: mode=${pair.mode}, primary=${pair.primaryCameraId}, " +
+                "main=${normalVideoMainPhysicalCameraId}, ultraWide=${pair.ultraWideCameraId}"
+        )
+        if (reopenPrimaryIfNeeded) {
+            val texture = previewSurfaceTexture
+            if (texture != null) {
+                val activeId = activeOpenCameraId.takeIf { it.isNotBlank() }
+                if (activeId != pair.primaryCameraId) {
+                    openCamera(texture, preserveVideoRecording = true)
+                } else {
+                    if (pair.mode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                        cameraDevice != null
+                    ) startSpatialVideoStandbyCamera(pair.ultraWideCameraId)
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
+        }
+        return true
     }
 
     private var dualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
@@ -3073,6 +3186,12 @@ class Camera2Controller(private val context: Context) {
                 "selected camera is outside the 1x/0.5x pair",
                 reopenSelectedCamera = false,
             )
+        }
+        if (!normalVideoUltraWideInstantSwitchActive && normalVideoUltraWideInstantSwitchEnabled &&
+            !spatialVideoEnabled && !_topOffPositionLockActive.value &&
+            (captureMode == CaptureMode.VIDEO || captureMode == CaptureMode.PHOTO)
+        ) {
+            activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = false)
         }
         val cameraId = _state.value.currentCameraId
         selectedCamera = _state.value.getCurrentCameraInfo()
@@ -10433,6 +10552,34 @@ class Camera2Controller(private val context: Context) {
         return pair != null
     }
 
+    fun setNormalVideoUltraWideInstantSwitchEnabled(enabled: Boolean) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setNormalVideoUltraWideInstantSwitchEnabled(enabled) }
+            return
+        }
+        if (_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isProcessing) {
+            PLog.i(TAG, "Normal Video instant-switch setting is locked while recording")
+            onCameraError?.invoke(-1, "Stop recording before changing the Normal Video instant-switch setting.", false)
+            return
+        }
+        normalVideoUltraWideInstantSwitchEnabled = enabled
+        if (!enabled) {
+            clearNormalVideoUltraWideInstantSwitchRuntime("setting disabled", reopenSelectedCamera = true)
+            return
+        }
+        if (spatialVideoEnabled ||
+            (_state.value.captureMode != CaptureMode.VIDEO && _state.value.captureMode != CaptureMode.PHOTO)
+        ) return
+        if (_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isProcessing) {
+            PLog.i(TAG, "Normal Video instant-switch setting will apply after recording finishes")
+            return
+        }
+        activateNormalVideoUltraWideInstantSwitch(
+            reopenPrimaryIfNeeded = cameraDeviceLifecycle != CameraDeviceLifecycle.OPENING
+        )
+    }
+
     fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) {
         _spatialVideoShowUltraWidePreview.value = enabled
         specialVideoPreferences.edit().putBoolean("show_ultra_wide_preview", enabled).apply()
@@ -11279,16 +11426,37 @@ class Camera2Controller(private val context: Context) {
                     selectedOpenId != null && selectedOpenId != activeOpenCameraId
             spatialVideoRecorder.forceStop()
             clearSpecialVideoRuntimeState("Special Video disabled")
-            previewSurfaceTexture?.let { texture ->
-                if (restoreLogicalParent) {
-                    PLog.i(
-                        TAG,
-                        "Special Video disabled: restoring selected CameraDevice $selectedOpenId " +
-                            "from physical primary $activeOpenCameraId"
-                    )
-                    openCamera(texture)
-                } else {
-                    createPreviewSession(openGeneration = cameraOpenGeneration)
+            val resumeNormalInstantSwitch =
+                normalVideoUltraWideInstantSwitchEnabled &&
+                    _state.value.captureMode == CaptureMode.VIDEO
+            if (resumeNormalInstantSwitch) {
+                activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = false)
+                previewSurfaceTexture?.let { texture ->
+                    if (normalVideoPrimaryCameraId != activeOpenCameraId) {
+                        openCamera(texture)
+                    } else {
+                        if (normalVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                            cameraDevice != null
+                        ) {
+                            normalVideoUltraWidePhysicalCameraId?.let {
+                                startSpatialVideoStandbyCamera(it)
+                            }
+                        }
+                        createPreviewSession(openGeneration = cameraOpenGeneration)
+                    }
+                }
+            } else {
+                previewSurfaceTexture?.let { texture ->
+                    if (restoreLogicalParent) {
+                        PLog.i(
+                            TAG,
+                            "Special Video disabled: restoring selected CameraDevice $selectedOpenId " +
+                                "from physical primary $activeOpenCameraId"
+                        )
+                        openCamera(texture)
+                    } else {
+                        createPreviewSession(openGeneration = cameraOpenGeneration)
+                    }
                 }
             }
         }
