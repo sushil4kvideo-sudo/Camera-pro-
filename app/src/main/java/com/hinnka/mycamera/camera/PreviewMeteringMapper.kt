@@ -56,6 +56,8 @@ internal object PreviewMeteringMapper {
         scalerCropRegion: CameraCoordinateRect?,
         zoomMode: PreviewMeteringZoomMode,
         previewViewAspectRatio: Float,
+        /** Additional crop applied by the live Position Lock renderer after Camera2 zoom. */
+        previewCropZoom: Float = 1f,
         sensorOrientationDegrees: Int,
         isFrontFacing: Boolean,
     ): PreviewMeteringMapping? {
@@ -67,8 +69,12 @@ internal object PreviewMeteringMapper {
                 scalerCropRegion?.intersect(activeArray) ?: activeArray
             }
         }
-        val visibleRegion = centerCropToPreviewAspect(
+        val cropAdjustedRegion = centerZoomCrop(
             region = zoomRegion,
+            zoomRatio = previewCropZoom,
+        )
+        val visibleRegion = centerCropToPreviewAspect(
+            region = cropAdjustedRegion,
             previewViewAspectRatio = previewViewAspectRatio,
             sensorOrientationDegrees = sensorOrientationDegrees,
         )
@@ -117,6 +123,31 @@ internal object PreviewMeteringMapper {
             top = top,
             right = left + regionWidth,
             bottom = top + regionHeight,
+        )
+    }
+
+    /**
+     * Position Lock crops the stabilized image around the locked virtual-camera centre.
+     * Apply that crop before the viewport aspect crop so touch/AE coordinates match the
+     * pixels the user can actually see, rather than the uncropped sensor frame.
+     */
+    private fun centerZoomCrop(
+        region: CameraCoordinateRect,
+        zoomRatio: Float,
+    ): CameraCoordinateRect {
+        if (region.isEmpty) return region
+        val safeZoom = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: 1f
+        if (safeZoom <= 1.0001f) return region
+
+        val cropWidth = (region.width / safeZoom).roundToInt().coerceIn(1, region.width)
+        val cropHeight = (region.height / safeZoom).roundToInt().coerceIn(1, region.height)
+        val cropLeft = region.left + (region.width - cropWidth) / 2
+        val cropTop = region.top + (region.height - cropHeight) / 2
+        return CameraCoordinateRect(
+            left = cropLeft,
+            top = cropTop,
+            right = cropLeft + cropWidth,
+            bottom = cropTop + cropHeight,
         )
     }
 
