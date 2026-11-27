@@ -13,6 +13,7 @@ internal object MgcEisNativeBridge {
         strength: Float,
         lookaheadFrames: Int,
         positionLockEnabled: Boolean,
+        positionLockCropZoom: Float,
     ): Long
 
     external fun release(handle: Long)
