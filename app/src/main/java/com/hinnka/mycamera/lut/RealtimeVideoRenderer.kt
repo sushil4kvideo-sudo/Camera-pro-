@@ -483,6 +483,12 @@ class RealtimeVideoRenderer(
             )
         } else if (stabilizationSessionOperational) {
             val frame = session?.dequeueFrame() ?: return null
+            if (positionLockEnabled && frame.transform == null) {
+                // A missing MGC pose must not reset the virtual camera to a centered 2.5x crop.
+                // Skip this timestamp; the next valid Position Lock pose resumes from the same anchor.
+                frame.image.close()
+                return null
+            }
             val rendered = renderMgcEisFrame(frame) ?: return null
             sourceTextureSource = PreviewColorTextureSource.TEXTURE_2D
             sourceTextureTarget = GLES30.GL_TEXTURE_2D
