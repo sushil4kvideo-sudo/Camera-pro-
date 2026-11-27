@@ -3915,7 +3915,14 @@ private fun Controls(
                                                 onClick = {
                                                     selectedTopOffPanPresetId = preset.id
                                                     showTopOffPanPresetPicker = false
-                                                    if (runningTopOffPanPreset != null) {
+                                                    val runningPreset = runningTopOffPanPreset
+                                                    if (runningPreset != null) {
+                                                        val wasAiTracking = runningPreset.aiSubjectTracking
+                                                        if (wasAiTracking && !preset.aiSubjectTracking && aiSubjectTrackingEnabled) {
+                                                            onAiSubjectTrackingToggle()
+                                                        } else if (!wasAiTracking && preset.aiSubjectTracking && !aiSubjectTrackingEnabled) {
+                                                            onAiSubjectTrackingToggle()
+                                                        }
                                                         runningTopOffPanPreset = preset
                                                     }
                                                 },
@@ -3933,8 +3940,11 @@ private fun Controls(
                                                         },
                                                     )
                                                     Text(
-                                                        text = preset.gyroMode?.let { "Gyroscope · live orientation correction" }
-                                                            ?: "${preset.points.size} points · ${preset.segmentDurationMs} ms per segment",
+                                                        text = when {
+                                                            preset.aiSubjectTracking -> "Tracks and pans to keep the subject centered"
+                                                            preset.gyroMode != null -> "Gyroscope · live orientation correction"
+                                                            else -> "${preset.points.size} points · ${preset.segmentDurationMs} ms per segment"
+                                                        },
                                                         fontSize = 11.sp,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                     )
