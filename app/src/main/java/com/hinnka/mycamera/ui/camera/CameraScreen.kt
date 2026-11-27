@@ -2892,6 +2892,9 @@ fun CameraScreen(
                     // The ViewModel keeps Compose state and the recording renderer in sync.
                     viewModel.setTopOffGyroPanCorrection(panX, panY, rollDegrees)
                 },
+                onShowPositionLockUltraWideDiagnostics = {
+                    showPositionLockUltraWideDiagnostics = true
+                },
                 sideControlInset = if (isXpan) {
                     (xpanSideWidth - CameraControlsLayoutDefaults.SideButtonSize) / 2
                 } else {
@@ -3592,6 +3595,7 @@ private fun Controls(
     onAiSubjectTrackingToggle: () -> Unit,
     onTrackingPadPan: (Float, Float) -> Unit,
     onGyroPanUpdate: (Float, Float, Float) -> Unit,
+    onShowPositionLockUltraWideDiagnostics: () -> Unit,
     sideControlInset: Dp?,
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
@@ -3643,7 +3647,7 @@ private fun Controls(
                             (it.intrinsicZoomRatio.isFinite() && it.intrinsicZoomRatio in 0.2f..0.85f))
                 } == true
                 if (selectedUltraWide) {
-                    showPositionLockUltraWideDiagnostics = true
+                    onShowPositionLockUltraWideDiagnostics()
                 } else {
                     Toast.makeText(
                         context,
