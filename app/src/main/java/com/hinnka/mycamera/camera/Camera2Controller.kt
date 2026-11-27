@@ -12628,8 +12628,9 @@ class Camera2Controller(private val context: Context) {
         } else {
             null
         }
-        // This source remains fixed at the 4K-capable size resolved for the camera,
-        // regardless of which recording resolution is selected in the UI.
+        // This source remains fixed at the preferred 12 MP-class size resolved for the camera,
+        // regardless of which recording resolution is selected in the UI (with a compatible
+        // fallback on cameras that do not expose a 12 MP stream).
         // Top-Off zoom/pan is applied by the GL renderer, not by changing the input size.
         val fixedCameraInputSize = if (useMgcStabilization) {
             _state.value.videoCapabilities.enhancedStabilizationInputSizesByResolution[
