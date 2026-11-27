@@ -277,8 +277,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     ) {
         val normalizedStrength = normalizeStabilizationStrength(strength)
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
-        val normalizedPositionLockCropZoom = positionLockCropZoom
-            .takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM
+        val normalizedPositionLockCropZoom =
+            if (useCase == StabilizationUseCase.POSITION_LOCK) {
+                positionLockCropZoom.takeIf { it.isFinite() }?.coerceIn(1f, 10f)
+                    ?: POSITION_LOCK_CROP_ZOOM
+            } else {
+                POSITION_LOCK_CROP_ZOOM
+            }
         if (currentPreviewStabilizationUseCase == useCase &&
             kotlin.math.abs(currentPreviewStabilizationStrength - normalizedStrength) <= 0.0001f &&
             currentPreviewStabilizationLookahead == normalizedLookahead &&
