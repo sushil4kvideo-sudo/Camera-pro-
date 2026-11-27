@@ -3841,6 +3841,9 @@ private fun Controls(
                 )
 
 
+                // Keep only Run beside the shutter. Hold the trackpad to open preset
+                // selection, including the AI Subject Tracking preset.
+                if (showTopOffPanPresetControls || state.videoRecordingState.isRecording) {
                     Row(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
