@@ -11113,6 +11113,9 @@ class Camera2Controller(private val context: Context) {
         builder.apply {
             applyBaseCameraSettings(this, isCapture = false, currentState = _state.value)
         }
+        // Position Lock's preview crop can change independently of Camera2's zoom request.
+        // Rebuild the AE region at the same time so exposure follows the new visible frame.
+        applyMeteringRegions()
         updatePreview()
     }
 
