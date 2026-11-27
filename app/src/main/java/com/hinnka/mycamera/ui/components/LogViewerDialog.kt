@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.os.Environment
@@ -28,7 +30,6 @@ import androidx.compose.ui.window.DialogProperties
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.camera.POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG
-import com.hinnka.mycamera.ui.icons.AppIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -81,6 +82,27 @@ fun LogViewerDialog(
                 LogViewerHeader(
                     title = viewerTitle,
                     logCount = logs.size,
+                    onClear = {
+                        if (filterTag == null) PLog.clearLogs() else PLog.clearLogsByTag(filterTag)
+                        Toast.makeText(context, "日志已清空", Toast.LENGTH_SHORT).show()
+                        onDismiss()
+                    },
+                    onDismiss = onDismiss
+                )
+
+                // 大尺寸、带文字的操作按钮，避免只显示不明显的右上角图标。
+                LogExportActions(
+                    enabled = logs.isNotEmpty(),
+                    onCopy = {
+                        val formattedLogs = PLog.getFormattedLogs(logs)
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        if (clipboard != null) {
+                            clipboard.setPrimaryClip(ClipData.newPlainText(viewerTitle, formattedLogs))
+                            Toast.makeText(context, "Diagnostic log copied to clipboard", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Unable to access clipboard", Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     onDownload = {
                         val formattedLogs = PLog.getFormattedLogs(logs)
                         coroutineScope.launch {
@@ -94,13 +116,7 @@ fun LogViewerDialog(
                             }
                             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                         }
-                    },
-                    onClear = {
-                        if (filterTag == null) PLog.clearLogs() else PLog.clearLogsByTag(filterTag)
-                        Toast.makeText(context, "日志已清空", Toast.LENGTH_SHORT).show()
-                        onDismiss()
-                    },
-                    onDismiss = onDismiss
+                    }
                 )
 
                 // 统计信息
@@ -113,7 +129,13 @@ fun LogViewerDialog(
 
                 // 日志内容区域
                 if (logs.isEmpty()) {
-                    EmptyLogsView()
+                    EmptyLogsView(
+                        hint = if (filterTag == POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG) {
+                            "Enable Position Lock while using the Ultra-Wide lens, reproduce the issue, then reopen these diagnostics."
+                        } else {
+                            null
+                        }
+                    )
                 } else {
                     LogContentView(logs = logs, context = context)
                 }
@@ -129,7 +151,6 @@ fun LogViewerDialog(
 private fun LogViewerHeader(
     title: String,
     logCount: Int,
-    onDownload: () -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -140,7 +161,7 @@ private fun LogViewerHeader(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
                 color = Color.White,
@@ -155,23 +176,9 @@ private fun LogViewerHeader(
         }
 
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // 下载日志按钮
-            IconButton(
-                onClick = onDownload,
-                colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = Color(0xFF4CAF50).copy(alpha = 0.2f)
-                )
-            ) {
-                Icon(
-                    imageVector = AppIcons.Download,
-                    contentDescription = stringResource(R.string.log_download),
-                    tint = Color(0xFF4CAF50)
-                )
-            }
-
-            // 清空按钮
             IconButton(
                 onClick = onClear,
                 colors = IconButtonDefaults.iconButtonColors(
@@ -185,7 +192,6 @@ private fun LogViewerHeader(
                 )
             }
 
-            // 关闭按钮
             TextButton(onClick = onDismiss) {
                 Text(
                     text = "关闭",
@@ -193,6 +199,37 @@ private fun LogViewerHeader(
                     fontSize = 14.sp
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun LogExportActions(
+    enabled: Boolean,
+    onCopy: () -> Unit,
+    onDownload: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedButton(
+            onClick = onCopy,
+            enabled = enabled,
+            modifier = Modifier.weight(1f)
+        ) {
+            Text("Copy log")
+        }
+
+        Button(
+            onClick = onDownload,
+            enabled = enabled,
+            modifier = Modifier.weight(1f)
+        ) {
+            Text("Download log")
         }
     }
 }
@@ -255,7 +292,7 @@ private fun RowScope.LogLevelChip(
  * 空日志视图
  */
 @Composable
-private fun EmptyLogsView() {
+private fun EmptyLogsView(hint: String? = null) {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -274,8 +311,8 @@ private fun EmptyLogsView() {
                 fontSize = 16.sp
             )
             Text(
-                text = "应用运行时的日志将显示在这里",
-                color = Color.White.copy(alpha = 0.4f),
+                text = hint ?: "应用运行时的日志将显示在这里",
+                color = Color.White.copy(alpha = 0.55f),
                 fontSize = 12.sp
             )
         }
