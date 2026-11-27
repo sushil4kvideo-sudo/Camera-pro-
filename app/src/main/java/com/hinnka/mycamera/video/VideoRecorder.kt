@@ -110,6 +110,7 @@ class VideoRecorder(
         val panX: Float,
         val panY: Float,
         val rollDegrees: Float,
+        val fixedRollCover: Boolean,
     )
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -158,6 +159,7 @@ class VideoRecorder(
     private var requestedCameraInputPanX: Float = 0f
     private var requestedCameraInputPanY: Float = 0f
     private var requestedCameraInputRollDegrees: Float = 0f
+    private var requestedCameraInputFixedRollCover: Boolean = false
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
     private var requestedEnhancedStabilization = false
     private var requestedEnhancedStabilizationStrength = DEFAULT_VIDEO_STABILIZATION_STRENGTH
@@ -273,6 +275,7 @@ class VideoRecorder(
         cameraInputPanX: Float = 0f,
         cameraInputPanY: Float = 0f,
         cameraInputRollDegrees: Float = 0f,
+        cameraInputFixedRollCover: Boolean = false,
         fps: Int,
         bitrateMbps: Int,
         codecMime: String,
@@ -324,7 +327,8 @@ class VideoRecorder(
         requestedCameraInputZoomRatio = cameraInputZoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
         requestedCameraInputPanX = cameraInputPanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         requestedCameraInputPanY = cameraInputPanY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        requestedCameraInputRollDegrees = cameraInputRollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+        requestedCameraInputRollDegrees = cameraInputRollDegrees.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
+        requestedCameraInputFixedRollCover = cameraInputFixedRollCover
         requestedDualCaptureInputSize = dualCaptureInputSize
         requestedDualCaptureSensorOrientationDegrees = dualCaptureSensorOrientationDegrees
         requestedDualCaptureLayout = dualCaptureLayout
@@ -716,18 +720,21 @@ class VideoRecorder(
         panX: Float,
         panY: Float,
         rollDegrees: Float = 0f,
+        fixedRollCover: Boolean = false,
     ) {
         if (!isRecording || stopRequested) return
         requestedCameraInputZoomRatio = zoomRatio.takeIf { it.isFinite() }?.coerceIn(1f, 20f) ?: 1f
         requestedCameraInputPanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         requestedCameraInputPanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        requestedCameraInputRollDegrees = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
+        requestedCameraInputRollDegrees = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
+        requestedCameraInputFixedRollCover = fixedRollCover
         pendingCameraInputCrop.set(
             CameraInputCropUpdate(
                 requestedCameraInputZoomRatio,
                 requestedCameraInputPanX,
                 requestedCameraInputPanY,
                 requestedCameraInputRollDegrees,
+                requestedCameraInputFixedRollCover,
             )
         )
         dispatchPendingCameraInputCrop()
@@ -746,6 +753,7 @@ class VideoRecorder(
                         update.panX,
                         update.panY,
                         update.rollDegrees,
+                        update.fixedRollCover,
                     )
                 }
             } finally {
@@ -828,6 +836,7 @@ class VideoRecorder(
             cameraInputPanX = requestedCameraInputPanX,
             cameraInputPanY = requestedCameraInputPanY,
             cameraInputRollDegrees = requestedCameraInputRollDegrees,
+            cameraInputFixedRollCover = requestedCameraInputFixedRollCover,
             watermarkLabel = if (sharedTimelineStreamName != null) MediaWatermark.SPECIAL_VIDEO else null,
         )
         renderer = realtimeRenderer
