@@ -286,7 +286,10 @@ private:
            config_.lookahead_frames >= 0 && config_.lookahead_frames <= 10 &&
            config_.lookahead_frames == parameters_.half_window_frames &&
            config_.stabilization_strength >= 0.0 &&
-           config_.stabilization_strength <= 1.0;
+           config_.stabilization_strength <= 1.0 &&
+           std::isfinite(config_.position_lock_crop_zoom) &&
+           config_.position_lock_crop_zoom >= 1.0 &&
+           config_.position_lock_crop_zoom <= 10.0;
   }
 
   static StabilizedFrame dropped(std::int64_t timestamp_ns) {
@@ -406,12 +409,18 @@ private:
   }
 
   double cropMargin() const {
-    return config_.position_lock_enabled ? kPositionLockCropMargin
-                                         : kLookaheadCropMargin;
+    if (!config_.position_lock_enabled) {
+      return kLookaheadCropMargin;
+    }
+    // outputCropZoom() is exactly 1 / (1 - 2 * margin). Derive this margin
+    // from the menu slider so native, preview and encoder framing are equal.
+    const double safe_zoom =
+        std::clamp(config_.position_lock_crop_zoom, 1.0, 10.0);
+    return 0.5 * (1.0 - 1.0 / safe_zoom);
   }
 
   double allowedInnerCropMargin() const {
-    return config_.position_lock_enabled ? kPositionLockCropMargin * 0.5
+    return config_.position_lock_enabled ? cropMargin() * 0.5
                                          : kAllowedInnerMargin;
   }
 
