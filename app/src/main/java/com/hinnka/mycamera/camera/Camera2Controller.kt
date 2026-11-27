@@ -10823,6 +10823,27 @@ class Camera2Controller(private val context: Context) {
         _topOffZoomPanY.value = safePanY
         _topOffZoomRollDegrees.value = safeRoll
         _topOffZoomFixedRollCover.value = false
+
+        // Release the fixed Horizon Lock envelope in the active encoder as soon as the
+        // preset stops, while preserving the final crop/roll position.
+        val current = _state.value
+        val canApplySoftwareCrop = _topOffZoomEnabled.value &&
+            current.captureMode == CaptureMode.VIDEO &&
+            !spatialVideoEnabled && !dualCaptureEnabled
+        if (canApplySoftwareCrop) {
+            val zoom = (
+                _topOffZoomLockedRatio.value.takeIf { it.isFinite() && it >= 1f }
+                    ?: (current.zoomRatio.coerceAtLeast(1f) * _topOffZoomFactor.value)
+                ).coerceIn(1f, 20f)
+            if (videoRecorder.isRecording()) {
+                videoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, false)
+            }
+            if (dualAspectRecordingActive && spatialVideoRecorder.isRecording()) {
+                spatialVideoRecorder.updateCameraInputCrop(zoom, safePanX, safePanY, safeRoll, false)
+            }
+        }
+        _topOffPanLatencyMs.value = 0f
+
         specialVideoPreferences.edit()
             .putFloat("top_off_zoom_factor", _topOffZoomFactor.value)
             .putFloat("top_off_zoom_locked_ratio", _topOffZoomLockedRatio.value)
