@@ -218,9 +218,17 @@ object VideoCapabilitiesResolver {
                     "sourceCandidates=$sourceCandidates, encoderCandidates=$encoderCandidates"
             )
         }
-        // Keep the live video viewfinder on the same selected-resolution camera stream.
-        // The 1080p-sized preview is only a fallback when no matching input stream is available.
-        val previewSize = cameraInputSize
+        // Keep the viewfinder on a bounded preview stream instead of attaching a second
+        // full-resolution 4K output to Camera2. The dedicated recorder SurfaceTexture above
+        // remains fixed at the 4K-capable cameraInputSize, so digital zoom still has the full
+        // sensor detail while the UI preview avoids duplicate 4K ISP/GPU traffic.
+        val previewSize = fallbackPreviewSize
+        PLog.i(
+            TAG,
+            "Video stream split: cameraInput=${cameraInputSize.width}x${cameraInputSize.height}, " +
+                "viewfinder=${previewSize.width}x${previewSize.height}, " +
+                "encoder=${recordingSize.width}x${recordingSize.height}",
+        )
 
         val availableFpsByResolution = cameraInputSizesByResolution.mapValues { (_, inputSize) ->
             resolveAvailableFps(
