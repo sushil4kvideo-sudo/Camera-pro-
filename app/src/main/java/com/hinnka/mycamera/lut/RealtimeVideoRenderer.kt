@@ -53,6 +53,7 @@ class RealtimeVideoRenderer(
     private val enhancedStabilizationEnabled: Boolean,
     private val enhancedStabilizationStrength: Float,
     private val enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+    private val positionLockEnabled: Boolean = false,
     cameraInputIsHlg10: Boolean = false,
     dualCaptureInputSize: Size? = null,
     dualCaptureSensorOrientationDegrees: Int = 0,
@@ -203,6 +204,8 @@ class RealtimeVideoRenderer(
     private var textureCoordinateBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
     private var initialized = false
+    private val mgcStabilizationEnabled: Boolean
+        get() = enhancedStabilizationEnabled || positionLockEnabled
     private val cameraFramePending = AtomicBoolean(false)
     @Volatile
     private var stabilizationSession: RealtimeStabilizationCoordinator.Session? = null
@@ -316,7 +319,7 @@ class RealtimeVideoRenderer(
         // The next frame may carry a different transform even when its axes have not swapped.
         // Force crop geometry to be recalculated against the new camera's input dimensions.
         cameraTransformAxesSwapped = null
-        if (enhancedStabilizationEnabled && cameraInputChanged) {
+        if (mgcStabilizationEnabled && cameraInputChanged) {
             // The stabilized YUV texture is an independent producer. Refresh its presentation
             // matrix from the replacement camera's metadata, never from a possibly stale OES frame.
             mgcEisPresentationTransform.reset()
@@ -360,7 +363,7 @@ class RealtimeVideoRenderer(
             setDefaultBufferSize(currentCameraInputSize.width, currentCameraInputSize.height)
             setOnFrameAvailableListener {
                 cameraFramePending.set(true)
-                val useMgcFrames = enhancedStabilizationEnabled &&
+                val useMgcFrames = mgcStabilizationEnabled &&
                     stabilizationCoordinator?.isCurrentCameraSupported == true &&
                     stabilizationSessionStarted &&
                     stabilizationSession?.isOperational == true
@@ -378,7 +381,7 @@ class RealtimeVideoRenderer(
             initializeSwitchableCameraInput(size, onFrameAvailable)
         }
         currentDualCaptureInputSize?.let(::initializeDualCaptureInput)
-        if (enhancedStabilizationEnabled) {
+        if (mgcStabilizationEnabled) {
             check(
                 mgcEisPresentationTransform.captureFromSensorOrientation(
                     sensorOrientationDegrees,
@@ -388,7 +391,7 @@ class RealtimeVideoRenderer(
             }
             updateCameraTransformGeometry(mgcEisPresentationTransform.matrix)
             stabilizationSession = stabilizationCoordinator?.createSession(
-                useCase = StabilizationUseCase.VIDEO,
+                useCase = if (positionLockEnabled) StabilizationUseCase.POSITION_LOCK else StabilizationUseCase.VIDEO,
                 strength = enhancedStabilizationStrength,
                 frameWidth = currentCameraInputSize.width,
                 frameHeight = currentCameraInputSize.height,
@@ -404,7 +407,7 @@ class RealtimeVideoRenderer(
                 "sensorOrientation=$sensorOrientationDegrees, " +
                 "layers=${layers.size}, log=${videoLogProfile.name}, " +
                 "cameraInputHlg10=$cameraInputAlreadyHlg10, " +
-                "enhancedStabilization=$enhancedStabilizationEnabled, " +
+                "mgcStabilization=$mgcStabilizationEnabled, positionLock=$positionLockEnabled, " +
                 "stabilizationStrength=$enhancedStabilizationStrength, " +
                 "mirrorH=$mirrorHorizontally, mirrorV=$mirrorVertically, " +
                 "color=${encoderColorConfig.debugName}"
@@ -444,12 +447,12 @@ class RealtimeVideoRenderer(
         var sourceTextureSource = PreviewColorTextureSource.EXTERNAL_OES
         var sourceTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
         var sourceTextureId = cameraTextureId
-        var sourceStMatrix = if (enhancedStabilizationEnabled) stMatrix else cameraPresentationMatrix
+        var sourceStMatrix = if (mgcStabilizationEnabled) stMatrix else cameraPresentationMatrix
         var sourceCropRect = fullCropRect
         var timestampNs = surfaceTexture.timestamp
 
         val session = stabilizationSession
-        val stabilizationSessionOperational = enhancedStabilizationEnabled &&
+        val stabilizationSessionOperational = mgcStabilizationEnabled &&
             stabilizationCoordinator?.isCurrentCameraSupported == true &&
             stabilizationSessionStarted &&
             session?.isOperational == true
@@ -495,6 +498,10 @@ class RealtimeVideoRenderer(
             sourceCropRect = cameraCropRect
         }
         if (timestampNs <= 0L) return null
+        if (positionLockEnabled && sourceTextureSource == PreviewColorTextureSource.EXTERNAL_OES) {
+            // Keep the fixed 2x center crop until the first timestamp-matched MGC frame arrives.
+            sourceCropRect = resolveRealtimeVideoZoomCropRect(sourceCropRect, 2f, 0f, 0f)
+        }
         // Special Video's virtual telephoto is cropped from the live sensor frame here,
         // before it reaches the dedicated MediaCodec input surface (never after recording).
         sourceCropRect = resolveRealtimeVideoZoomCropRect(
@@ -921,7 +928,7 @@ class RealtimeVideoRenderer(
             surfaceTexture.updateTexImage()
             surfaceTexture.getTransformMatrix(stMatrix)
             updateCameraTransformGeometry(
-                if (enhancedStabilizationEnabled) {
+                if (mgcStabilizationEnabled) {
                     mgcEisPresentationTransform.matrix
                 } else {
                     resolveCameraPresentationMatrix(stMatrix)
@@ -1547,7 +1554,7 @@ class RealtimeVideoRenderer(
     @Synchronized
     fun stabilizationDiagnostics(): String {
         val session = stabilizationSession
-        return "requested=$enhancedStabilizationEnabled, " +
+        return "requested=$mgcStabilizationEnabled, positionLock=$positionLockEnabled, " +
             "started=$stabilizationSessionStarted, " +
             "operational=${session?.isOperational == true}, " +
             "poseReady=${session?.isPoseSourceReady == true}, " +
@@ -1562,7 +1569,7 @@ class RealtimeVideoRenderer(
 
     @Synchronized
     fun resumeStabilization() {
-        if (!enhancedStabilizationEnabled || stabilizationSessionStarted) return
+        if (!mgcStabilizationEnabled || stabilizationSessionStarted) return
         stabilizationSessionStarted = stabilizationSession?.start() == true
     }
 
@@ -1573,7 +1580,7 @@ class RealtimeVideoRenderer(
      */
     @Synchronized
     fun restartStabilizationForCameraSwitch(sensorOrientationDegrees: Int) {
-        if (!initialized || !enhancedStabilizationEnabled) return
+        if (!initialized || !mgcStabilizationEnabled) return
 
         // A selected physical camera may expose a different cardinal sensor orientation.
         // Reset only the presentation transform; keep the encoder and stabilization lifecycle

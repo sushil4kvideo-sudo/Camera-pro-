@@ -71,6 +71,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         // Match MGC's fixed 5% per-edge safety crop while the first timestamp-matched
         // stabilization frame is pending, avoiding a visible crop jump at EIS handoff.
         private const val EIS_OUTPUT_CROP_ZOOM = 1.1111112f
+        private const val POSITION_LOCK_OUTPUT_CROP_ZOOM = 2f
         // SurfaceTexture and the timestamp-matched ImageReader output share Camera2 SENSOR_TIMESTAMP.
         // EIS may trail the live OES stream by several lookahead frames.
         private const val MAX_EIS_ORIENTATION_TIMESTAMP_LEAD_NS = 1_000_000_000L
@@ -1566,6 +1567,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val needsEisSafetyCrop = !stabilized &&
             previewStabilizationUseCase != null &&
             stabilizationCoordinator?.isCurrentCameraSupported == true
+        val pendingStabilizationCropZoom = if (
+            previewStabilizationUseCase == StabilizationUseCase.POSITION_LOCK
+        ) POSITION_LOCK_OUTPUT_CROP_ZOOM else EIS_OUTPUT_CROP_ZOOM
         val baseMatrix = if (targetWidth == viewportWidth && targetHeight == viewportHeight) {
             when {
                 stabilized -> stabilizationMvpMatrix
@@ -1575,8 +1579,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     Matrix.scaleM(
                         eisFallbackMvpMatrix,
                         0,
-                        EIS_OUTPUT_CROP_ZOOM,
-                        EIS_OUTPUT_CROP_ZOOM,
+                        pendingStabilizationCropZoom,
+                        pendingStabilizationCropZoom,
                         1f,
                     )
                     eisFallbackMvpMatrix
@@ -1590,7 +1594,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 sourceHeight = if (stabilized) stabilizationInputHeight else previewHeight,
             ).also { matrix ->
                 if (needsEisSafetyCrop) {
-                    Matrix.scaleM(matrix, 0, EIS_OUTPUT_CROP_ZOOM, EIS_OUTPUT_CROP_ZOOM, 1f)
+                    Matrix.scaleM(matrix, 0, pendingStabilizationCropZoom, pendingStabilizationCropZoom, 1f)
                 }
             }
         }
@@ -1610,7 +1614,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 outMatrix = modeSwitchMvpMatrix,
             )
             if (needsEisSafetyCrop) {
-                Matrix.scaleM(matrix, 0, EIS_OUTPUT_CROP_ZOOM, EIS_OUTPUT_CROP_ZOOM, 1f)
+                Matrix.scaleM(matrix, 0, pendingStabilizationCropZoom, pendingStabilizationCropZoom, 1f)
             }
             return matrix
         }

@@ -22,8 +22,8 @@ constexpr double kMaximumAllowedProtrusion = 0.0;
 // projection crop scale after construction.
 constexpr double kLookaheadCropMargin = 0.05;
 constexpr double kAllowedInnerMargin = 0.025;
-constexpr double kOutputCropZoom =
-    1.0 / (1.0 - 2.0 * kLookaheadCropMargin);
+// Position Lock retains the central 50% of the source width and height (2x crop).
+constexpr double kPositionLockCropMargin = 0.25;
 constexpr double kProjectionDenominatorEpsilon = 0.000001;
 constexpr std::int64_t kMaximumLensSampleInterpolationGapNs = 50'000'000;
 constexpr std::int64_t kMinimumSupportedFramePeriodNs = 1'000'000;
@@ -405,6 +405,20 @@ private:
     }
   }
 
+  double cropMargin() const {
+    return config_.position_lock_enabled ? kPositionLockCropMargin
+                                         : kLookaheadCropMargin;
+  }
+
+  double allowedInnerCropMargin() const {
+    return config_.position_lock_enabled ? kPositionLockCropMargin * 0.5
+                                         : kAllowedInnerMargin;
+  }
+
+  double outputCropZoom() const {
+    return 1.0 / (1.0 - 2.0 * cropMargin());
+  }
+
   Mat3 intrinsicsFor(const FrameMetadata &frame) const {
     const double focal = static_cast<double>(config_.output_width) /
                          frame.inverse_focal_length;
@@ -736,8 +750,8 @@ private:
       }
     } else {
       const std::array<double, 2> source_rows{
-          kLookaheadCropMargin * static_cast<double>(config_.output_height),
-          (1.0 - kLookaheadCropMargin) *
+          cropMargin() * static_cast<double>(config_.output_height),
+          (1.0 - cropMargin()) *
               static_cast<double>(config_.output_height),
       };
       const auto offsets = type18::makeBoundingRowOffsets(
@@ -788,15 +802,15 @@ private:
     const double width = static_cast<double>(config_.output_width);
     const double height = static_cast<double>(config_.output_height);
     // The dense feasibility pass has a different domain from the earlier
-    // two-row probe.  It projects the complete source frame and asks whether
-    // the fixed 5% output safety frame can be reverse-projected inside that
-    // source.  Feeding the two-row 5%-inset input rectangle here pairs each
+    // two-row probe. It projects the complete source frame and asks whether
+    // the mode-specific output safety frame can be reverse-projected inside
+    // that source. Feeding the inset input rectangle here pairs each
     // rolling-shutter boundary with the wrong source scanline and makes the
     // outer correction oscillate as it alternates between incompatible
     // geometry models.
     const type18::ProtrusionRect input{0.0, width, 0.0, height};
     const type18::ProtrusionRect output =
-        insetRect(width, height, kLookaheadCropMargin);
+        insetRect(width, height, cropMargin());
     const type18::ProtrusionRect allowed{0.0, width, 0.0, height};
     return type18::computeFullGridCropCorrectionFraction(
         requested, fallback, geometry.inverse_real,
@@ -816,11 +830,11 @@ private:
     const double width = static_cast<double>(config_.output_width);
     const double height = static_cast<double>(config_.output_height);
     const type18::ProtrusionRect input =
-        insetRect(width, height, kLookaheadCropMargin);
+        insetRect(width, height, cropMargin());
     const type18::ProtrusionRect output =
-        insetRect(width, height, kLookaheadCropMargin);
+        insetRect(width, height, cropMargin());
     const type18::ProtrusionRect allowed =
-        insetRect(width, height, kAllowedInnerMargin);
+        insetRect(width, height, allowedInnerCropMargin());
     const std::vector<bool> mask(geometry.inverse_real.size() - 1, true);
     return type18::evaluateProjectionProtrusion(
                geometry.inverse_real,
@@ -1086,6 +1100,55 @@ private:
         parameters_);
   }
 
+  StabilizedFrame stabilizePositionLocked(
+      const FrameMetadata &frame, const type18::GyroPoseQueue &queue,
+      std::int64_t center_timestamp, const type18::PosePair &current) {
+    // Capture the reference once from the first fully timestamp-covered frame.
+    // Keep it fixed for the session; only crop feasibility may relax it near an edge.
+    if (!position_lock_pose_initialized_) {
+      position_lock_reference_pose_ = current.primary;
+      position_lock_pose_initialized_ = true;
+    }
+
+    const Mat3 virtual_intrinsics = intrinsicsFor(frame);
+    const FutureGeometry dense_current =
+        buildFutureGeometry(queue, frame, center_timestamp, true);
+    if (dense_current.real.size() !=
+        static_cast<std::size_t>(config_.num_strips)) {
+      return dropped(frame.frame_timestamp_ns);
+    }
+
+    const double feasibility_blend = fullGridCorrection(
+        position_lock_reference_pose_, current.primary, dense_current,
+        virtual_intrinsics);
+    const Quaternion virtual_pose = type18::interpolatePose(
+        position_lock_reference_pose_, current.primary, feasibility_blend,
+        position_lock_reference_pose_);
+    const std::vector<Mat3> virtual_rows =
+        virtualProjection(virtual_pose, virtual_intrinsics);
+    const std::vector<Mat3> pixel_warps = type18::composeDenseWarpRows(
+        dense_current.real, virtual_rows, false, Mat3::identity());
+
+    StabilizedFrame output;
+    output.timestamp_ns = frame.frame_timestamp_ns;
+    output.tripod_mode = tripod_mode_;
+    output.applied_strength = config_.stabilization_strength;
+    output.diagnostic_measured_pose = current.primary;
+    output.diagnostic_secondary_measured_pose = current.secondary;
+    output.diagnostic_virtual_pose = virtual_pose;
+    output.diagnostic_outer_correction = feasibility_blend;
+    output.strip_input_to_output.reserve(pixel_warps.size());
+    for (const Mat3 &pixel_warp : pixel_warps) {
+      output.strip_input_to_output.push_back(
+          type18::applyCropZoomToClipHomography(
+              type18::convertPixelHomographyToClip(
+                  pixel_warp, static_cast<double>(config_.output_width),
+                  static_cast<double>(config_.output_height)),
+              outputCropZoom()));
+    }
+    return output;
+  }
+
   StabilizedFrame stabilizeFront() {
     const FrameMetadata &frame = pending_frames_.front();
     const type18::GyroPoseQueue &queue =
@@ -1102,6 +1165,9 @@ private:
     type18::PosePair current;
     if (!queryPair(queue, center_timestamp, &current)) {
       return dropped(frame.frame_timestamp_ns);
+    }
+    if (config_.position_lock_enabled) {
+      return stabilizePositionLocked(frame, queue, center_timestamp, current);
     }
 
     // gyro_nonlinear_filter.cc's first-valid-frame branch (engine +2080)
@@ -1148,7 +1214,7 @@ private:
                 type18::convertPixelHomographyToClip(
                     pixel_warp, static_cast<double>(config_.output_width),
                     static_cast<double>(config_.output_height)),
-                kOutputCropZoom));
+                outputCropZoom()));
       }
       return output;
     }
@@ -1362,7 +1428,7 @@ private:
               type18::convertPixelHomographyToClip(
                   pixel_warp, static_cast<double>(config_.output_width),
                   static_cast<double>(config_.output_height)),
-              kOutputCropZoom));
+              outputCropZoom()));
     }
     return output;
   }
@@ -1397,6 +1463,8 @@ private:
   std::deque<double> projected_motion_magnitudes_;
   std::deque<std::int64_t> projected_motion_peak_frames_;
   Quaternion previous_output_pose_ = Quaternion::identity();
+  Quaternion position_lock_reference_pose_ = Quaternion::identity();
+  bool position_lock_pose_initialized_ = false;
   std::int64_t next_frame_sequence_ = 0;
   std::int64_t previous_frame_timestamp_ns_ = 0;
   std::int64_t last_submitted_frame_timestamp_ns_ = 0;

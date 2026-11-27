@@ -49,6 +49,7 @@ enum class StabilizationUseCase(
 ) {
     VIDEO(DEFAULT_VIDEO_STABILIZATION_STRENGTH),
     PHOTO_PREVIEW(DEFAULT_VIDEO_STABILIZATION_STRENGTH),
+    POSITION_LOCK(DEFAULT_VIDEO_STABILIZATION_STRENGTH),
 }
 
 data class AlgorithmicStabilizationTransform(
@@ -70,6 +71,8 @@ data class StabilizationFrame(
     val transform: AlgorithmicStabilizationTransform?,
     /** Exact Camera2 image whose SENSOR_TIMESTAMP equals [timestampNs]. */
     val image: StabilizationImage,
+    /** True when native MGC holds a fixed virtual-camera pose with a 2x crop. */
+    val positionLock: Boolean = false,
 )
 
 /**
@@ -253,6 +256,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
     private var nativeFrameHeight = 0
     private var nativeStrength = 0f
     private var nativeLookaheadFrames = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+    private var nativePositionLockEnabled = false
     private var gyroFeedBoundaryNs = 0L
     private var lastProcessedGyroTimestampNs = 0L
     private var lastOpticalCorrectionTimestampNs = 0L
@@ -628,6 +632,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         frameWidth = frameWidth,
         frameHeight = frameHeight,
         lookaheadFrames = normalizeStabilizationLookahead(lookaheadFrames),
+        useCase = useCase,
         onFrameAvailable = onFrameAvailable,
     )
 
@@ -695,6 +700,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         frameHeight: Int,
         strength: Float,
         lookaheadFrames: Int,
+        positionLockEnabled: Boolean,
     ): Long? = synchronized(lock) {
         if (!isCurrentCameraSupported) return null
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
@@ -702,6 +708,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
             nativeFrameWidth == frameWidth &&
             nativeFrameHeight == frameHeight &&
             nativeLookaheadFrames == normalizedLookahead &&
+            nativePositionLockEnabled == positionLockEnabled &&
             kotlin.math.abs(nativeStrength - strength) <= 0.0001f
 
         if (sameConfig) {
@@ -714,6 +721,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         // determines the replacement input size. Keep sibling sessions alive until it arrives.
         if (activeSessions.isNotEmpty() && cameraReconfigurationPending &&
             nativeLookaheadFrames == normalizedLookahead &&
+            nativePositionLockEnabled == positionLockEnabled &&
             kotlin.math.abs(nativeStrength - strength) <= 0.0001f
         ) {
             activeSessions[sessionId] = onFrameAvailable
@@ -729,8 +737,8 @@ class RealtimeStabilizationCoordinator(context: Context) {
         if (activeSessions.isNotEmpty()) {
             PLog.i(
                 TAG,
-                "MGC EIS reconfiguring from ${nativeFrameWidth}x${nativeFrameHeight}@$nativeStrength,lookahead=$nativeLookaheadFrames " +
-                    "to ${frameWidth}x${frameHeight}@$strength,lookahead=$normalizedLookahead",
+                "MGC EIS reconfiguring from ${nativeFrameWidth}x${nativeFrameHeight}@$nativeStrength,lookahead=$nativeLookaheadFrames,positionLock=$nativePositionLockEnabled " +
+                    "to ${frameWidth}x${frameHeight}@$strength,lookahead=$normalizedLookahead,positionLock=$positionLockEnabled",
             )
             nativeEngine.stop()
             resetFeederLocked()
@@ -738,6 +746,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
             nativeFrameHeight = 0
             nativeStrength = 0f
             nativeLookaheadFrames = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+            nativePositionLockEnabled = false
             activeSessions.clear()
             activeSessionCount = 0
         }
@@ -751,6 +760,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                     CameraCharacteristics.LENS_FACING_FRONT,
                 strength = strength,
                 lookaheadFrames = normalizedLookahead,
+                positionLockEnabled = positionLockEnabled,
             )
         ) {
             return null
@@ -761,6 +771,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         nativeFrameHeight = frameHeight
         nativeStrength = strength
         nativeLookaheadFrames = normalizedLookahead
+        nativePositionLockEnabled = positionLockEnabled
         if (sensorThread == null) {
             val thread = HandlerThread("Photon-MGC-EIS-Gyro").apply { start() }
             val registered = sensorManager.registerListener(
@@ -777,6 +788,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 nativeFrameHeight = 0
                 nativeStrength = 0f
                 nativeLookaheadFrames = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+                nativePositionLockEnabled = false
                 PLog.e(TAG, "Unable to register MGC calibrated gyroscope stream")
                 return null
             }
@@ -804,6 +816,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
             nativeFrameHeight = 0
             nativeStrength = 0f
             nativeLookaheadFrames = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+            nativePositionLockEnabled = false
             resetFeederLocked()
             PLog.i(TAG, "MGC htd feeder stopped")
         }
@@ -843,6 +856,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         val previousHeight = nativeFrameHeight
         val previousStrength = nativeStrength
         val previousLookahead = nativeLookaheadFrames
+        val previousPositionLockEnabled = nativePositionLockEnabled
         nativeEngine.stop()
         clearFrameTimelineLocked(resetSequence = false)
 
@@ -858,6 +872,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                     CameraCharacteristics.LENS_FACING_FRONT,
                 strength = previousStrength,
                 lookaheadFrames = previousLookahead,
+                positionLockEnabled = previousPositionLockEnabled,
             )
             nativeFrameWidth = if (restarted) previousWidth else 0
             nativeFrameHeight = if (restarted) previousHeight else 0
@@ -872,6 +887,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         // recreate the engine without tearing down other active preview/recording sessions.
         nativeStrength = previousStrength
         nativeLookaheadFrames = previousLookahead
+        nativePositionLockEnabled = previousPositionLockEnabled
         cameraReconfigurationPending = true
         PLog.i(
             TAG,
@@ -895,6 +911,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 CameraCharacteristics.LENS_FACING_FRONT,
             strength = strength,
             lookaheadFrames = lookahead,
+            positionLockEnabled = nativePositionLockEnabled,
         )
         nativeFrameWidth = if (restarted) width else 0
         nativeFrameHeight = if (restarted) height else 0
@@ -1193,6 +1210,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         private val frameWidth: Int,
         private val frameHeight: Int,
         private val lookaheadFrames: Int,
+        private val useCase: StabilizationUseCase,
         private val onFrameAvailable: (() -> Unit)?,
     ) {
         @Volatile
@@ -1217,6 +1235,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 frameHeight = frameHeight,
                 strength = strength,
                 lookaheadFrames = lookaheadFrames,
+                positionLockEnabled = useCase == StabilizationUseCase.POSITION_LOCK,
             )
             active = startSequence != null
             // Registration and the result cursor are captured under the same coordinator lock:
@@ -1284,7 +1303,12 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 }
                 return when (val result = next.result) {
                     is MgcEisNativeEngine.FrameResult.Dropped ->
-                        StabilizationFrame(timestampNs, null, image)
+                        StabilizationFrame(
+                            timestampNs = timestampNs,
+                            transform = null,
+                            image = image,
+                            positionLock = useCase == StabilizationUseCase.POSITION_LOCK,
+                        )
                     is MgcEisNativeEngine.FrameResult.Stabilized -> StabilizationFrame(
                         timestampNs = timestampNs,
                         transform = AlgorithmicStabilizationTransform(
@@ -1296,6 +1320,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                             tripodMode = result.tripodMode,
                         ),
                         image = image,
+                        positionLock = useCase == StabilizationUseCase.POSITION_LOCK,
                     )
                 }
             }

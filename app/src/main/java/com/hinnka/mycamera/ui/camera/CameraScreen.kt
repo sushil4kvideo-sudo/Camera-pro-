@@ -292,6 +292,7 @@ fun CameraScreen(
         viewModel.normalVideoUltraWideInstantSwitchActive.collectAsState()
     val spatialVideoVirtualTelephotoEnabled by viewModel.spatialVideoVirtualTelephotoEnabled.collectAsState()
     val topOffZoomEnabled by viewModel.topOffZoomEnabled.collectAsState()
+    val topOffPositionLockActive by viewModel.topOffPositionLockActive.collectAsState()
     val topOffZoomFactor by viewModel.topOffZoomFactor.collectAsState()
     val topOffZoomLockedRatio by viewModel.topOffZoomLockedRatio.collectAsState()
     val topOffZoomPanX by viewModel.topOffZoomPanX.collectAsState()
@@ -446,6 +447,7 @@ fun CameraScreen(
         topOffZoomPanX,
         topOffZoomPanY,
         topOffZoomRollDegrees,
+        topOffPositionLockActive,
         state.zoomRatio,
         state.currentCameraId,
         state.captureMode,
@@ -465,7 +467,7 @@ fun CameraScreen(
         val active = topOffZoomEnabled &&
             state.captureMode == CaptureMode.VIDEO &&
             (state.zoomRatio >= 1f || isSelectedUltraWide) &&
-            !spatialVideoEnabled && !dualCaptureEnabled
+            !spatialVideoEnabled && !dualCaptureEnabled && !topOffPositionLockActive
         val lockedZoom = if (isSelectedUltraWide) {
             topOffZoomFactor.coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
         } else {
@@ -2017,8 +2019,8 @@ fun CameraScreen(
                             stabilizationCoordinator = viewModel.realtimeStabilizationCoordinator,
                             stabilizationInputSize = if (
                                 state.captureMode == CaptureMode.VIDEO &&
-                                state.videoConfig.stabilizationMode ==
-                                    VideoStabilizationMode.ENHANCED
+                                (state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED ||
+                                    topOffPositionLockActive)
                             ) {
                                 state.videoCapabilities
                                     .enhancedStabilizationInputSizesByResolution[
@@ -2032,6 +2034,7 @@ fun CameraScreen(
                             videoPreviewStabilizationEnabled =
                                 state.videoConfig.stabilizationMode ==
                                     VideoStabilizationMode.ENHANCED,
+                            videoPreviewPositionLockEnabled = topOffPositionLockActive,
                             videoPreviewStabilizationStrength =
                                 state.videoConfig.enhancedStabilizationStrength,
                             videoPreviewStabilizationLookahead =
@@ -3617,6 +3620,20 @@ private fun Controls(
         val gyroMode = preset?.gyroMode
         if (gyroMode == null) {
             onDispose { }
+        } else if (gyroMode == GyroPanMode.POSITION_LOCK) {
+            // MGC fixed-pose 12-strip correction replaces the old gyro-to-pan crop controller.
+            val started = viewModel.setTopOffPositionLockActive(true)
+            if (!started) {
+                Toast.makeText(
+                    context,
+                    "Position Lock needs a supported camera and standard frame rate. Start it before recording.",
+                    Toast.LENGTH_LONG,
+                ).show()
+                runningTopOffPanPreset = null
+            }
+            onDispose {
+                if (started) viewModel.setTopOffPositionLockActive(false)
+            }
         } else {
             // Gyro presets bypass the normal waypoint playback effect below. Initialize their
             // first waypoint here so the preview crop and encoder crop are active before the
@@ -3869,7 +3886,9 @@ private fun Controls(
                                     }
                                 },
                                 enabled = selectedTopOffPanPreset != null &&
-                                    !state.videoRecordingState.isProcessing,
+                                    !state.videoRecordingState.isProcessing &&
+                                    !(runningTopOffPanPreset?.gyroMode == GyroPanMode.POSITION_LOCK &&
+                                        state.videoRecordingState.isRecording),
                                 modifier = Modifier
                                     .size(42.dp)
                                     .background(

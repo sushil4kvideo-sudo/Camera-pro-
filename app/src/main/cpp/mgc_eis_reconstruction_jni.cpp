@@ -65,7 +65,7 @@ void logFailure(const char *operation, const std::exception &error) {
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_create(
     JNIEnv *, jobject, jint width, jint height, jboolean front_facing,
-    jfloat strength, jint lookahead_frames) {
+    jfloat strength, jint lookahead_frames, jboolean position_lock_enabled) {
   try {
     EngineConfig config;
     config.output_width = width;
@@ -78,6 +78,7 @@ Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_create(
     config.lookahead_frames = std::clamp(static_cast<int>(lookahead_frames), 0, 10);
     config.stabilization_strength =
         std::clamp(static_cast<double>(strength), 0.0, 1.0);
+    config.position_lock_enabled = position_lock_enabled == JNI_TRUE;
     return toJlong(
         new Handle(std::move(config), front_facing == JNI_TRUE));
   } catch (const std::exception &error) {

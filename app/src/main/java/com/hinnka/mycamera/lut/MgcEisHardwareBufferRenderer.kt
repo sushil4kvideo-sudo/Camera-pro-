@@ -23,22 +23,17 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
     data class Frame(val timestampNs: Long, val textureId: Int, val width: Int, val height: Int)
 
     private val mesh = MgcEisMesh()
-    // Native output matrices pass through convertPixelHomographyToClip then
-    // applyCropZoomToClipHomography(kOutputCropZoom), where:
-    //   kLookaheadCropMargin = 0.05
-    //   kOutputCropZoom      = 1.0 / (1.0 - 2.0 * 0.05) ≈ 1.1111
-    // applyCropZoomToClipHomography divides the W row (h20, h21, h22) by zoom.
-    // A Dropped frame must use the same crop so that the viewport does not jump
-    // between 1.0x and 1.111x on every stabilization gap.
-    private val droppedFrameHomographies = FloatArray(STABILIZATION_ROW_COUNT * 9).also { values ->
-        val h22 = 1.0f - 2.0f * 0.05f  // = 1.0f / kOutputCropZoom = 0.9f
-        repeat(STABILIZATION_ROW_COUNT) { row ->
-            val offset = row * 9
-            values[offset] = 1f      // h00
-            values[offset + 4] = 1f  // h11
-            values[offset + 8] = h22 // h22: W-row crop zoom
+    // Preserve the active mode's crop even if an individual timestamp loses pose coverage.
+    private fun droppedFrameHomographies(positionLock: Boolean): FloatArray =
+        FloatArray(STABILIZATION_ROW_COUNT * 9).also { values ->
+            val h22 = if (positionLock) 0.5f else 0.9f
+            repeat(STABILIZATION_ROW_COUNT) { row ->
+                val offset = row * 9
+                values[offset] = 1f
+                values[offset + 4] = 1f
+                values[offset + 8] = h22
+            }
         }
-    }
 
     private var programId = 0
     private var positionLocation = -1
@@ -94,7 +89,7 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
             mesh.draw(
                 positionLocation = positionLocation,
                 textureCoordinateLocation = textureCoordinateLocation,
-                rowHomographies = frame.transform?.rowHomographies ?: droppedFrameHomographies,
+                rowHomographies = frame.transform?.rowHomographies ?: droppedFrameHomographies(frame.positionLock),
             )
             // The camera owns this HardwareBuffer and may recycle it as soon as Image.close()
             // returns.  A GL draw only enqueues sampling work, so a memory barrier alone cannot

@@ -92,6 +92,7 @@ fun CameraPreviewGL(
     stabilizationInputSize: Size = previewSize,
     photoPreviewStabilizationEnabled: Boolean = false,
     videoPreviewStabilizationEnabled: Boolean = false,
+    videoPreviewPositionLockEnabled: Boolean = false,
     videoPreviewStabilizationStrength: Float = 0f,
     videoPreviewStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
     modifier: Modifier = Modifier
@@ -247,6 +248,8 @@ fun CameraPreviewGL(
                         glSurfaceView.setStabilizationCoordinator(stabilizationCoordinator)
                         val previewStabilizationUseCase = when {
                             captureMode == CaptureMode.VIDEO &&
+                                videoPreviewPositionLockEnabled -> StabilizationUseCase.POSITION_LOCK
+                            captureMode == CaptureMode.VIDEO &&
                                 videoPreviewStabilizationEnabled -> StabilizationUseCase.VIDEO
                             captureMode == CaptureMode.PHOTO &&
                                 photoPreviewStabilizationEnabled -> StabilizationUseCase.PHOTO_PREVIEW
@@ -254,12 +257,14 @@ fun CameraPreviewGL(
                         }
                         glSurfaceView.setPreviewStabilization(
                             useCase = previewStabilizationUseCase,
-                            strength = if (previewStabilizationUseCase == StabilizationUseCase.VIDEO) {
-                                videoPreviewStabilizationStrength
-                            } else {
-                                StabilizationUseCase.PHOTO_PREVIEW.defaultStrength
+                            strength = when (previewStabilizationUseCase) {
+                                StabilizationUseCase.VIDEO -> videoPreviewStabilizationStrength
+                                StabilizationUseCase.POSITION_LOCK -> StabilizationUseCase.POSITION_LOCK.defaultStrength
+                                else -> StabilizationUseCase.PHOTO_PREVIEW.defaultStrength
                             },
-                            lookaheadFrames = if (previewStabilizationUseCase == StabilizationUseCase.VIDEO) {
+                            lookaheadFrames = if (previewStabilizationUseCase == StabilizationUseCase.VIDEO ||
+                                previewStabilizationUseCase == StabilizationUseCase.POSITION_LOCK
+                            ) {
                                 videoPreviewStabilizationLookahead
                             } else {
                                 DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD

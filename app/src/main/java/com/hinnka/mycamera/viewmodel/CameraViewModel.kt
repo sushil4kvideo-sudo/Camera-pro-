@@ -3595,6 +3595,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val spatialVideoShowUltraWidePreview = cameraController.spatialVideoShowUltraWidePreview
     val spatialVideoVirtualTelephotoEnabled = cameraController.spatialVideoVirtualTelephotoEnabledFlow
     val topOffZoomEnabled = cameraController.topOffZoomEnabledFlow
+    val topOffPositionLockActive = cameraController.topOffPositionLockActiveFlow
     val topOffZoomFactor = cameraController.topOffZoomFactorFlow
     val topOffZoomLockedRatio = cameraController.topOffZoomLockedRatioFlow
     val topOffZoomPanX = cameraController.topOffZoomPanXFlow
@@ -3668,6 +3669,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun isTopOffZoomAvailable(): Boolean = cameraController.isTopOffZoomAvailable()
+
+    fun isTopOffPositionLockAvailable(): Boolean = cameraController.isTopOffPositionLockAvailable()
+
+    fun setTopOffPositionLockActive(enabled: Boolean): Boolean =
+        cameraController.setTopOffPositionLockActive(enabled)
 
     fun getTopOffGyroPanOptics(): GyroPanOptics = cameraController.getTopOffGyroPanOptics()
 

@@ -160,6 +160,7 @@ class VideoRecorder(
     private var requestedCameraInputRollDegrees: Float = 0f
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
     private var requestedEnhancedStabilization = false
+    private var requestedPositionLockStabilization = false
     private var requestedEnhancedStabilizationStrength = DEFAULT_VIDEO_STABILIZATION_STRENGTH
     private var requestedEnhancedStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
     private var requestedDualCaptureInputSize: Size? = null
@@ -287,6 +288,7 @@ class VideoRecorder(
         orientationHintDegrees: Int = 0,
         flipEncodedFrame: Boolean = false,
         enhancedStabilization: Boolean = false,
+        positionLockStabilization: Boolean = false,
         enhancedStabilizationStrength: Float = DEFAULT_VIDEO_STABILIZATION_STRENGTH,
         enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
         recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
@@ -370,6 +372,7 @@ class VideoRecorder(
         requestedSensorOrientationDegrees = sensorOrientationDegrees
         requestedFlipEncodedFrame = flipEncodedFrame
         requestedEnhancedStabilization = enhancedStabilization
+        requestedPositionLockStabilization = enhancedStabilization && positionLockStabilization
         requestedEnhancedStabilizationStrength =
             normalizeStabilizationStrength(enhancedStabilizationStrength)
         requestedEnhancedStabilizationLookahead =
@@ -813,6 +816,7 @@ class VideoRecorder(
             encoderColorConfig = encoderColorConfig,
             stabilizationCoordinator = stabilizationCoordinator,
             enhancedStabilizationEnabled = requestedEnhancedStabilization,
+            positionLockEnabled = requestedPositionLockStabilization,
             enhancedStabilizationStrength = requestedEnhancedStabilizationStrength,
             enhancedStabilizationLookahead = requestedEnhancedStabilizationLookahead,
             dualCaptureInputSize = requestedDualCaptureInputSize,

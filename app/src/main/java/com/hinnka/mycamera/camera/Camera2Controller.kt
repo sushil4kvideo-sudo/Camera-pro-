@@ -377,6 +377,8 @@ class Camera2Controller(private val context: Context) {
         specialVideoPreferences.getBoolean("top_off_zoom_enabled", false)
     )
     val topOffZoomEnabledFlow: StateFlow<Boolean> = _topOffZoomEnabled.asStateFlow()
+    private val _topOffPositionLockActive = MutableStateFlow(false)
+    val topOffPositionLockActiveFlow: StateFlow<Boolean> = _topOffPositionLockActive.asStateFlow()
 
     private val _topOffZoomFactor = MutableStateFlow(
         specialVideoPreferences.getFloat("top_off_zoom_factor", 2f).coerceIn(1f, TopOffPanPreset.MAX_ZOOM_RATIO)
@@ -3575,13 +3577,19 @@ class Camera2Controller(private val context: Context) {
                     _state.value.videoRecordingState.isRecording
                 ) {
                     val switchedVideoState = _state.value
-                    val switchedInputSize =
+                    val switchedUsesMgcStabilization = shouldUseVideoMgcStabilization()
+                    val switchedInputSize = if (switchedUsesMgcStabilization) {
+                        switchedVideoState.videoCapabilities.enhancedStabilizationInputSizesByResolution[
+                            switchedVideoState.videoConfig.resolution
+                        ]
+                    } else {
                         switchedVideoState.videoCapabilities.cameraInputSizesByResolution[
                             switchedVideoState.videoConfig.resolution
-                        ] ?: resolvedVideoPreviewSize
+                        ]
+                    } ?: resolvedVideoPreviewSize
                     videoRecorder.updateCameraInputSize(
                         size = switchedInputSize,
-                        currentCameraUsesEnhancedStabilization = shouldUseVideoEnhancedStabilization(),
+                        currentCameraUsesEnhancedStabilization = switchedUsesMgcStabilization,
                         sensorOrientationDegrees = openCharacteristics.get(
                             CameraCharacteristics.SENSOR_ORIENTATION
                         ) ?: cachedSensorOrientation,
@@ -4250,11 +4258,11 @@ class Camera2Controller(private val context: Context) {
             _state.value.videoConfig.fps == VideoFpsPreset.FPS_120 &&
             _state.value.videoRecordingState.shouldAttachCameraInput()
         val stabilizationReader = if (highSpeedVideo || dualAspectRecordingActive) null else ensureStabilizationImageReader()
-        val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
+        val useMgcStabilization = shouldUseVideoMgcStabilization()
         val videoSurface = if (
             captureMode == CaptureMode.VIDEO &&
             _state.value.videoRecordingState.shouldAttachCameraInput() &&
-            !useEnhancedStabilization
+            !useMgcStabilization
         ) {
             videoRecorder.cameraInputSurface
         } else {
@@ -4327,7 +4335,7 @@ class Camera2Controller(private val context: Context) {
         pendingVendorSessionParameterRestart = false
         val templateType = if (
             captureMode == CaptureMode.VIDEO &&
-            !useEnhancedStabilization
+            !useMgcStabilization
         ) {
             CameraDevice.TEMPLATE_RECORD
         } else {
@@ -4337,7 +4345,7 @@ class Camera2Controller(private val context: Context) {
             TAG,
             "Creating repeating request: " +
                 "template=${if (templateType == CameraDevice.TEMPLATE_PREVIEW) "PREVIEW" else "RECORD"}, " +
-                "captureMode=$captureMode, enhancedStabilization=$useEnhancedStabilization"
+                "captureMode=$captureMode, mgcStabilization=$useMgcStabilization"
         )
         var vendorSessionParametersApplied = false
 
@@ -4786,6 +4794,16 @@ class Camera2Controller(private val context: Context) {
             .takeIf { it.isNotEmpty() }
             ?.let(enhancedStabilizationUnavailableCameraIds::add)
         when {
+            state.captureMode == CaptureMode.VIDEO && _topOffPositionLockActive.value -> {
+                PLog.e(TAG, "Disabling MGC Position Lock: $reason")
+                _topOffPositionLockActive.value = false
+                if (_state.value.videoRecordingState.isRecording || videoRecorder.isRecording()) {
+                    videoRecorder.forceStop()
+                } else if (cameraDevice != null && previewSurface != null) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
+
             state.captureMode == CaptureMode.VIDEO &&
                 state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED -> {
                 val fallbackMode = resolvePreviousVideoStabilizationMode(
@@ -6786,6 +6804,7 @@ class Camera2Controller(private val context: Context) {
             val userZoomRatio = requestedDeviceZoomRatio.coerceIn(minZoom, maxSupportedZoom)
             val topOffZoomActive = state.captureMode == CaptureMode.VIDEO &&
                 _topOffZoomEnabled.value &&
+                !_topOffPositionLockActive.value &&
                 !logicalAutoSwitch &&
                 !spatialVideoEnabled &&
                 !dualCaptureEnabled &&
@@ -6818,6 +6837,7 @@ class Camera2Controller(private val context: Context) {
             if (_topOffZoomEnabled.value && !topOffZoomActive) {
                 val inactiveReason = when {
                     state.captureMode != CaptureMode.VIDEO -> "capture-mode-not-video"
+                    _topOffPositionLockActive.value -> "position-lock-native-crop-active"
                     logicalAutoSwitch -> "logical-multi-camera-active"
                     spatialVideoEnabled -> "spatial-video-active"
                     dualCaptureEnabled -> "dual-capture-active"
@@ -7017,7 +7037,8 @@ class Camera2Controller(private val context: Context) {
             if (state.captureMode == CaptureMode.VIDEO) {
                 val mode = state.videoConfig.stabilizationMode
                 val enhancedSelected = mode == VideoStabilizationMode.ENHANCED
-                val requestedVideoMode = if (enhancedSelected) {
+                val algorithmicVideoSelected = enhancedSelected || shouldUsePositionLockStabilization()
+                val requestedVideoMode = if (algorithmicVideoSelected) {
                     // EIS+ performs the warp itself. Some front HALs omit OFF from their
                     // advertised mode list while still accepting the explicit request key.
                     CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF.takeIf {
@@ -7034,7 +7055,7 @@ class Camera2Controller(private val context: Context) {
                         videoStabilizationMode
                     )
                 }
-                if (enhancedSelected && isCaptureRequestKeyAvailable(
+                if (algorithmicVideoSelected && isCaptureRequestKeyAvailable(
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE.name
                     )
                 ) {
@@ -7060,7 +7081,7 @@ class Camera2Controller(private val context: Context) {
                 }
                 applyOisDataMode(
                     builder,
-                    enhancedSelected &&
+                    algorithmicVideoSelected &&
                         realtimeStabilizationCoordinator.shouldRequestOisSamples,
                 )
                 return
@@ -10530,6 +10551,43 @@ class Camera2Controller(private val context: Context) {
         return activeArray.width() > 0 && activeArray.height() > 0
     }
 
+    fun isTopOffPositionLockAvailable(): Boolean {
+        val current = _state.value
+        if (current.captureMode != CaptureMode.VIDEO ||
+            current.videoConfig.fps == VideoFpsPreset.FPS_120 ||
+            current.videoRecordingState.isRecording || current.videoRecordingState.isProcessing ||
+            videoRecorder.isRecording() || spatialVideoRecorder.isRecording() ||
+            spatialVideoTelephotoRecorder.isRecording() || spatialVideoEnabled ||
+            dualCaptureEnabled || dualAspectRecordingActive || normalVideoUltraWideInstantSwitchActive ||
+            !isTopOffZoomAvailable()
+        ) return false
+        return current.videoCapabilities.enhancedStabilizationInputSizesByResolution[
+            current.videoConfig.resolution
+        ]?.let { it.width > 0 && it.height > 0 } == true &&
+            realtimeStabilizationCoordinator.isCurrentCameraSupported
+    }
+
+    /** Activates MGC's fixed-reference pose renderer for the live preview. */
+    fun setTopOffPositionLockActive(enabled: Boolean): Boolean {
+        if (enabled && !isTopOffPositionLockAvailable()) {
+            PLog.w(TAG, "Position Lock rejected: unsupported camera, FPS, or recording state")
+            return false
+        }
+        if (!enabled && (_state.value.videoRecordingState.isRecording || videoRecorder.isRecording())) {
+            PLog.w(TAG, "Position Lock remains active until the current recording stops")
+            return false
+        }
+        if (_topOffPositionLockActive.value == enabled) return true
+        _topOffPositionLockActive.value = enabled
+        PLog.i(TAG, "MGC Position Lock ${if (enabled) "enabled" else "disabled"}")
+        cameraHandler?.post {
+            if (cameraDevice != null && previewSurface != null &&
+                !_state.value.videoRecordingState.isRecording && !videoRecorder.isRecording()
+            ) createPreviewSession(openGeneration = cameraOpenGeneration)
+        }
+        return true
+    }
+
     private fun updateTopOffZoomLockedRatio(ratio: Float, reason: String): Float {
         val safeRatio = if (ratio.isFinite()) ratio.coerceAtLeast(1f) else 1f
         _topOffZoomLockedRatio.value = safeRatio
@@ -10662,6 +10720,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun applyTopOffZoomPan(panX: Float, panY: Float, requestedAtNs: Long) {
+        if (_topOffPositionLockActive.value) return
         val current = _state.value
         if (
             (spatialVideoRecorder.isRecording() && !dualAspectRecordingActive) ||
@@ -10724,7 +10783,7 @@ class Camera2Controller(private val context: Context) {
      */
     fun setTopOffZoomPresetPoint(zoomRatio: Float, panX: Float, panY: Float) {
         val requestedAtNs = SystemClock.elapsedRealtimeNanos()
-        if (!_topOffZoomEnabled.value) return
+        if (_topOffPositionLockActive.value || !_topOffZoomEnabled.value) return
 
         val current = _state.value
         if (
@@ -10781,6 +10840,7 @@ class Camera2Controller(private val context: Context) {
      * recording and updates the dedicated encoder renderer without rebuilding Camera2.
      */
     fun setTopOffGyroPanCorrection(panX: Float, panY: Float, rollDegrees: Float) {
+        if (_topOffPositionLockActive.value) return
         val safePanX = panX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         val safePanY = panY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         val safeRoll = rollDegrees.takeIf { it.isFinite() }?.coerceIn(-20f, 20f) ?: 0f
@@ -12404,6 +12464,8 @@ class Camera2Controller(private val context: Context) {
         videoCaptureStatsFrames = 0
         videoCaptureStatsFirstTimestampNs = 0L
         val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
+        val positionLockStabilization = shouldUsePositionLockStabilization()
+        val useMgcStabilization = useEnhancedStabilization || positionLockStabilization
         val recordingCameraInfo = _state.value.getCurrentCameraInfo()
         val normalVideoUltraWideRecordingInput =
             normalVideoUltraWideInstantSwitchActive &&
@@ -12414,7 +12476,7 @@ class Camera2Controller(private val context: Context) {
             _topOffZoomEnabled.value &&
                 _state.value.captureMode == CaptureMode.VIDEO &&
                 (!logicalMultiCameraRecordingInput || normalVideoUltraWideRecordingInput) &&
-                !spatialVideoEnabled && !dualCaptureEnabled &&
+                !spatialVideoEnabled && !dualCaptureEnabled && !positionLockStabilization &&
                 (_state.value.zoomRatio >= 1f || normalVideoUltraWideRecordingInput)
         val normalVideoMainInputId = normalVideoMainPhysicalCameraId ?: normalVideoPrimaryCameraId
         val normalVideoMainCharacteristics = if (normalVideoUltraWideInstantSwitchActive && !spatialVideoEnabled) {
@@ -12425,7 +12487,7 @@ class Camera2Controller(private val context: Context) {
         // This source remains fixed at the 4K-capable size resolved for the camera,
         // regardless of which recording resolution is selected in the UI.
         // Top-Off zoom/pan is applied by the GL renderer, not by changing the input size.
-        val fixedCameraInputSize = if (useEnhancedStabilization) {
+        val fixedCameraInputSize = if (useMgcStabilization) {
             _state.value.videoCapabilities.enhancedStabilizationInputSizesByResolution[
                 _state.value.videoConfig.resolution
             ]
@@ -12520,7 +12582,7 @@ class Camera2Controller(private val context: Context) {
         }
         val cameraInputIsHlg10 = logProfile == VideoLogProfile.HLG10 &&
             _state.value.videoConfig.fps != VideoFpsPreset.FPS_120 &&
-            !useEnhancedStabilization &&
+            !useMgcStabilization &&
             colorLayers.isEmpty() &&
             switchableCameraInputSize == null &&
             supportsCameraHlg10Input()
@@ -12535,14 +12597,14 @@ class Camera2Controller(private val context: Context) {
         // VideoRecorder keeps encoded samples pending instead of committing a false start time.
         val hasSharedRecordingTimeline = spatialVideoEnabled || selectedDualAspectRatio != null
         specialVideoDrainDurationMs = if (spatialVideoEnabled) {
-            val lookaheadFrames = if (useEnhancedStabilization) {
+            val lookaheadFrames = if (useMgcStabilization) {
                 normalizeStabilizationLookahead(
                     _state.value.videoConfig.enhancedStabilizationLookahead
                 )
             } else {
                 0
             }
-            val drainFrames = if (useEnhancedStabilization) lookaheadFrames + 2 else 2
+            val drainFrames = if (useMgcStabilization) lookaheadFrames + 2 else 2
             ((drainFrames.toLong() * 1_000L + _state.value.videoConfig.fps.fps - 1L) /
                 _state.value.videoConfig.fps.fps) + 100L
         } else {
@@ -12637,7 +12699,8 @@ class Camera2Controller(private val context: Context) {
             sensorOrientationDegrees = recordingSensorOrientation,
             orientationHintDegrees = baseOrientationHintDegrees,
             flipEncodedFrame = shouldFlipEncodedFrame,
-            enhancedStabilization = useEnhancedStabilization,
+            enhancedStabilization = useMgcStabilization,
+            positionLockStabilization = positionLockStabilization,
             enhancedStabilizationStrength =
                 _state.value.videoConfig.enhancedStabilizationStrength,
             enhancedStabilizationLookahead =
@@ -13219,12 +13282,25 @@ class Camera2Controller(private val context: Context) {
             realtimeStabilizationCoordinator.isCurrentCameraSupported
     }
 
+    private fun shouldUsePositionLockStabilization(): Boolean {
+        val state = _state.value
+        return _topOffPositionLockActive.value &&
+            state.captureMode == CaptureMode.VIDEO &&
+            state.videoConfig.fps != VideoFpsPreset.FPS_120 &&
+            !spatialVideoEnabled && !dualCaptureEnabled && !dualAspectRecordingActive &&
+            !normalVideoUltraWideInstantSwitchActive &&
+            realtimeStabilizationCoordinator.isCurrentCameraSupported
+    }
+
+    private fun shouldUseVideoMgcStabilization(): Boolean =
+        shouldUseVideoEnhancedStabilization() || shouldUsePositionLockStabilization()
+
     private fun shouldUseAlgorithmicStabilization(): Boolean {
         val state = _state.value
         return when (state.captureMode) {
             CaptureMode.PHOTO -> state.photoPreviewStabilizationEnabled &&
                 realtimeStabilizationCoordinator.isCurrentCameraSupported
-            CaptureMode.VIDEO -> shouldUseVideoEnhancedStabilization()
+            CaptureMode.VIDEO -> shouldUseVideoMgcStabilization()
         }
     }
 
@@ -13419,7 +13495,8 @@ class Camera2Controller(private val context: Context) {
 
         return try {
             val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
-            val templateType = if (useEnhancedStabilization) {
+            val useMgcStabilization = useEnhancedStabilization || shouldUsePositionLockStabilization()
+            val templateType = if (useMgcStabilization) {
                 CameraDevice.TEMPLATE_PREVIEW
             } else {
                 CameraDevice.TEMPLATE_RECORD
@@ -13428,16 +13505,16 @@ class Camera2Controller(private val context: Context) {
                 TAG,
                 "Updating dedicated video repeating request: " +
                     "template=${if (templateType == CameraDevice.TEMPLATE_PREVIEW) "PREVIEW" else "RECORD"}, " +
-                    "enhancedStabilization=$useEnhancedStabilization, " +
+                    "mgcStabilization=$useMgcStabilization, " +
                     "includeVideoSurface=$includeVideoSurface"
             )
             val builder = device.createCaptureRequest(templateType).apply {
                 addTarget(previewTarget)
                 stabilizationImageReader?.surface
-                    ?.takeIf { useEnhancedStabilization }
+                    ?.takeIf { useMgcStabilization }
                     ?.let(::addTarget)
                 encoderTarget
-                    ?.takeIf { includeVideoSurface && !useEnhancedStabilization }
+                    ?.takeIf { includeVideoSurface && !useMgcStabilization }
                     ?.let(::addTarget)
                 spatialVideoRecorder.cameraInputSurface
                     ?.takeIf { includeVideoSurface && dualAspectRecordingActive }

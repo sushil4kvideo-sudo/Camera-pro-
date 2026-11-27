@@ -146,6 +146,8 @@ struct EngineConfig {
   int num_strips = 12;
   int lookahead_frames = 10;
   double stabilization_strength = 1.0;
+  // Position Lock holds a fixed virtual-camera pose and spends a larger crop budget.
+  bool position_lock_enabled = false;
 };
 
 struct StabilizedFrame {

@@ -56,6 +56,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
     private var lensOffsetCount = 0L
     private var lensIntrinsicsCount = 0L
     private var frameCallCount = 0L
+    private var positionLockMode = false
     private val diagnosticTrace = MgcEisDiagnosticTrace(cacheDirectory)
 
     @Synchronized
@@ -65,9 +66,11 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
         frontFacing: Boolean,
         strength: Float,
         lookaheadFrames: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+        positionLockEnabled: Boolean = false,
     ): Boolean {
         if (handle != 0L) {
-            return frameWidth == width && frameHeight == height
+            return frameWidth == width && frameHeight == height &&
+                positionLockMode == positionLockEnabled
         }
         if (width <= 0 || height <= 0) return false
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
@@ -78,6 +81,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
                 frontFacing,
                 strength,
                 normalizedLookahead,
+                positionLockEnabled,
             )
             if (created == 0L) return false
             handle = created
@@ -88,13 +92,14 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
             lensOffsetCount = 0L
             lensIntrinsicsCount = 0L
             frameCallCount = 0L
+            positionLockMode = positionLockEnabled
             diagnosticTrace.start(width, height, frontFacing, strength)
             PLog.i(
                 TAG,
                 "Reconstructed MGC EIS started: device=$MGC_DEVICE_KEY, profile=$MGC_DEVICE_TYPE, " +
                     "frame=${width}x$height, " +
                     "strips=$STRIP_COUNT, lookahead=$normalizedLookahead, " +
-                    "strength=$strength, front=$frontFacing",
+                    "strength=$strength, front=$frontFacing, positionLock=$positionLockEnabled",
             )
             true
         } catch (error: Throwable) {
@@ -115,6 +120,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
         lensOffsetCount = 0L
         lensIntrinsicsCount = 0L
         frameCallCount = 0L
+        positionLockMode = false
         if (current != 0L) {
             runCatching { MgcEisNativeBridge.release(current) }
                 .onFailure { PLog.e(TAG, "Unable to release reconstructed MGC EIS", it) }
