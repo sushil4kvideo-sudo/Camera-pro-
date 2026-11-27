@@ -8233,7 +8233,37 @@ class Camera2Controller(private val context: Context) {
             selectedMode
         }
         if (mode == MeteringMode.SYSTEM_DEFAULT) {
-            clearCustomAeRegions(builder)
+            if (
+                _topOffPositionLockActive.value &&
+                currentState.captureMode == CaptureMode.VIDEO &&
+                maxAeRegions > 0
+            ) {
+                // Default AE must meter only the frame visible after Position Lock's
+                // virtual-camera crop. Leaving this unset would make the HAL expose for
+                // off-screen sensor content and visibly shift brightness in the crop.
+                val visiblePreview = mapPreviewMeteringPoint(0.5f, 0.5f, null)
+                    ?.visibleRegion
+                if (visiblePreview != null) {
+                    builder.set(
+                        CaptureRequest.CONTROL_AE_REGIONS,
+                        arrayOf(
+                            MeteringRectangle(
+                                visiblePreview.toAndroidRect(),
+                                MeteringRectangle.METERING_WEIGHT_MAX,
+                            )
+                        ),
+                    )
+                    PLog.d(
+                        TAG,
+                        "Position Lock default AE follows visible preview crop: " +
+                            "region=$visiblePreview zoom=${_topOffZoomFactor.value}",
+                    )
+                } else {
+                    clearCustomAeRegions(builder)
+                }
+            } else {
+                clearCustomAeRegions(builder)
+            }
             return
         }
         if (maxAeRegions <= 0) return
