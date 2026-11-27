@@ -262,7 +262,6 @@ data class UserPreferences(
     val videoLensLockEnabled: Boolean = false,
     val videoWhiteBalanceLockEnabled: Boolean = false,
     val keepUltraWideAeReady: Boolean = true,
-    val normalVideoUltraWideInstantSwitchEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
     val videoApvQuality: com.hinnka.mycamera.video.ApvQuality = com.hinnka.mycamera.video.ApvQuality.HQ,
     val ultraHdrGainMapEnabled: Boolean = false,
@@ -553,8 +552,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_LENS_LOCK_ENABLED = booleanPreferencesKey("video_lens_lock_enabled")
         private val VIDEO_WHITE_BALANCE_LOCK_ENABLED = booleanPreferencesKey("video_white_balance_lock_enabled")
         private val KEEP_ULTRA_WIDE_AE_READY = booleanPreferencesKey("keep_ultra_wide_ae_ready")
-        private val NORMAL_VIDEO_ULTRA_WIDE_INSTANT_SWITCH_ENABLED =
-            booleanPreferencesKey("normal_video_ultra_wide_instant_switch_enabled")
         private val VIDEO_CODEC = stringPreferencesKey("video_codec")
         private val VIDEO_APV_QUALITY = stringPreferencesKey("video_apv_quality")
         // Keep the persisted key for compatibility with existing installations.
@@ -933,8 +930,6 @@ class UserPreferencesRepository(private val context: Context) {
                 videoLensLockEnabled = preferences[VIDEO_LENS_LOCK_ENABLED] ?: false,
                 videoWhiteBalanceLockEnabled = preferences[VIDEO_WHITE_BALANCE_LOCK_ENABLED] ?: false,
                 keepUltraWideAeReady = preferences[KEEP_ULTRA_WIDE_AE_READY] ?: true,
-                normalVideoUltraWideInstantSwitchEnabled =
-                    preferences[NORMAL_VIDEO_ULTRA_WIDE_INSTANT_SWITCH_ENABLED] ?: false,
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
                 ),
@@ -2475,12 +2470,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveKeepUltraWideAeReady(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[KEEP_ULTRA_WIDE_AE_READY] = enabled
-        }
-    }
-
-    suspend fun saveNormalVideoUltraWideInstantSwitchEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[NORMAL_VIDEO_ULTRA_WIDE_INSTANT_SWITCH_ENABLED] = enabled
         }
     }
 
