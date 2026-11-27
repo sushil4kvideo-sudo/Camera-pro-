@@ -123,6 +123,7 @@ import com.hinnka.mycamera.camera.CustomVendorKeyValueType
 import com.hinnka.mycamera.camera.IszLensConfig
 import com.hinnka.mycamera.camera.IszRawDngMetadataCorrections
 import com.hinnka.mycamera.camera.LensType
+import com.hinnka.mycamera.camera.POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.camera.NoiseReductionLevel
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
@@ -2259,6 +2260,20 @@ fun SettingsScreen(
                             description = "View crop drag, pan, zoom-lock and Camera2 crop-request logs.",
                             onClick = {
                                 logViewerFilterTag = "TopOffZoom"
+                                showLogViewerDialog = true
+                            },
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        NavigationSettingItem(
+                            title = "Ultra-Wide Position Lock diagnostics",
+                            description = "Open Ultra-Wide Position Lock logs. Copy or download the diagnostic report.",
+                            onClick = {
+                                logViewerFilterTag = POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG
                                 showLogViewerDialog = true
                             },
                         )
