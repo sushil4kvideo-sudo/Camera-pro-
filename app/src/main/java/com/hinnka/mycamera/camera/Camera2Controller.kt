@@ -530,7 +530,8 @@ class Camera2Controller(private val context: Context) {
         _spatialVideoPreviewSensorOrientationDegrees.value = 0
         val selected = _state.value.getCurrentCameraInfo()
         activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(_state.value, selected)
-        logicalMultiCameraAutoSwitchActive = shouldUseLogicalMultiCameraZoom(_state.value, selected)
+        logicalMultiCameraAutoSwitchActive = !_topOffPositionLockActive.value &&
+            shouldUseLogicalMultiCameraZoom(_state.value, selected)
         PLog.i(TAG, "Normal Video ultra-wide instant switch runtime cleared: reason=$reason")
         if (!reopenSelectedCamera || spatialVideoEnabled) return
         val texture = previewSurfaceTexture ?: return
@@ -547,7 +548,7 @@ class Camera2Controller(private val context: Context) {
     private fun activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded: Boolean): Boolean {
         val captureMode = _state.value.captureMode
         if (!normalVideoUltraWideInstantSwitchEnabled || normalVideoUltraWideInstantSwitchActive ||
-            spatialVideoEnabled ||
+            _topOffPositionLockActive.value || spatialVideoEnabled ||
             (captureMode != CaptureMode.VIDEO && captureMode != CaptureMode.PHOTO) ||
             _state.value.videoRecordingState.isRecording ||
             _state.value.videoRecordingState.isProcessing
@@ -3166,7 +3167,7 @@ class Camera2Controller(private val context: Context) {
             )
         }
         if (!normalVideoUltraWideInstantSwitchActive && normalVideoUltraWideInstantSwitchEnabled &&
-            !spatialVideoEnabled &&
+            !spatialVideoEnabled && !_topOffPositionLockActive.value &&
             (captureMode == CaptureMode.VIDEO || captureMode == CaptureMode.PHOTO)
         ) {
             activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = false)
@@ -3194,7 +3195,8 @@ class Camera2Controller(private val context: Context) {
         }
 
         activeOpenCameraId = openCameraId
-        logicalMultiCameraAutoSwitchActive = !spatialVideoEnabled &&
+        logicalMultiCameraAutoSwitchActive = !_topOffPositionLockActive.value &&
+            !spatialVideoEnabled &&
             (!normalVideoUltraWideInstantSwitchActive || captureMode == CaptureMode.PHOTO) &&
             shouldUseLogicalMultiCameraZoom(_state.value, selectedCamera)
         val requestedPhysicalCameraId = when {
@@ -10540,12 +10542,14 @@ class Camera2Controller(private val context: Context) {
             return false
         }
         val cameraInfo = currentState.getCurrentCameraInfo() ?: return false
-        val normalVideoUltraWideSelected =
+        // A lens in the Normal Video pair becomes the selected standalone physical source
+        // when Position Lock shuts down the auxiliary standby stream.
+        val normalVideoPairLensSelected =
             normalVideoUltraWideInstantSwitchActive &&
-                isNormalVideoUltraWideLens(cameraInfo)
+                isCurrentNormalVideoPairLens(cameraInfo)
         if (
             shouldUseLogicalMultiCameraZoom(currentState, cameraInfo) &&
-            !normalVideoUltraWideSelected
+            !normalVideoPairLensSelected
         ) return false
         val activeArray = cameraInfo.activeArraySize ?: return false
         return activeArray.width() > 0 && activeArray.height() > 0
@@ -10558,7 +10562,7 @@ class Camera2Controller(private val context: Context) {
             current.videoRecordingState.isRecording || current.videoRecordingState.isProcessing ||
             videoRecorder.isRecording() || spatialVideoRecorder.isRecording() ||
             spatialVideoTelephotoRecorder.isRecording() || spatialVideoEnabled ||
-            dualCaptureEnabled || dualAspectRecordingActive || normalVideoUltraWideInstantSwitchActive ||
+            dualCaptureEnabled || dualAspectRecordingActive ||
             !isTopOffZoomAvailable()
         ) return false
         return current.videoCapabilities.enhancedStabilizationInputSizesByResolution[
@@ -10578,12 +10582,40 @@ class Camera2Controller(private val context: Context) {
             return false
         }
         if (_topOffPositionLockActive.value == enabled) return true
+
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            // Set this guard before posting so openCamera() cannot start a new standby stream.
+            _topOffPositionLockActive.value = enabled
+            PLog.i(TAG, "MGC Position Lock ${if (enabled) "enabled" else "disabled"}")
+            handler.post {
+                if (enabled && normalVideoUltraWideInstantSwitchActive) {
+                    clearNormalVideoUltraWideInstantSwitchRuntime(
+                        "MGC Position Lock requires one active physical lens",
+                        reopenSelectedCamera = true,
+                    )
+                } else if (
+                    cameraDevice != null && previewSurface != null &&
+                    !_state.value.videoRecordingState.isRecording && !videoRecorder.isRecording()
+                ) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
+            return true
+        }
+
         _topOffPositionLockActive.value = enabled
         PLog.i(TAG, "MGC Position Lock ${if (enabled) "enabled" else "disabled"}")
-        cameraHandler?.post {
-            if (cameraDevice != null && previewSurface != null &&
-                !_state.value.videoRecordingState.isRecording && !videoRecorder.isRecording()
-            ) createPreviewSession(openGeneration = cameraOpenGeneration)
+        if (enabled && normalVideoUltraWideInstantSwitchActive) {
+            clearNormalVideoUltraWideInstantSwitchRuntime(
+                "MGC Position Lock requires one active physical lens",
+                reopenSelectedCamera = true,
+            )
+        } else if (
+            cameraDevice != null && previewSurface != null &&
+            !_state.value.videoRecordingState.isRecording && !videoRecorder.isRecording()
+        ) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
         }
         return true
     }
@@ -12701,6 +12733,7 @@ class Camera2Controller(private val context: Context) {
             flipEncodedFrame = shouldFlipEncodedFrame,
             enhancedStabilization = useMgcStabilization,
             positionLockStabilization = positionLockStabilization,
+            positionLockCropZoom = _topOffZoomFactor.value,
             enhancedStabilizationStrength =
                 _state.value.videoConfig.enhancedStabilizationStrength,
             enhancedStabilizationLookahead =
