@@ -339,7 +339,7 @@ class Camera2Controller(private val context: Context) {
     private var spatialVideoPrimaryCameraId: String? = null
     private var spatialVideoStreamingMode: SpatialVideoStreamingMode? = null
     // A dedicated alternate OES input feeds the normal-video encoder when 0.5x is selected.
-    private var normalVideoUltraWideInstantSwitchEnabled = false
+    private val normalVideoUltraWideInstantSwitchEnabled = false
     private var normalVideoUltraWideInstantSwitchActive = false
     private var normalVideoMainPhysicalCameraId: String? = null
     private var normalVideoUltraWidePhysicalCameraId: String? = null
@@ -3186,12 +3186,6 @@ class Camera2Controller(private val context: Context) {
                 "selected camera is outside the 1x/0.5x pair",
                 reopenSelectedCamera = false,
             )
-        }
-        if (!normalVideoUltraWideInstantSwitchActive && normalVideoUltraWideInstantSwitchEnabled &&
-            !spatialVideoEnabled && !_topOffPositionLockActive.value &&
-            (captureMode == CaptureMode.VIDEO || captureMode == CaptureMode.PHOTO)
-        ) {
-            activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = false)
         }
         val cameraId = _state.value.currentCameraId
         selectedCamera = _state.value.getCurrentCameraInfo()
@@ -11180,37 +11174,16 @@ class Camera2Controller(private val context: Context) {
                     selectedOpenId != null && selectedOpenId != activeOpenCameraId
             spatialVideoRecorder.forceStop()
             clearSpecialVideoRuntimeState("Special Video disabled")
-            val resumeNormalInstantSwitch =
-                normalVideoUltraWideInstantSwitchEnabled &&
-                    _state.value.captureMode == CaptureMode.VIDEO
-            if (resumeNormalInstantSwitch) {
-                activateNormalVideoUltraWideInstantSwitch(reopenPrimaryIfNeeded = false)
-                previewSurfaceTexture?.let { texture ->
-                    if (normalVideoPrimaryCameraId != activeOpenCameraId) {
-                        openCamera(texture)
-                    } else {
-                        if (normalVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
-                            cameraDevice != null
-                        ) {
-                            normalVideoUltraWidePhysicalCameraId?.let {
-                                startSpatialVideoStandbyCamera(it)
-                            }
-                        }
-                        createPreviewSession(openGeneration = cameraOpenGeneration)
-                    }
-                }
-            } else {
-                previewSurfaceTexture?.let { texture ->
-                    if (restoreLogicalParent) {
-                        PLog.i(
-                            TAG,
-                            "Special Video disabled: restoring selected CameraDevice $selectedOpenId " +
-                                "from physical primary $activeOpenCameraId"
-                        )
-                        openCamera(texture)
-                    } else {
-                        createPreviewSession(openGeneration = cameraOpenGeneration)
-                    }
+            previewSurfaceTexture?.let { texture ->
+                if (restoreLogicalParent) {
+                    PLog.i(
+                        TAG,
+                        "Special Video disabled: restoring selected CameraDevice $selectedOpenId " +
+                            "from physical primary $activeOpenCameraId"
+                    )
+                    openCamera(texture)
+                } else {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
                 }
             }
         }
