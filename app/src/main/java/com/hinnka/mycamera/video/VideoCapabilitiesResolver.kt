@@ -19,6 +19,9 @@ object VideoCapabilitiesResolver {
     private const val TAG = "VideoCapabilitiesResolver"
     private const val VIDEO_PREVIEW_SHORT_EDGE = 1080
     private const val VIDEO_PREVIEW_ASPECT_TOLERANCE = 0.01f
+    private const val TARGET_12_MP_INPUT_PIXELS = 12_000_000L
+    private const val MIN_12_MP_INPUT_PIXELS = 9_000_000L
+    private const val MAX_12_MP_INPUT_PIXELS = 13_000_000L
 
     fun resolve(
         characteristics: CameraCharacteristics,
@@ -52,27 +55,32 @@ object VideoCapabilitiesResolver {
         val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         val openGateAspect = resolveOpenGatePortraitAspectRatio(activeArray, sensorOrientation)
         val targetPortraitAspect = requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
-        // Capture input is resolved once at a fixed 4K-capable size. It must not
-        // follow the output preset selected in the video settings panel.
-        val fixedCameraInputSize = findBestOutputSize(
-            previewOutputSizes,
-            VideoResolutionPreset.UHD_2160P,
-            requestedConfig.aspectRatio,
-            openGateAspect,
-        ) ?: previewOutputSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
-        // EIS+ uses a separate YUV source, but it follows the same fixed-input rule.
-        // If a 4K-capable YUV source is unavailable, EIS+ is not advertised.
-        val fixedEnhancedStabilizationInputSize = findBestOutputSize(
-            yuvOutputSizes,
-            VideoResolutionPreset.UHD_2160P,
-            requestedConfig.aspectRatio,
-            openGateAspect,
-        )?.takeIf { source ->
-            canProduceOutputWithoutUpscaling(
-                source,
-                VideoResolutionPreset.UHD_2160P.resolveOutputSize(targetPortraitAspect),
+        // Keep a high-detail source for digital zoom/pan presets without paying the
+        // continuous bandwidth cost of a 4K input. Prefer a native ~12 MP stream,
+        // shared across output presets; fall back to the previous compatible 4K source.
+        val fixedCameraInputSize = findPreferred12MpInputSize(previewOutputSizes, activeArray)
+            ?: findBestOutputSize(
+                previewOutputSizes,
+                VideoResolutionPreset.UHD_2160P,
+                requestedConfig.aspectRatio,
+                openGateAspect,
             )
-        }
+            ?: previewOutputSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+        // Position Lock uses a dedicated YUV source. Prefer the same ~12 MP class
+        // when available, then retain the previous 4K-capable fallback for older cameras.
+        val fixedEnhancedStabilizationInputSize =
+            findPreferred12MpInputSize(yuvOutputSizes, activeArray)
+                ?: findBestOutputSize(
+                    yuvOutputSizes,
+                    VideoResolutionPreset.UHD_2160P,
+                    requestedConfig.aspectRatio,
+                    openGateAspect,
+                )?.takeIf { source ->
+                    canProduceOutputWithoutUpscaling(
+                        source,
+                        VideoResolutionPreset.UHD_2160P.resolveOutputSize(targetPortraitAspect),
+                    )
+                }
         val threeKOutputSize = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
             null
         } else {
@@ -194,13 +202,17 @@ object VideoCapabilitiesResolver {
                 VideoResolutionPreset.UHD_2160P.longEdge &&
                 minOf(fixedCameraInputSize.width, fixedCameraInputSize.height) + 16 >=
                 minOf(fixed4kTarget.width, fixed4kTarget.height)
+            val inputMegapixels = fixedCameraInputSize.width.toLong() *
+                fixedCameraInputSize.height.toLong() / 1_000_000f
             PLog.i(
                 TAG,
-                "Fixed camera video input=${fixedCameraInputSize.width}x${fixedCameraInputSize.height}, " +
+                "Camera video input=${fixedCameraInputSize.width}x${fixedCameraInputSize.height} " +
+                    "(${"%.2f".format(java.util.Locale.US, inputMegapixels)} MP), " +
+                    "near12MP=${isNear12MpInputSize(fixedCameraInputSize)}, " +
                     "4KCapable=$inputIs4kCapable; output resolution=${requestedConfig.resolution.displayName}",
             )
-            if (!inputIs4kCapable) {
-                PLog.w(TAG, "Camera does not expose a 4K SurfaceTexture source; using its highest available source")
+            if (!isNear12MpInputSize(fixedCameraInputSize)) {
+                PLog.w(TAG, "Camera does not expose a suitable 12 MP-class SurfaceTexture source; using compatible fallback")
             }
         }
         if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
@@ -219,9 +231,9 @@ object VideoCapabilitiesResolver {
             )
         }
         // Keep the viewfinder on a bounded preview stream instead of attaching a second
-        // full-resolution 4K output to Camera2. The dedicated recorder SurfaceTexture above
-        // remains fixed at the 4K-capable cameraInputSize, so digital zoom still has the full
-        // sensor detail while the UI preview avoids duplicate 4K ISP/GPU traffic.
+        // high-resolution output to Camera2. The dedicated recorder SurfaceTexture above
+        // uses the preferred ~12 MP cameraInputSize for detailed digital zoom/pan while
+        // the UI preview avoids duplicate high-resolution ISP/GPU traffic.
         val previewSize = fallbackPreviewSize
         PLog.i(
             TAG,
@@ -341,6 +353,38 @@ object VideoCapabilitiesResolver {
             availableVideoStabilizationModes.contains(
                 CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION
             )
+    }
+
+    private fun findPreferred12MpInputSize(
+        outputSizes: List<Size>,
+        activeArray: android.graphics.Rect?,
+    ): Size? {
+        val targetAspect = activeArray
+            ?.takeIf { it.width() > 0 && it.height() > 0 }
+            ?.let { minOf(it.width(), it.height()).toFloat() / maxOf(it.width(), it.height()) }
+
+        return outputSizes
+            .filter { size ->
+                if (size.width <= 0 || size.height <= 0) return@filter false
+                val pixels = size.width.toLong() * size.height.toLong()
+                pixels in MIN_12_MP_INPUT_PIXELS..MAX_12_MP_INPUT_PIXELS
+            }
+            .minWithOrNull(
+                compareBy<Size> {
+                    kotlin.math.abs(
+                        (it.width.toLong() * it.height.toLong()).toFloat() - TARGET_12_MP_INPUT_PIXELS.toFloat()
+                    )
+                }.thenBy { size ->
+                    targetAspect?.let { aspect ->
+                        abs(getPortraitAspectRatio(size) - aspect)
+                    } ?: 0f
+                }
+            )
+    }
+
+    private fun isNear12MpInputSize(size: Size): Boolean {
+        val pixels = size.width.toLong() * size.height.toLong()
+        return pixels in MIN_12_MP_INPUT_PIXELS..MAX_12_MP_INPUT_PIXELS
     }
 
     private fun findBestOutputSize(
