@@ -56,10 +56,10 @@ internal object PreviewMeteringMapper {
         scalerCropRegion: CameraCoordinateRect?,
         zoomMode: PreviewMeteringZoomMode,
         previewViewAspectRatio: Float,
-        /** Additional crop applied by the live Position Lock renderer after Camera2 zoom. */
-        previewCropZoom: Float = 1f,
         sensorOrientationDegrees: Int,
         isFrontFacing: Boolean,
+        /** Additional crop applied by the live Position Lock renderer after Camera2 zoom. */
+        previewCropZoom: Float = 1f,
     ): PreviewMeteringMapping? {
         if (activeArray.isEmpty) return null
 
