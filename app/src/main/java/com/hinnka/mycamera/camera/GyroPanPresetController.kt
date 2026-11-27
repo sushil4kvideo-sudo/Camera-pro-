@@ -15,6 +15,7 @@ data class GyroPanCorrection(
     val panX: Float,
     val panY: Float,
     val rollDegrees: Float,
+    val fixedRollCover: Boolean = false,
 )
 
 /** Camera optics used to map gyro angles into the active Top-Off crop. */
@@ -73,7 +74,12 @@ class GyroPanPresetController(
     private var smoothHorizontal = 0f
     private var smoothVertical = 0f
     private var smoothRoll = 0f
-    @Volatile private var lastCorrection = GyroPanCorrection(basePanX, basePanY, 0f)
+    @Volatile private var lastCorrection = GyroPanCorrection(
+        basePanX,
+        basePanY,
+        0f,
+        fixedRollCover = mode == GyroPanMode.HORIZON_LOCK,
+    )
 
     val currentCorrection: GyroPanCorrection
         get() = lastCorrection
@@ -124,6 +130,9 @@ class GyroPanPresetController(
         }.getOrDefault(false)
         if (registered) {
             sensorThread = callbackThread
+            // Apply the mode-specific crop immediately. The first sensor event only anchors
+            // the reference orientation and intentionally emits no motion correction.
+            onCorrection(lastCorrection)
         } else {
             callbackThread.quitSafely()
         }
@@ -335,8 +344,11 @@ class GyroPanPresetController(
             GyroPanMode.HORIZON_LOCK -> GyroPanCorrection(
                 panX = basePanX,
                 panY = basePanY,
-                rollDegrees = (-opticalRoll / DEG_TO_RAD)
-                    .coerceIn(-MAX_HORIZON_CORRECTION_DEGREES, MAX_HORIZON_CORRECTION_DEGREES),
+                rollDegrees = (-opticalRoll / DEG_TO_RAD).coerceIn(
+                    -GyroPanFilterMath.HORIZON_LOCK_MAX_CORRECTION_DEGREES,
+                    GyroPanFilterMath.HORIZON_LOCK_MAX_CORRECTION_DEGREES,
+                ),
+                fixedRollCover = true,
             )
 
             GyroPanMode.SMOOTH_FOLLOW -> {
