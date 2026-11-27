@@ -10547,9 +10547,14 @@ class Camera2Controller(private val context: Context) {
         val normalVideoPairLensSelected =
             normalVideoUltraWideInstantSwitchActive &&
                 isCurrentNormalVideoPairLens(cameraInfo)
+        // Once Position Lock takes over, the pair standby is closed and the selected sensor
+        // is pinned as an explicit physical output. Keep Top-Off controls available on it.
+        val explicitlyPinnedPhysicalLens =
+            activeOutputPhysicalCameraId?.isNotBlank() == true &&
+                !logicalMultiCameraAutoSwitchActive
         if (
             shouldUseLogicalMultiCameraZoom(currentState, cameraInfo) &&
-            !normalVideoPairLensSelected
+            !normalVideoPairLensSelected && !explicitlyPinnedPhysicalLens
         ) return false
         val activeArray = cameraInfo.activeArraySize ?: return false
         return activeArray.width() > 0 && activeArray.height() > 0
