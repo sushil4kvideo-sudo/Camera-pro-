@@ -1,6 +1,8 @@
 package com.hinnka.mycamera.ui.camera
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -82,6 +84,7 @@ fun FloatingVideoSettingsPanel(
     glassTransparency: Float,
     glassBlurStrength: Float,
     onGlassBoundsChanged: (Rect?) -> Unit,
+    performanceMode: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     if (!isOpen) return
@@ -119,25 +122,29 @@ fun FloatingVideoSettingsPanel(
         ) {
             AnimatedVisibility(
                 visible = isOpen,
-                enter = fadeIn(tween(170)) +
-                    scaleIn(
-                        initialScale = 0.78f,
-                        animationSpec = spring(dampingRatio = 0.52f, stiffness = 430f),
-                    ) +
-                    expandVertically(
-                        expandFrom = Alignment.Top,
-                        animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f),
-                    ) +
-                    slideInVertically(
-                        initialOffsetY = { -it / 5 },
-                        animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f),
-                    ),
-                exit = fadeOut(tween(120)) +
-                    scaleOut(targetScale = 0.94f, animationSpec = tween(120)) +
-                    shrinkVertically(
-                        shrinkTowards = Alignment.Top,
-                        animationSpec = tween(130),
-                    ),
+                enter = if (performanceMode) EnterTransition.None else {
+                    fadeIn(tween(170)) +
+                        scaleIn(
+                            initialScale = 0.78f,
+                            animationSpec = spring(dampingRatio = 0.52f, stiffness = 430f),
+                        ) +
+                        expandVertically(
+                            expandFrom = Alignment.Top,
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f),
+                        ) +
+                        slideInVertically(
+                            initialOffsetY = { -it / 5 },
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f),
+                        )
+                },
+                exit = if (performanceMode) ExitTransition.None else {
+                    fadeOut(tween(120)) +
+                        scaleOut(targetScale = 0.94f, animationSpec = tween(120)) +
+                        shrinkVertically(
+                            shrinkTowards = Alignment.Top,
+                            animationSpec = tween(130),
+                        )
+                },
             ) {
                 OppoCameraGlassSurface(
                     modifier = Modifier
@@ -147,6 +154,7 @@ fun FloatingVideoSettingsPanel(
                     transparency = glassTransparency,
                     blurStrength = glassBlurStrength,
                     onBoundsChanged = onGlassBoundsChanged,
+                    performanceMode = performanceMode,
                 ) {
                     Column(
                         modifier = Modifier
