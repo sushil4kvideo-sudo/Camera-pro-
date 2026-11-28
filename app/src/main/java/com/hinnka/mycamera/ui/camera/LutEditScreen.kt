@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
 import com.hinnka.mycamera.ui.components.AppModalBottomSheet
-import com.hinnka.mycamera.ui.components.LiquidGlassBackdrop
 import com.hinnka.mycamera.ui.components.AppSheetStyle
 
 import androidx.compose.foundation.layout.*
@@ -160,15 +159,22 @@ fun LutEditBottomSheet(
     containerColor: Color? = null,
     modifier: Modifier = Modifier,
     replaceVignetteWithVideoBrightness: Boolean = false,
-    videoOnly: Boolean = false,
-    panelBackdrop: LiquidGlassBackdrop? = null,
+    videoOnly: Boolean = false
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val editorContent: @Composable ColumnScope.() -> Unit = {
+
+    AppModalBottomSheet(
+        containerColor = containerColor,
+        style = AppSheetStyle.Frosted,
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = modifier,
+        dragHandle = null,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(if (panelBackdrop == null) Modifier.navigationBarsPadding() else Modifier)
+                .navigationBarsPadding()
         ) {
             LutEditPanelContent(
                 lutId = lutId,
@@ -179,28 +185,8 @@ fun LutEditBottomSheet(
                 editorTarget = editorTarget,
                 replaceVignetteWithVideoBrightness = replaceVignetteWithVideoBrightness,
                 videoOnly = videoOnly,
-                transparentGlassSurface = panelBackdrop != null,
+                transparentGlassSurface = false,
             )
         }
-    }
-
-    if (panelBackdrop != null) {
-        CameraPanelBottomSheet(
-            backdrop = panelBackdrop,
-            onDismissRequest = onDismiss,
-            modifier = modifier,
-            dragHandle = null,
-            content = editorContent,
-        )
-    } else {
-        AppModalBottomSheet(
-            containerColor = containerColor,
-            style = AppSheetStyle.Frosted,
-            onDismissRequest = onDismiss,
-            sheetState = sheetState,
-            modifier = modifier,
-            dragHandle = null,
-            content = editorContent,
-        )
     }
 }
