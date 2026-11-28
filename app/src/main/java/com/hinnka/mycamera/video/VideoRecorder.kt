@@ -890,6 +890,7 @@ class VideoRecorder(
                 // consumer runs therefore represent one materializable OES frame.
                 1
             }
+            frameDiagnostics?.recordPendingQueueDepth(pendingRealtimeFrameCount)
             if (!renderLoopRunning) {
                 renderLoopRunning = true
                 scope.launch(renderDispatcher) {
@@ -2439,6 +2440,7 @@ class VideoRecorder(
 
     private fun cleanupPreparedStart() {
         runBlocking(renderDispatcher) {
+            finishVideoDiagnostics()
             try {
                 renderer?.release()
             } catch (_: Exception) {
