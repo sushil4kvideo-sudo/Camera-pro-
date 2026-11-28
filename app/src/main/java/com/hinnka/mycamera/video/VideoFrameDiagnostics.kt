@@ -336,7 +336,7 @@ internal class VideoFrameDiagnostics(
             appendLine()
             appendLine("[ANOMALY_EVENTS — most recent 100]")
             synchronized(anomalyEvents) {
-                anomalyEvents.forEach(::appendLine)
+                anomalyEvents.forEach { appendLine(it) }
             }
             appendLine()
             appendLine("Important: timestamp-gap missing-frame values are estimates. They are not exact frame IDs.")
