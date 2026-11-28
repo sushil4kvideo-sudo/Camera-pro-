@@ -19,6 +19,7 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
+import com.hinnka.mycamera.stabilization.PositionLockSensorCropBounds
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
@@ -63,6 +64,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
     var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
+    @Volatile
+    var onPositionLockSensorCropUpdated: ((PositionLockSensorCropBounds?) -> Unit)? = null
     var onEyeFocusInputAvailable: ((EyeFocusPreviewFrame) -> Unit)? = null
         set(value) {
             field = value
@@ -120,6 +123,10 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
         renderer.onHighlightPointUpdated = { hx, hy ->
             onHighlightPointUpdated?.invoke(hx, hy)
+        }
+
+        renderer.onPositionLockSensorCropUpdated = { crop ->
+            post { onPositionLockSensorCropUpdated?.invoke(crop) }
         }
 
         renderer.onFirstFrameRendered = {

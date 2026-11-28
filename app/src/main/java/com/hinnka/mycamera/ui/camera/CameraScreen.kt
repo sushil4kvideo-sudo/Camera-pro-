@@ -94,6 +94,8 @@ import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.GyroPanMode
 import com.hinnka.mycamera.camera.POSITION_LOCK_ULTRA_WIDE_DIAGNOSTIC_TAG
+import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
+import com.hinnka.mycamera.stabilization.PositionLockSensorCropBounds
 import com.hinnka.mycamera.camera.GyroPanPresetController
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
 import com.hinnka.mycamera.camera.TopOffPanPreset
@@ -312,6 +314,12 @@ fun CameraScreen(
     val spatialVideoPreviewSensorOrientation by
         viewModel.spatialVideoPreviewSensorOrientationDegrees.collectAsState()
 
+    LaunchedEffect(topOffPositionLockActive, state.captureMode) {
+        if (!topOffPositionLockActive || state.captureMode != CaptureMode.VIDEO) {
+            positionLockSensorCropBounds = null
+        }
+    }
+
     LaunchedEffect(state.captureMode) {
         if (state.captureMode != CaptureMode.VIDEO && dualCaptureEnabled) {
             dualCaptureEnabled = false
@@ -400,6 +408,7 @@ fun CameraScreen(
     var cameraScreenBounds by remember { mutableStateOf<Rect?>(null) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var previewGlBounds by remember { mutableStateOf<Rect?>(null) }
+    var positionLockSensorCropBounds by remember { mutableStateOf<PositionLockSensorCropBounds?>(null) }
     var settingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var videoSettingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var videoEditGlassBounds by remember { mutableStateOf<Rect?>(null) }
@@ -2020,6 +2029,7 @@ fun CameraScreen(
                                 cameraGLSurfaceView = it
                             },
                             onPreviewBoundsChanged = { previewGlBounds = it },
+                            onPositionLockSensorCropUpdated = { positionLockSensorCropBounds = it },
                             livePhotoRecorder = viewModel.livePhotoRecorder,
                             videoLogProfile = state.videoConfig.logProfile,
                             isEyeFocusBusy = viewModel.isEyeFocusBusy,
@@ -2057,6 +2067,20 @@ fun CameraScreen(
                         )
                     }
 
+
+
+                    if (topOffPositionLockActive && state.captureMode == CaptureMode.VIDEO) {
+                        val sensorArray = activeCameraInfo?.activeArraySize
+                        PositionLockSensorCropOverlay(
+                            activeArrayWidth = sensorArray?.width() ?: 0,
+                            activeArrayHeight = sensorArray?.height() ?: 0,
+                            sensorOrientationDegrees = activeCameraInfo?.sensorOrientation ?: 0,
+                            cropBounds = positionLockSensorCropBounds,
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(start = 12.dp, top = 12.dp),
+                        )
+                    }
 
                     if (
                         (state.captureMode == CaptureMode.VIDEO || state.captureMode == CaptureMode.PHOTO) &&
@@ -4182,6 +4206,114 @@ private fun Controls(
                 }
             }
         }
+    }
+}
+
+
+/** Live sensor/crop scope for Position Lock, drawn above the camera preview. */
+@Composable
+private fun PositionLockSensorCropOverlay(
+    activeArrayWidth: Int,
+    activeArrayHeight: Int,
+    sensorOrientationDegrees: Int,
+    cropBounds: PositionLockSensorCropBounds?,
+    modifier: Modifier = Modifier,
+) {
+    if (activeArrayWidth <= 0 || activeArrayHeight <= 0) return
+    val portraitSensorAspect = if (Math.floorMod(sensorOrientationDegrees, 180) == 90) {
+        minOf(activeArrayWidth, activeArrayHeight).toFloat() /
+            maxOf(activeArrayWidth, activeArrayHeight).toFloat()
+    } else {
+        maxOf(activeArrayWidth, activeArrayHeight).toFloat() /
+            minOf(activeArrayWidth, activeArrayHeight).toFloat()
+    }.coerceIn(0.35f, 2.8f)
+
+    val bounds = cropBounds ?: run {
+        val fraction = 1f / POSITION_LOCK_CROP_ZOOM
+        val inset = (1f - fraction) * 0.5f
+        PositionLockSensorCropBounds(inset, inset, inset + fraction, inset + fraction)
+    }
+    val outside = bounds.isOutsideSensor
+
+    Column(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.68f), RoundedCornerShape(9.dp))
+            .padding(horizontal = 7.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "SENSOR",
+            color = Color.White.copy(alpha = 0.92f),
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Canvas(
+            modifier = Modifier.size(
+                width = 92.dp,
+                height = (76f / portraitSensorAspect + 16f).dp,
+            ),
+        ) {
+            val sensorLeft = 8.dp.toPx()
+            val sensorTop = 8.dp.toPx()
+            val sensorWidth = size.width - sensorLeft * 2f
+            val sensorHeight = size.height - sensorTop * 2f
+            val sensorRight = sensorLeft + sensorWidth
+            val sensorBottom = sensorTop + sensorHeight
+
+            // Full active-array outline.
+            drawRect(
+                color = Color.White.copy(alpha = 0.88f),
+                topLeft = Offset(sensorLeft, sensorTop),
+                size = ComposeSize(sensorWidth, sensorHeight),
+                style = Stroke(width = 1.4.dp.toPx()),
+            )
+
+            // MGC's current crop window is allowed to extend beyond the sensor outline;
+            // the red stroke makes an unsafe/out-of-sensor crop immediately visible.
+            val cropLeft = sensorLeft + bounds.left * sensorWidth
+            val cropTop = sensorTop + bounds.top * sensorHeight
+            val cropRight = sensorLeft + bounds.right * sensorWidth
+            val cropBottom = sensorTop + bounds.bottom * sensorHeight
+            drawRect(
+                color = if (outside) Color(0xFFFF5148) else Color(0xFF36E0C0),
+                topLeft = Offset(cropLeft, cropTop),
+                size = ComposeSize(
+                    (cropRight - cropLeft).coerceAtLeast(0.5f),
+                    (cropBottom - cropTop).coerceAtLeast(0.5f),
+                ),
+                style = Stroke(width = 1.8.dp.toPx()),
+            )
+
+            // Position Lock anchor: exact center of the complete sensor box.
+            val center = Offset(
+                x = (sensorLeft + sensorRight) * 0.5f,
+                y = (sensorTop + sensorBottom) * 0.5f,
+            )
+            val markerColor = Color(0xFFFFD45A)
+            drawCircle(color = Color.Black.copy(alpha = 0.9f), radius = 4.dp.toPx(), center = center)
+            drawCircle(color = markerColor, radius = 2.4.dp.toPx(), center = center)
+            drawLine(
+                color = markerColor,
+                start = Offset(center.x - 6.dp.toPx(), center.y),
+                end = Offset(center.x + 6.dp.toPx(), center.y),
+                strokeWidth = 1.dp.toPx(),
+            )
+            drawLine(
+                color = markerColor,
+                start = Offset(center.x, center.y - 6.dp.toPx()),
+                end = Offset(center.x, center.y + 6.dp.toPx()),
+                strokeWidth = 1.dp.toPx(),
+            )
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = if (outside) "CROP OUTSIDE" else "POSITION LOCK",
+            color = if (outside) Color(0xFFFF6A60) else Color.White.copy(alpha = 0.88f),
+            fontSize = 8.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

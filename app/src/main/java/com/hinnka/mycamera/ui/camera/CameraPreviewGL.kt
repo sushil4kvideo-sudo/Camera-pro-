@@ -32,6 +32,7 @@ import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.preview.PreviewSubjectTrackingProcessor
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
+import com.hinnka.mycamera.stabilization.PositionLockSensorCropBounds
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.ui.components.FocusIndicator
@@ -87,6 +88,7 @@ fun CameraPreviewGL(
     isEyeFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     onPreviewBoundsChanged: (Rect) -> Unit = {},
+    onPositionLockSensorCropUpdated: ((PositionLockSensorCropBounds?) -> Unit)? = null,
     isAutoFocus: Boolean = true,
     focusPeakingEnabled: Boolean = true,
     stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
@@ -105,6 +107,7 @@ fun CameraPreviewGL(
     var resumeGeneration by remember { mutableIntStateOf(0) }
     val currentOnTap by rememberUpdatedState(onTap)
     val currentOnLongPress by rememberUpdatedState(onLongPress)
+    val currentOnPositionLockSensorCropUpdated by rememberUpdatedState(onPositionLockSensorCropUpdated)
 
     // AWB/CCM changes update only the engine pass, not the entire Compose/LUT layer.
     LaunchedEffect(glSurfaceViewRef, enginePreviewPlan, resumeGeneration) {
@@ -177,12 +180,18 @@ fun CameraPreviewGL(
                     factory = { ctx ->
                         CameraGLSurfaceView(ctx).apply {
                             glSurfaceViewRef = this
+                            onPositionLockSensorCropUpdated = { crop ->
+                                currentOnPositionLockSensorCropUpdated?.invoke(crop)
+                            }
                             // 通知 GLSurfaceView 已准备好
                             onGLSurfaceViewReady?.invoke(this)
                         }
                     },
                     update = { glSurfaceView ->
                         // 更新闭包捕获的状态
+                        glSurfaceView.onPositionLockSensorCropUpdated = { crop ->
+                            currentOnPositionLockSensorCropUpdated?.invoke(crop)
+                        }
                         glSurfaceView.onSurfaceReady = { _ ->
                             if (glSurfaceViewRef !== glSurfaceView) {
                                 PLog.d("CameraPreviewGL", "Ignoring stale onSurfaceReady")

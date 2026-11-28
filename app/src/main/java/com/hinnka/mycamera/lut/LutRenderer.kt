@@ -16,6 +16,8 @@ import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
+import com.hinnka.mycamera.stabilization.PositionLockSensorCropBounds
+import com.hinnka.mycamera.stabilization.PositionLockSensorCropMapper
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
@@ -560,6 +562,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
     var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
+    @Volatile
+    var onPositionLockSensorCropUpdated: ((PositionLockSensorCropBounds?) -> Unit)? = null
+    private var lastPositionLockSensorCropCallbackAtMs = 0L
     var onFirstFrameRendered: (() -> Unit)? = null
     // 仅在有等待者时安装；时间戳属于已经完成所有预览 pass 的画面。
     var onPreviewFrameRendered: ((Long) -> Unit)? = null
@@ -1235,6 +1240,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                                 )
                             }
                         } else {
+                            publishPositionLockSensorCrop(completedFrame)
                             val holdPreviousPhotoPreviewFrame =
                                 previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
                                     completedFrame.transform == null &&
@@ -3120,6 +3126,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         lookaheadFrames: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
         positionLockCropZoom: Float = POSITION_LOCK_CROP_ZOOM,
     ) {
+        if (useCase != StabilizationUseCase.POSITION_LOCK) {
+            lastPositionLockSensorCropCallbackAtMs = 0L
+            onPositionLockSensorCropUpdated?.invoke(null)
+        }
+
         val normalizedStrength = normalizeStabilizationStrength(strength)
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
         val normalizedPositionLockCropZoom =
@@ -3206,6 +3217,23 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 height = rendered.height,
             )
         }
+    }
+
+
+    private fun publishPositionLockSensorCrop(
+        frame: com.hinnka.mycamera.stabilization.StabilizationFrame,
+    ) {
+        if (!frame.positionLock) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastPositionLockSensorCropCallbackAtMs < 66L) return
+        lastPositionLockSensorCropCallbackAtMs = now
+        val bounds = PositionLockSensorCropMapper.map(
+            rowHomographies = frame.transform?.rowHomographies,
+            activeArray = frame.sensorActiveArray,
+            scalerCropRegion = frame.sensorCropRegion,
+            fallbackZoom = previewPositionLockCropZoom,
+        )
+        onPositionLockSensorCropUpdated?.invoke(bounds)
     }
 
     fun setCaptureSize(width: Int, height: Int) {

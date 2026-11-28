@@ -75,6 +75,9 @@ data class StabilizationFrame(
     val image: StabilizationImage,
     /** True when native MGC holds a fixed virtual-camera pose with a 2.5x crop. */
     val positionLock: Boolean = false,
+    /** Sensor geometry captured with this exact frame's Camera2 metadata. */
+    val sensorActiveArray: Rect? = null,
+    val sensorCropRegion: Rect? = null,
 )
 
 /**
@@ -186,6 +189,8 @@ private fun magnifyDynamicLensIntrinsics(
 private data class SequencedNativeResult(
     val sequence: Long,
     val result: MgcEisNativeEngine.FrameResult,
+    val activeArray: Rect?,
+    val cropRegion: Rect?,
 )
 
 private class BufferedStabilizationImage(
@@ -1089,6 +1094,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
 
             val frameTimestampNs = frameBoundaries.removeAt(0)
             val metadata = frameMetadata.remove(frameTimestampNs)
+            val currentCalibration = calibration
             if (metadata == null) {
                 val nearestMetadataTimestampNs = frameMetadata.keys.minByOrNull {
                     absoluteTimestampDifference(it, frameTimestampNs)
@@ -1101,10 +1107,12 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 )
                 appendNativeResultLocked(
                     MgcEisNativeEngine.FrameResult.Dropped(frameTimestampNs),
+                    activeArray = currentCalibration?.activeArray,
+                    cropRegion = currentCalibration?.activeArray,
                 )
                 continue
             }
-            val currentCalibration = calibration ?: continue
+            val frameCalibration = currentCalibration ?: continue
             nativeFrameAttemptCount += 1L
             if (nativeFrameAttemptCount <= 3L || nativeFrameAttemptCount % 30L == 0L) {
                 PLog.i(
@@ -1120,10 +1128,10 @@ class RealtimeStabilizationCoordinator(context: Context) {
                     frameDurationNs = metadata.frameDurationNs,
                     rollingShutterSkewNs = metadata.rollingShutterSkewNs,
                     cropRegion = metadata.cropRegion,
-                    activeArray = currentCalibration.activeArray,
-                    preCorrectionActiveArray = currentCalibration.preCorrectionActiveArray,
-                    nominalLensIntrinsics = currentCalibration.nominalLensIntrinsics,
-                    physicalSensorWidthMm = currentCalibration.physicalSizeMm.width,
+                    activeArray = frameCalibration.activeArray,
+                    preCorrectionActiveArray = frameCalibration.preCorrectionActiveArray,
+                    nominalLensIntrinsics = frameCalibration.nominalLensIntrinsics,
+                    physicalSensorWidthMm = frameCalibration.physicalSizeMm.width,
                     focalLengthMm = metadata.focalLengthMm,
                 ),
             )
@@ -1134,7 +1142,13 @@ class RealtimeStabilizationCoordinator(context: Context) {
                         (result?.javaClass?.simpleName ?: "pending"),
                 )
             }
-            if (result != null) appendNativeResultLocked(result)
+            if (result != null) {
+                appendNativeResultLocked(
+                    result,
+                    activeArray = frameCalibration.activeArray,
+                    cropRegion = metadata.cropRegion,
+                )
+            }
         }
     }
 
@@ -1147,9 +1161,20 @@ class RealtimeStabilizationCoordinator(context: Context) {
         }
     }
 
-    private fun appendNativeResultLocked(result: MgcEisNativeEngine.FrameResult) {
+    private fun appendNativeResultLocked(
+        result: MgcEisNativeEngine.FrameResult,
+        activeArray: Rect? = null,
+        cropRegion: Rect? = null,
+    ) {
         resultSequence += 1L
-        nativeResults.addLast(SequencedNativeResult(resultSequence, result))
+        nativeResults.addLast(
+            SequencedNativeResult(
+                sequence = resultSequence,
+                result = result,
+                activeArray = activeArray?.let { Rect(it) },
+                cropRegion = cropRegion?.let { Rect(it) },
+            ),
+        )
         while (nativeResults.size > MAX_RESULT_COUNT) nativeResults.removeFirst()
         activeSessions.values.forEach { callback ->
             try {
@@ -1335,6 +1360,8 @@ class RealtimeStabilizationCoordinator(context: Context) {
                             transform = null,
                             image = image,
                             positionLock = useCase == StabilizationUseCase.POSITION_LOCK,
+                            sensorActiveArray = next.activeArray?.let { Rect(it) },
+                            sensorCropRegion = next.cropRegion?.let { Rect(it) },
                         )
                     is MgcEisNativeEngine.FrameResult.Stabilized -> StabilizationFrame(
                         timestampNs = timestampNs,
@@ -1348,6 +1375,8 @@ class RealtimeStabilizationCoordinator(context: Context) {
                         ),
                         image = image,
                         positionLock = useCase == StabilizationUseCase.POSITION_LOCK,
+                        sensorActiveArray = next.activeArray?.let { Rect(it) },
+                        sensorCropRegion = next.cropRegion?.let { Rect(it) },
                     )
                 }
             }
