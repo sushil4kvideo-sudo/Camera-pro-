@@ -400,6 +400,7 @@ class RealtimeVideoRenderer(
         }
         currentDualCaptureInputSize?.let(::initializeDualCaptureInput)
         if (mgcStabilizationEnabled) {
+            stabilizationCoordinator?.beginVideoDiagnostics()
             check(
                 mgcEisPresentationTransform.captureFromSensorOrientation(
                     sensorOrientationDegrees,
