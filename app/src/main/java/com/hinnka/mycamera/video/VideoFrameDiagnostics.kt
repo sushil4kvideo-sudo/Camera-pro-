@@ -209,7 +209,7 @@ internal class VideoFrameDiagnostics(
         if (cameraSupported == false) {
             diagnosis += "This camera/lens is not reported as EIS+ supported. Video may be running through the regular OES fallback instead of the native EIS path."
         }
-        if (halStabilizationConflict) {
+        if (halStabilizationConflict == true) {
             diagnosis += "Camera HAL video/OIS stabilization conflict was detected. The HAL may be overriding or conflicting with the EIS+ request."
         }
         if (gyroReady == false) {
