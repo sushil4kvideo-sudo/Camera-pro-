@@ -760,6 +760,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         positionLockCropZoom: Float,
     ): Long? = synchronized(lock) {
         if (!isCurrentCameraSupported) return null
+        if (activeSessions.isEmpty()) resetVideoDiagnosticsLocked()
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
         val normalizedPositionLockCropZoom = if (positionLockEnabled) {
             positionLockCropZoom.takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM
@@ -910,22 +911,10 @@ class RealtimeStabilizationCoordinator(context: Context) {
         boundaryCount = 0L
         nativeFrameAttemptCount = 0L
         captureResultCount = 0L
-        diagnosticImageFrames = 0L
-        diagnosticImageTimestampGapEvents = 0L
-        diagnosticImageEstimatedMissing = 0L
+        // A sensor timestamp origin can reset on a lens switch. Preserve cumulative counters,
+        // but restart timestamp-gap baselines for the new physical camera.
         diagnosticLastImageTimestampNs = 0L
-        diagnosticCaptureTimestampGapEvents = 0L
-        diagnosticCaptureEstimatedMissing = 0L
         diagnosticLastCaptureTimestampNs = 0L
-        diagnosticMissingMetadata = 0L
-        diagnosticNativePending = 0L
-        diagnosticNativeStabilized = 0L
-        diagnosticNativeDropped = 0L
-        diagnosticNativeProcessTotalNs = 0L
-        diagnosticNativeProcessMaxNs = 0L
-        diagnosticImageQueueOverflow = 0L
-        diagnosticResultImageMissing = 0L
-        diagnosticResultQueueTrimmed = 0L
         consecutiveHalStabilizationConflictCount = 0
         rawGyroCallbackCount = 0L
         gyroSourceReady = false
@@ -1007,6 +996,25 @@ class RealtimeStabilizationCoordinator(context: Context) {
         nativeLookaheadFrames = lookahead
         cameraReconfigurationPending = false
         return restarted
+    }
+
+    private fun resetVideoDiagnosticsLocked() {
+        diagnosticImageFrames = 0L
+        diagnosticImageTimestampGapEvents = 0L
+        diagnosticImageEstimatedMissing = 0L
+        diagnosticLastImageTimestampNs = 0L
+        diagnosticCaptureTimestampGapEvents = 0L
+        diagnosticCaptureEstimatedMissing = 0L
+        diagnosticLastCaptureTimestampNs = 0L
+        diagnosticMissingMetadata = 0L
+        diagnosticNativePending = 0L
+        diagnosticNativeStabilized = 0L
+        diagnosticNativeDropped = 0L
+        diagnosticNativeProcessTotalNs = 0L
+        diagnosticNativeProcessMaxNs = 0L
+        diagnosticImageQueueOverflow = 0L
+        diagnosticResultImageMissing = 0L
+        diagnosticResultQueueTrimmed = 0L
     }
 
     private fun resetFeederLocked() {
