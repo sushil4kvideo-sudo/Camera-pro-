@@ -125,7 +125,7 @@ internal fun TopOffPanPresetSettings(
         )
 
         Text("Built-in gyroscope presets", color = Color.White, fontWeight = FontWeight.SemiBold)
-        GyroPanMode.values().forEach { mode ->
+        listOf(GyroPanMode.POSITION_LOCK).forEach { mode ->
             Column(modifier = Modifier.padding(top = 7.dp)) {
                 Text(
                     text = when (mode) {
