@@ -33,8 +33,20 @@ fun OppoCameraGlassSurface(
     transparency: Float = 0.55f,
     blurStrength: Float = 22f,
     onBoundsChanged: (Rect?) -> Unit = {},
+    performanceMode: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
+    if (performanceMode) {
+        // Single opaque surface: skip shadows, gradients, transparency and glass decoration.
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(30.dp))
+                .background(Color(0xFF11151C)),
+            content = content,
+        )
+        return
+    }
+
     val userTransparency = transparency.coerceIn(0f, 1f)
     val opacityMultiplier = 1f - userTransparency * 0.90f
     val finalSubstrateAlpha = (0.85f * opacityMultiplier).coerceIn(0.06f, 0.98f)
