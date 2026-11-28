@@ -64,7 +64,11 @@ internal fun rememberCameraPanelBackdrop(
                 val width = surfaceView.width
                 val height = surfaceView.height
                 val surface = surfaceView.holder.surface
-                if (!surfaceView.isAttachedToWindow || !surface.isValid ||
+                // EIS+ uses look-ahead frames. Until its processed frame reaches the viewfinder,
+                // the GL renderer may still show a normal OES fallback. Never use that fallback
+                // as the liquid-glass source: it creates a visible latency mismatch behind panels.
+                if (!surfaceView.isPanelBackdropPreviewSourceReady() ||
+                    !surfaceView.isAttachedToWindow || !surface.isValid ||
                     width <= 0 || height <= 0
                 ) {
                     backdrop.imageFrame = null
