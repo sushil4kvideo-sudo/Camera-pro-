@@ -162,6 +162,7 @@ fun CameraTopSheet(
     onOppoPhotoSettingsChange: (OppoPhotoSettings) -> Unit,
     refocusAvailable: Boolean,
     contentTopPadding: Dp = CameraTopSheetContentTopPadding,
+    performanceMode: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var expandedVideoPanel by rememberSaveable { mutableStateOf<VideoSettingPanel?>(null) }
@@ -191,8 +192,8 @@ fun CameraTopSheet(
 
     AnimatedVisibility(
         visible = visible,
-        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+        enter = if (performanceMode) EnterTransition.None else slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+        exit = if (performanceMode) ExitTransition.None else slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
         modifier = modifier
     ) {
         OppoCameraGlassSurface(
@@ -200,6 +201,7 @@ fun CameraTopSheet(
             transparency = glassTransparency,
             blurStrength = glassBlurStrength,
             onBoundsChanged = onGlassBoundsChanged,
+            performanceMode = performanceMode,
         ) {
             Column(
                 modifier = Modifier
