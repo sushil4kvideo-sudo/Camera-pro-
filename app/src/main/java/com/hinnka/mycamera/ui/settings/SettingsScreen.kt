@@ -323,6 +323,7 @@ fun SettingsScreen(
     val shutterSoundEnabled by viewModel.shutterSoundEnabled.collectAsState(initial = true)
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
+    val cameraPerformanceMode by viewModel.cameraPerformanceMode.collectAsState(initial = false)
     val windowScreenBrightness by viewModel.windowScreenBrightness.collectAsState()
     val volumeKeyAction by viewModel.volumeKeyAction.collectAsState()
     val topSheetAspectRatios by viewModel.topSheetAspectRatios.collectAsState()
@@ -2181,6 +2182,18 @@ fun SettingsScreen(
                         )
 
                         SwitchSettingItem(
+                            title = stringResource(R.string.settings_camera_performance_mode),
+                            description = stringResource(R.string.settings_camera_performance_mode_description),
+                            checked = cameraPerformanceMode,
+                            onCheckedChange = viewModel::setCameraPerformanceMode
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
                             title = stringResource(R.string.settings_shutter_sound),
                             description = stringResource(R.string.settings_shutter_sound_description),
                             checked = shutterSoundEnabled,
@@ -2666,7 +2679,8 @@ private fun SettingsCategoryOverview(
                 stringResource(R.string.settings_shutter_sound),
                 stringResource(R.string.settings_keep_screen_on),
                 stringResource(R.string.settings_screen_hdr),
-                stringResource(R.string.settings_volume_key_action)
+                stringResource(R.string.settings_volume_key_action),
+                stringResource(R.string.settings_camera_performance_mode)
             ).joinToString(" · "),
             onClick = { onPageSelected(SettingsPage.SYSTEM_CONTROL) }
         )
