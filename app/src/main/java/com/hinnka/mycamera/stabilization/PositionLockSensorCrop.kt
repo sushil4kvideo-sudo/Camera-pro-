@@ -56,13 +56,13 @@ object PositionLockSensorCropMapper {
         if (rowHomographies == null || rowHomographies.size != STABILIZATION_ROW_COUNT * 9) {
             val widthFraction = 1f / safeZoom
             val heightFraction = 1f / safeZoom
-            val cropLeft = (1f - widthFraction) * 0.5f
-            val cropTop = (1f - heightFraction) * 0.5f
+            val cropLeftFraction = (1f - widthFraction) * 0.5f
+            val cropTopFraction = (1f - heightFraction) * 0.5f
             return normalizeSensorBounds(
-                cropLeft + cropLeft * cropWidth,
-                cropTop + cropTop * cropHeight,
-                cropLeft + (cropLeft + widthFraction) * cropWidth,
-                cropTop + (cropTop + heightFraction) * cropHeight,
+                cropLeft + cropLeftFraction * cropWidth,
+                cropTop + cropTopFraction * cropHeight,
+                cropLeft + (cropLeftFraction + widthFraction) * cropWidth,
+                cropTop + (cropTopFraction + heightFraction) * cropHeight,
                 activeArray,
             )
         }
