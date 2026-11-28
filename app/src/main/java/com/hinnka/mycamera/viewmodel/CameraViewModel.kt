@@ -1579,6 +1579,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val cameraMenuBlurRadius: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.cameraMenuBlurRadius }
         .stateIn(viewModelScope, SharingStarted.Eagerly, DEFAULT_CAMERA_MENU_BLUR_RADIUS)
+    val cameraPerformanceMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.cameraPerformanceMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val volumeKeyAction: StateFlow<VolumeKeyAction> =
         userPreferencesRepository.userPreferences.map { it.volumeKeyAction }
             .stateIn(viewModelScope, SharingStarted.Eagerly, initialValue = VolumeKeyAction.NONE)
@@ -5734,6 +5737,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setCameraMenuBlurRadius(value: Float) {
         viewModelScope.launch {
             userPreferencesRepository.saveCameraMenuBlurRadius(value)
+        }
+    }
+
+    fun setCameraPerformanceMode(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveCameraPerformanceMode(enabled)
         }
     }
 
