@@ -8,7 +8,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PositionLockSensorCropMapperTest {
-    private val activeArray = Rect(0, 0, 4000, 3000)
+    // android.graphics.Rect constructors are not implemented by the mockable Android
+    // SDK used in local JVM tests. Assign the public fields explicitly so these tests
+    // exercise the mapper with real coordinates instead of an empty (0, 0, 0, 0) Rect.
+    private val activeArray = sensorRect(0, 0, 4000, 3000)
 
     @Test
     fun fixedPositionLockCropIsCenteredInsideTheFullSensor() {
@@ -46,7 +49,7 @@ class PositionLockSensorCropMapperTest {
 
     @Test
     fun cameraScalerCropIsMappedIntoTheFullActiveArrayCoordinates() {
-        val scalerCrop = Rect(1000, 750, 3000, 2250)
+        val scalerCrop = sensorRect(1000, 750, 3000, 2250)
         val bounds = PositionLockSensorCropMapper.map(
             rowHomographies = zoomHomographies(2.5f),
             activeArray = activeArray,
@@ -59,6 +62,14 @@ class PositionLockSensorCropMapperTest {
         assertEquals(0.6f, bounds.right, 0.0001f)
         assertEquals(0.6f, bounds.bottom, 0.0001f)
     }
+
+    private fun sensorRect(left: Int, top: Int, right: Int, bottom: Int): Rect =
+        Rect().apply {
+            this.left = left
+            this.top = top
+            this.right = right
+            this.bottom = bottom
+        }
 
     private fun zoomHomographies(zoom: Float): FloatArray =
         FloatArray(STABILIZATION_ROW_COUNT * 9).also { values ->
