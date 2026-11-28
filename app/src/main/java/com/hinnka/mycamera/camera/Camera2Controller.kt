@@ -14052,8 +14052,8 @@ class Camera2Controller(private val context: Context) {
             .filter { it.lower == 31 }
             .minByOrNull { it.upper - it.lower }
             ?: ranges
-                .filter { it.lower >= 30 }
-                .minWithOrNull(compareBy<Range<Int>> { it.lower }.thenBy { it.upper - it.lower })
+                .filter { it.lower == 30 }
+                .minByOrNull { it.upper - it.lower }
     }
 
     private fun applyFastShutterTargetFps(builder: CaptureRequest.Builder) {
