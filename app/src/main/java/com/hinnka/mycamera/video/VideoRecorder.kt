@@ -2354,13 +2354,19 @@ class VideoRecorder(
         }
     }
 
-    private fun finishVideoDiagnostics() {
+    private suspend fun finishVideoDiagnostics() {
         val diagnostics = frameDiagnostics ?: return
         frameDiagnostics = null
-        diagnostics.finish(
-            eisSnapshot = stabilizationCoordinator?.videoDiagnosticsSnapshot().orEmpty(),
-            rendererSnapshot = renderer?.videoDiagnosticsSnapshot().orEmpty(),
-        )
+        val snapshots = withContext(renderDispatcher) {
+            stabilizationCoordinator?.videoDiagnosticsSnapshot().orEmpty() to
+                renderer?.videoDiagnosticsSnapshot().orEmpty()
+        }
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            diagnostics.finish(
+                eisSnapshot = snapshots.first,
+                rendererSnapshot = snapshots.second,
+            )
+        }
     }
 
     private suspend fun cleanup() {
