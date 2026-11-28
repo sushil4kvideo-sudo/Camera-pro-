@@ -134,6 +134,26 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     // Copy Shader (FBO -> Screen)
     private var copyProgramId: Int = 0
+    private var quickMenuGlassProgramId: Int = 0
+    private var quickMenuGlassBlurProgramId: Int = 0
+    private var quickMenuGlassFboId: Int = 0
+    private var quickMenuGlassTextureId: Int = 0
+    private var quickMenuGlassWidth: Int = 0
+    private var quickMenuGlassHeight: Int = 0
+    // Quarter-resolution ping-pong targets keep the live Gaussian blur GPU-efficient.
+    private var quickMenuGlassBlurFboId: Int = 0
+    private var quickMenuGlassBlurTextureId: Int = 0
+    private var quickMenuGlassBlurTempFboId: Int = 0
+    private var quickMenuGlassBlurTempTextureId: Int = 0
+    private var quickMenuGlassBlurWidth: Int = 0
+    private var quickMenuGlassBlurHeight: Int = 0
+    private var quickMenuGlassEnabled: Boolean = false
+    private var quickMenuGlassLeftPx: Float = 0f
+    private var quickMenuGlassBottomPx: Float = 0f
+    private var quickMenuGlassRightPx: Float = 0f
+    private var quickMenuGlassTopPx: Float = 0f
+    private var quickMenuGlassBlurRadiusPx: Float = 0f
+    private var quickMenuGlassCornerRadiusPx: Float = 0f
     private var uCopyTextureLoc: Int = 0
     private var uCopyMVPMatrixLoc: Int = 0
     private var uCopySTMatrixLoc: Int = 0
@@ -252,11 +272,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var stabilizationSessionGeneration = 0L
     @Volatile
     private var stabilizationOutputAvailable = false
-    // The liquid-glass backdrop must never sample the raw OES fallback while EIS+ is warming up.
-    @Volatile
-    private var panelBackdropRequiresStabilizedPreview = false
-    @Volatile
-    private var stabilizedPreviewPresentedForPanelBackdrop = false
     private var previewStabilizationUseCase: StabilizationUseCase? = null
     private var previewStabilizationStrength = 0f
     private var previewPositionLockCropZoom = POSITION_LOCK_CROP_ZOOM
@@ -591,6 +606,27 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Deprecated("Portrait Video has been removed")
     fun setPortraitMask(width: Int, height: Int, data: ByteArray?) = Unit
 
+    fun setQuickMenuGlassEffect(
+        enabled: Boolean,
+        leftPx: Float,
+        bottomPx: Float,
+        rightPx: Float,
+        topPx: Float,
+        blurRadiusPx: Float,
+        cornerRadiusPx: Float,
+    ) {
+        quickMenuGlassLeftPx = leftPx
+        quickMenuGlassBottomPx = bottomPx
+        quickMenuGlassRightPx = rightPx
+        quickMenuGlassTopPx = topPx
+        quickMenuGlassBlurRadiusPx = blurRadiusPx.coerceIn(0f, 160f)
+        quickMenuGlassCornerRadiusPx = cornerRadiusPx.coerceAtLeast(0f)
+        quickMenuGlassEnabled =
+            enabled &&
+            rightPx > leftPx &&
+            topPx > bottomPx &&
+            quickMenuGlassBlurRadiusPx > 0.01f
+    }
 
     /**
      * Keep the old frame's source geometry while the mode-specific Camera2 stream is replaced.
@@ -703,7 +739,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         currentCameraTextureMatrix = stMatrix
         currentFrameTimestampNs = 0L
         stabilizationOutputAvailable = false
-        stabilizedPreviewPresentedForPanelBackdrop = false
         lutTextureId = 0
         baselineLutTextureId = 0
         basicToneTextures.reset()
@@ -729,6 +764,18 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         stackFboWidth = 0
         stackFboHeight = 0
         copyProgramId = 0
+        quickMenuGlassProgramId = 0
+        quickMenuGlassBlurProgramId = 0
+        quickMenuGlassFboId = 0
+        quickMenuGlassTextureId = 0
+        quickMenuGlassWidth = 0
+        quickMenuGlassHeight = 0
+        quickMenuGlassBlurFboId = 0
+        quickMenuGlassBlurTextureId = 0
+        quickMenuGlassBlurTempFboId = 0
+        quickMenuGlassBlurTempTextureId = 0
+        quickMenuGlassBlurWidth = 0
+        quickMenuGlassBlurHeight = 0
         hdfExtractBlurHProgram = 0
         hdfBlurVProgram = 0
         hdfCompositeProgram = 0
@@ -1259,12 +1306,19 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val hasCreativeLayer = hasCreativeLayer()
         val hasDualLayer = hasBaselineLayer && hasCreativeLayer
         uploadPendingCurveTextures()
+        val quickMenuGlassActive = quickMenuGlassEnabled &&
+            quickMenuGlassProgramId != 0 &&
+            quickMenuGlassBlurProgramId != 0 &&
+            quickMenuGlassBlurRadiusPx > 0.01f &&
+            quickMenuGlassRightPx > quickMenuGlassLeftPx &&
+            quickMenuGlassTopPx > quickMenuGlassBottomPx
         val requestedFbo = liveRecorder != null ||
             postProcessEffectEnabled ||
             clarityEnabled ||
             filmGrainEnabled ||
             eyeFocusSamplingNeeded ||
             hasDualLayer ||
+            quickMenuGlassActive ||
             (!isAutoFocus && focusPeakingEnabled)
         if (requestedFbo && !isMainFboReady(viewportWidth, viewportHeight)) {
             initFbo(viewportWidth, viewportHeight)
@@ -1399,7 +1453,33 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
             var finalDisplayTextureId = currentTexId
             val needsHdfCompositeForSampling = postProcessEffectEnabled && !postProcessMaterialized
-            if (needsHdfCompositeForSampling) {
+            if (quickMenuGlassActive) {
+                if (needsHdfCompositeForSampling &&
+                    ensureQuickMenuGlassFramebuffer(currentWidth, currentHeight)
+                ) {
+                    // Materialize the existing post-process result into a GL texture first,
+                    // then apply the glass blur as the final display-only pass.
+                    drawPostProcessEffects(
+                        quickMenuGlassFboId,
+                        currentWidth,
+                        currentHeight,
+                        currentTexId,
+                    )
+                    drawQuickMenuGlassToScreen(
+                        sourceTextureId = quickMenuGlassTextureId,
+                        width = currentWidth,
+                        height = currentHeight,
+                    )
+                } else if (needsHdfCompositeForSampling) {
+                    drawPostProcessEffects(0, viewportWidth, viewportHeight, currentTexId)
+                } else {
+                    drawQuickMenuGlassToScreen(
+                        sourceTextureId = currentTexId,
+                        width = currentWidth,
+                        height = currentHeight,
+                    )
+                }
+            } else if (needsHdfCompositeForSampling) {
                 drawPostProcessEffects(0, viewportWidth, viewportHeight, currentTexId)
             } else {
                 drawFboToScreen(0, viewportWidth, viewportHeight, currentTexId)
@@ -1484,14 +1564,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (cameraFrameUpdated && !firstFrameRendered) {
             firstFrameRendered = true
             onFirstFrameRendered?.invoke()
-        }
-        // onDrawFrame has now rendered the current texture source. Only after this point may
-        // the glass-panel PixelCopy sample the preview while EIS+ is active.
-        if (delayedStabilizationEnabled &&
-            stabilizationOutputAvailable &&
-            currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
-        ) {
-            stabilizedPreviewPresentedForPanelBackdrop = true
         }
         if (currentFrameTimestampNs > 0L) {
             onPreviewFrameRendered?.invoke(currentFrameTimestampNs)
@@ -1669,6 +1741,285 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     }
 
+    private fun ensureQuickMenuGlassFramebuffer(width: Int, height: Int): Boolean {
+        if (
+            quickMenuGlassFboId != 0 &&
+            quickMenuGlassTextureId != 0 &&
+            quickMenuGlassWidth == width &&
+            quickMenuGlassHeight == height
+        ) {
+            return true
+        }
+
+        releaseQuickMenuGlassFramebuffer()
+        if (width <= 0 || height <= 0) return false
+
+        val texture = IntArray(1)
+        val framebuffer = IntArray(1)
+        GLES30.glGenTextures(1, texture, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA16F, width, height)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glGenFramebuffers(1, framebuffer, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer[0])
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            texture[0],
+            0,
+        )
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        val error = GLES30.glGetError()
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE || error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "Quick-menu glass framebuffer failed: status=$status glError=$error")
+            GLES30.glDeleteFramebuffers(1, framebuffer, 0)
+            GLES30.glDeleteTextures(1, texture, 0)
+            return false
+        }
+
+        quickMenuGlassTextureId = texture[0]
+        quickMenuGlassFboId = framebuffer[0]
+        quickMenuGlassWidth = width
+        quickMenuGlassHeight = height
+        return true
+    }
+
+    private fun releaseQuickMenuGlassFramebuffer() {
+        if (quickMenuGlassFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(quickMenuGlassFboId), 0)
+            quickMenuGlassFboId = 0
+        }
+        if (quickMenuGlassTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(quickMenuGlassTextureId), 0)
+            quickMenuGlassTextureId = 0
+        }
+        quickMenuGlassWidth = 0
+        quickMenuGlassHeight = 0
+    }
+
+    private fun drawQuickMenuGlassToScreen(
+        sourceTextureId: Int,
+        width: Int,
+        height: Int,
+    ) {
+        if (quickMenuGlassProgramId == 0 || quickMenuGlassBlurProgramId == 0 ||
+            sourceTextureId == 0 || width <= 0 || height <= 0 ||
+            !ensureQuickMenuGlassBlurTargets(width, height)
+        ) {
+            drawFboToScreen(0, width, height, sourceTextureId)
+            return
+        }
+
+        val blurWidth = quickMenuGlassBlurWidth
+        val blurHeight = quickMenuGlassBlurHeight
+
+        // Pass 1: horizontal Gaussian blur from the current camera/post-process texture.
+        drawQuickMenuGlassGaussianPass(
+            sourceTextureId = sourceTextureId,
+            targetFramebufferId = quickMenuGlassBlurFboId,
+            targetWidth = blurWidth,
+            targetHeight = blurHeight,
+            sourceWidth = width,
+            sourceHeight = height,
+            directionX = 1f,
+            directionY = 0f,
+        )
+
+        // Pass 2: vertical Gaussian blur. Both quarter-size targets share the camera UV space.
+        drawQuickMenuGlassGaussianPass(
+            sourceTextureId = quickMenuGlassBlurTextureId,
+            targetFramebufferId = quickMenuGlassBlurTempFboId,
+            targetWidth = blurWidth,
+            targetHeight = blurHeight,
+            sourceWidth = width,
+            sourceHeight = height,
+            directionX = 0f,
+            directionY = 1f,
+        )
+
+        // Composite only inside the rounded panel bounds; leave the rest of the preview untouched.
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        GLES30.glUseProgram(quickMenuGlassProgramId)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(quickMenuGlassProgramId, "uCameraTexture"),
+            0,
+        )
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, quickMenuGlassBlurTempTextureId)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(quickMenuGlassProgramId, "uBlurredTexture"),
+            1,
+        )
+        GLES30.glUniform4f(
+            GLES30.glGetUniformLocation(quickMenuGlassProgramId, "uGlassRectPx"),
+            quickMenuGlassLeftPx,
+            quickMenuGlassBottomPx,
+            quickMenuGlassRightPx,
+            quickMenuGlassTopPx,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(quickMenuGlassProgramId, "uCornerRadiusPx"),
+            quickMenuGlassCornerRadiusPx,
+        )
+        drawSimpleQuad(quickMenuGlassProgramId)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+    }
+
+    private fun drawQuickMenuGlassGaussianPass(
+        sourceTextureId: Int,
+        targetFramebufferId: Int,
+        targetWidth: Int,
+        targetHeight: Int,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        directionX: Float,
+        directionY: Float,
+    ) {
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
+        GLES30.glViewport(0, 0, targetWidth, targetHeight)
+        GLES30.glUseProgram(quickMenuGlassBlurProgramId)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(quickMenuGlassBlurProgramId, "uInputTexture"),
+            0,
+        )
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(quickMenuGlassBlurProgramId, "uTexelSize"),
+            1f / sourceWidth.toFloat(),
+            1f / sourceHeight.toFloat(),
+        )
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(quickMenuGlassBlurProgramId, "uDirection"),
+            directionX,
+            directionY,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(quickMenuGlassBlurProgramId, "uBlurRadiusPx"),
+            quickMenuGlassBlurRadiusPx,
+        )
+        drawSimpleQuad(quickMenuGlassBlurProgramId)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+    }
+
+    private fun ensureQuickMenuGlassBlurTargets(width: Int, height: Int): Boolean {
+        val targetWidth = ((width + 3) / 4).coerceAtLeast(1)
+        val targetHeight = ((height + 3) / 4).coerceAtLeast(1)
+        if (
+            quickMenuGlassBlurFboId != 0 &&
+            quickMenuGlassBlurTextureId != 0 &&
+            quickMenuGlassBlurTempFboId != 0 &&
+            quickMenuGlassBlurTempTextureId != 0 &&
+            quickMenuGlassBlurWidth == targetWidth &&
+            quickMenuGlassBlurHeight == targetHeight
+        ) {
+            return true
+        }
+
+        releaseQuickMenuGlassBlurTargets()
+        val horizontal = createQuickMenuGlassBlurTarget(targetWidth, targetHeight) ?: return false
+        val vertical = createQuickMenuGlassBlurTarget(targetWidth, targetHeight)
+        if (vertical == null) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(horizontal.first), 0)
+            GLES30.glDeleteTextures(1, intArrayOf(horizontal.second), 0)
+            return false
+        }
+
+        quickMenuGlassBlurFboId = horizontal.first
+        quickMenuGlassBlurTextureId = horizontal.second
+        quickMenuGlassBlurTempFboId = vertical.first
+        quickMenuGlassBlurTempTextureId = vertical.second
+        quickMenuGlassBlurWidth = targetWidth
+        quickMenuGlassBlurHeight = targetHeight
+        return true
+    }
+
+    private fun createQuickMenuGlassBlurTarget(width: Int, height: Int): Pair<Int, Int>? {
+        val texture = IntArray(1)
+        val framebuffer = IntArray(1)
+        GLES30.glGenTextures(1, texture, 0)
+        if (texture[0] == 0) return null
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_RGBA16F,
+            width,
+            height,
+            0,
+            GLES30.GL_RGBA,
+            GLES30.GL_HALF_FLOAT,
+            null,
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glGenFramebuffers(1, framebuffer, 0)
+        if (framebuffer[0] == 0) {
+            GLES30.glDeleteTextures(1, texture, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+            return null
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer[0])
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            texture[0],
+            0,
+        )
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        val error = GLES30.glGetError()
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE || error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "Quick-menu Gaussian target failed: status=$status glError=$error")
+            GLES30.glDeleteFramebuffers(1, framebuffer, 0)
+            GLES30.glDeleteTextures(1, texture, 0)
+            return null
+        }
+        return framebuffer[0] to texture[0]
+    }
+
+    private fun releaseQuickMenuGlassBlurTargets() {
+        if (quickMenuGlassBlurFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(quickMenuGlassBlurFboId), 0)
+            quickMenuGlassBlurFboId = 0
+        }
+        if (quickMenuGlassBlurTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(quickMenuGlassBlurTextureId), 0)
+            quickMenuGlassBlurTextureId = 0
+        }
+        if (quickMenuGlassBlurTempFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(quickMenuGlassBlurTempFboId), 0)
+            quickMenuGlassBlurTempFboId = 0
+        }
+        if (quickMenuGlassBlurTempTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(quickMenuGlassBlurTempTextureId), 0)
+            quickMenuGlassBlurTempTextureId = 0
+        }
+        quickMenuGlassBlurWidth = 0
+        quickMenuGlassBlurHeight = 0
+    }
+
     /**
      * 内部绘图逻辑，支持渲染到 FBO 或屏幕
      */
@@ -1807,6 +2158,18 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             aCopyTexCoordLoc = GLES30.glGetAttribLocation(copyProgramId, "aTexCoord")
         }
 
+        if (quickMenuGlassProgramId == 0) {
+            quickMenuGlassProgramId = createPostProcessProgram(
+                Shaders.FRAGMENT_SHADER_QUICK_MENU_GLASS,
+                "quick-menu glass composite",
+            )
+        }
+        if (quickMenuGlassBlurProgramId == 0) {
+            quickMenuGlassBlurProgramId = createPostProcessProgram(
+                Shaders.FRAGMENT_SHADER_QUICK_MENU_GAUSSIAN,
+                "quick-menu separable Gaussian blur",
+            )
+        }
     }
 
     private fun createPostProcessProgram(fragmentShaderSource: String, label: String): Int {
@@ -2796,22 +3159,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         recreatePreviewStabilizationSession()
     }
 
-    /**
-     * True when the displayed SurfaceView is safe to sample for the glass backdrop.
-     * On supported EIS+ cameras this stays false until an EIS+-processed frame has
-     * actually been rendered; normal OES warm-up frames are never used as backdrop input.
-     */
-    fun isPanelBackdropPreviewSourceReady(): Boolean =
-        !panelBackdropRequiresStabilizedPreview || stabilizedPreviewPresentedForPanelBackdrop
-
     private fun recreatePreviewStabilizationSession(resetPresentationTransform: Boolean = true) {
         val sessionGeneration = cameraGeneration
         stabilizationSession?.stop()
         stabilizationOutputAvailable = false
-        stabilizedPreviewPresentedForPanelBackdrop = false
-        panelBackdropRequiresStabilizedPreview =
-            previewStabilizationUseCase != null &&
-                stabilizationCoordinator?.isCurrentCameraSupported == true
         if (resetPresentationTransform) {
             mgcEisPresentationTransform.reset()
         }
@@ -3846,6 +4197,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         passthroughProgramId = 0
         GlUtils.deleteProgram(copyProgramId)
         copyProgramId = 0
+        GlUtils.deleteProgram(quickMenuGlassProgramId)
+        quickMenuGlassProgramId = 0
+        GlUtils.deleteProgram(quickMenuGlassBlurProgramId)
+        quickMenuGlassBlurProgramId = 0
+        releaseQuickMenuGlassFramebuffer()
+        releaseQuickMenuGlassBlurTargets()
         // Release the Camera2 preview SurfaceTexture.
         surfaceTexture?.release()
         surfaceTexture = null
