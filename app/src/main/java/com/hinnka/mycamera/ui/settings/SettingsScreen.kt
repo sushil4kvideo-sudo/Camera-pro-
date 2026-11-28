@@ -1964,6 +1964,51 @@ fun SettingsScreen(
                             onColorSelected = viewModel::setAccentColor
                         )
 
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        var menuTransparencyUi by remember(userPreferences.cameraMenuTransparency) {
+                            mutableStateOf(userPreferences.cameraMenuTransparency)
+                        }
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_camera_menu_transparency),
+                            description = stringResource(R.string.settings_camera_menu_transparency_description),
+                            value = menuTransparencyUi,
+                            valueRange = 0f..1f,
+                            resetValue = DEFAULT_CAMERA_MENU_TRANSPARENCY,
+                            valueTextFormatter = { "${(it * 100f).toInt()}%" },
+                            onValueChange = { menuTransparencyUi = it },
+                            onValueChangeFinished = {
+                                viewModel.setCameraMenuTransparency(menuTransparencyUi)
+                            },
+                            onResetValue = {
+                                menuTransparencyUi = it
+                                viewModel.setCameraMenuTransparency(it)
+                            }
+                        )
+
+
+                        var menuBlurUi by remember(userPreferences.cameraMenuBlurRadius) {
+                            mutableStateOf(userPreferences.cameraMenuBlurRadius)
+                        }
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_camera_menu_blur),
+                            description = stringResource(R.string.settings_camera_menu_blur_description),
+                            value = menuBlurUi,
+                            valueRange = 0f..50f,
+                            resetValue = DEFAULT_CAMERA_MENU_BLUR_RADIUS,
+                            valueTextFormatter = { "${it.roundToInt()} dp" },
+                            onValueChange = { menuBlurUi = it },
+                            onValueChangeFinished = {
+                                viewModel.setCameraMenuBlurRadius(menuBlurUi)
+                            },
+                            onResetValue = {
+                                menuBlurUi = it
+                                viewModel.setCameraMenuBlurRadius(it)
+                            }
+                        )
 
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
