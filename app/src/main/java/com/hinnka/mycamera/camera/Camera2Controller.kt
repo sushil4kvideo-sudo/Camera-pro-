@@ -13897,13 +13897,13 @@ class Camera2Controller(private val context: Context) {
                     builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, min30FpsRange)
                     PLog.i(
                         TAG,
-                        "EIS+ 4K30 frame-rate floor requested: aeRange=$min30FpsRange " +
+                        "EIS+ 30fps frame-rate floor requested: aeRange=$min30FpsRange " +
                             "(prefers a supported 31-fps floor when the camera advertises one)"
                     )
                 } else {
                     PLog.w(
                         TAG,
-                        "EIS+ 4K30: camera advertises no AE FPS range with a 30-fps minimum; " +
+                        "EIS+ 30fps: camera advertises no AE FPS range with a 30-fps minimum; " +
                             "30-fps sensor cadence cannot be guaranteed by Camera2"
                     )
                 }
