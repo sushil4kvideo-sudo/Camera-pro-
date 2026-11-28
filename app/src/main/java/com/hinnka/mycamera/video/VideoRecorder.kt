@@ -881,7 +881,7 @@ class VideoRecorder(
         synchronized(realtimeFrameLock) {
             if (pendingRealtimeFrameCount > 0) {
                 statsReplacedPendingFrames += 1
-                frameDiagnostics?.recordPendingReplacement()
+                frameDiagnostics?.recordCallbackWhilePending()
             }
             pendingRealtimeFrameCount = if (requestedEnhancedStabilization) {
                 pendingRealtimeFrameCount + 1
