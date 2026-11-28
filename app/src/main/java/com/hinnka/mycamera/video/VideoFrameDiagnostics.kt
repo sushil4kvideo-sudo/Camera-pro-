@@ -12,6 +12,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -52,7 +53,9 @@ internal class VideoFrameDiagnostics(
     private val renderNoFrame = AtomicLong()
     private val renderTotalNs = AtomicLong()
     private val renderMaxNs = AtomicLong()
+    private val slowRenderFrames = AtomicLong()
     private val lastWakeNs = AtomicLong(0L)
+    private val anomalyEvents = ArrayDeque<String>()
 
     private val encodedFrames = AtomicLong()
     private val encodedBytes = AtomicLong()
@@ -102,6 +105,7 @@ internal class VideoFrameDiagnostics(
             renderWakeGapEvents.incrementAndGet()
             val estimate = (deltaNs / expectedIntervalNs) - 1L
             if (estimate > 0L) renderWakeEstimatedMissing.addAndGet(estimate)
+            appendAnomaly("render_callback_gap_ms=" + String.format(Locale.US, "%.3f", deltaNs / 1_000_000.0))
         }
     }
 
@@ -118,6 +122,10 @@ internal class VideoFrameDiagnostics(
         val safe = durationNs.coerceAtLeast(0L)
         renderTotalNs.addAndGet(safe)
         updateMax(renderMaxNs, safe)
+        if (safe > expectedIntervalNs) {
+            slowRenderFrames.incrementAndGet()
+            appendAnomaly("render_over_30fps_budget_ms=" + String.format(Locale.US, "%.3f", safe / 1_000_000.0))
+        }
         if (success) renderSuccesses.incrementAndGet() else renderNoFrame.incrementAndGet()
     }
 
@@ -134,6 +142,10 @@ internal class VideoFrameDiagnostics(
             val estimate = (deltaUs / expectedIntervalUs) - 1L
             if (estimate > 0L) encodedPtsEstimatedMissing.addAndGet(estimate)
             updateMax(encodedPtsMaxGapUs, deltaUs)
+            appendAnomaly(
+                "encoded_pts_gap_ms=" + String.format(Locale.US, "%.3f", deltaUs / 1000.0) +
+                    ",previousPtsUs=" + previous + ",currentPtsUs=" + presentationTimeUs
+            )
         }
     }
 
@@ -142,7 +154,12 @@ internal class VideoFrameDiagnostics(
         muxerWrites.incrementAndGet()
         muxerWriteTotalNs.addAndGet(safe)
         updateMax(muxerWriteMaxNs, safe)
-        if (!succeeded) muxerWriteFailures.incrementAndGet()
+        if (!succeeded) {
+            muxerWriteFailures.incrementAndGet()
+            appendAnomaly("muxer_write_failed")
+        } else if (safe > expectedIntervalNs / 2L) {
+            appendAnomaly("slow_muxer_write_ms=" + String.format(Locale.US, "%.3f", safe / 1_000_000.0))
+        }
     }
 
     fun finish(eisSnapshot: String, rendererSnapshot: String): File? {
@@ -293,6 +310,7 @@ internal class VideoFrameDiagnostics(
             appendLine("renderNoFrame=" + renderNoFrame.get())
             appendLine("renderAverageMs=" + String.format(Locale.US, "%.3f", averageRenderMs))
             appendLine("renderMaxMs=" + String.format(Locale.US, "%.3f", maximumRenderMs))
+            appendLine("renderFramesOver33ms=" + slowRenderFrames.get())
             appendLine()
             appendLine("[MEDIACODEC_OUTPUT]")
             appendLine("encodedFrames=" + encoded)
@@ -316,6 +334,11 @@ internal class VideoFrameDiagnostics(
             appendLine("[AUTOMATED_TRIAGE]")
             diagnosis.forEachIndexed { index, item -> appendLine((index + 1).toString() + ". " + item) }
             appendLine()
+            appendLine("[ANOMALY_EVENTS — most recent 100]")
+            synchronized(anomalyEvents) {
+                anomalyEvents.forEach(::appendLine)
+            }
+            appendLine()
             appendLine("Important: timestamp-gap missing-frame values are estimates. They are not exact frame IDs.")
             appendLine("Wall-clock duration includes pauses; use encoded PTS and the stage counters for frame-rate conclusions.")
         }
@@ -331,6 +354,14 @@ internal class VideoFrameDiagnostics(
             PLog.e(TAG, "Could not save EIS+ frame diagnostics report", it)
             PLog.i(TAG, report)
         }.getOrNull()
+    }
+
+    private fun appendAnomaly(message: String) {
+        val elapsedMs = ((SystemClock.elapsedRealtimeNanos() - startedAtNs).coerceAtLeast(0L)) / 1_000_000L
+        synchronized(anomalyEvents) {
+            if (anomalyEvents.size >= 100) anomalyEvents.removeFirst()
+            anomalyEvents.addLast("t+" + elapsedMs + "ms " + message)
+        }
     }
 
     private fun metric(snapshot: String, key: String): Long =
