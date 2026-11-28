@@ -180,7 +180,7 @@ fun CameraPreviewGL(
                     factory = { ctx ->
                         CameraGLSurfaceView(ctx).apply {
                             glSurfaceViewRef = this
-                            onPositionLockSensorCropUpdated = { crop ->
+                            this.onPositionLockSensorCropUpdated = { crop ->
                                 currentOnPositionLockSensorCropUpdated?.invoke(crop)
                             }
                             // 通知 GLSurfaceView 已准备好
