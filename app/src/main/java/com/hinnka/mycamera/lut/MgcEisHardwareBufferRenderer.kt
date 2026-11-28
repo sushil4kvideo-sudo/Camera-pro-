@@ -267,6 +267,7 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
     }
 
     fun resetAfterContextLoss() {
+        releaseAllPendingSourceSampling()
         programId = 0
         positionLocation = -1
         textureCoordinateLocation = -1
