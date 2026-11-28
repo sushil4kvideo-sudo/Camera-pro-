@@ -1,7 +1,9 @@
 package com.hinnka.mycamera.video
 
+import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Size
 import com.hinnka.mycamera.BuildConfig
@@ -44,6 +46,7 @@ internal class VideoFrameDiagnostics(
     private val renderWakeGapEvents = AtomicLong()
     private val renderWakeEstimatedMissing = AtomicLong()
     private val pendingReplacements = AtomicLong()
+    private val pendingQueueDepthMax = AtomicLong()
     private val renderAttempts = AtomicLong()
     private val renderSuccesses = AtomicLong()
     private val renderNoFrame = AtomicLong()
@@ -106,6 +109,10 @@ internal class VideoFrameDiagnostics(
         pendingReplacements.incrementAndGet()
     }
 
+    fun recordPendingQueueDepth(depth: Int) {
+        updateMax(pendingQueueDepthMax, depth.coerceAtLeast(0).toLong())
+    }
+
     fun recordRenderAttempt(success: Boolean, durationNs: Long) {
         renderAttempts.incrementAndGet()
         val safe = durationNs.coerceAtLeast(0L)
@@ -152,6 +159,13 @@ internal class VideoFrameDiagnostics(
         val eisMissingMetadata = metric(eisSnapshot, "missingMetadata")
         val eisMissingImages = metric(eisSnapshot, "resultImageMissing")
         val eisNativeDrops = metric(eisSnapshot, "nativeDropped")
+        val cameraCaptureMissing = metric(eisSnapshot, "captureEstimatedMissing")
+        val imageReaderMissing = metric(eisSnapshot, "imageEstimatedMissing")
+        val nativeAverageMs = metricDouble(eisSnapshot, "nativeProcessAverageMs")
+        val eisImageAverageMs = metricDouble(rendererSnapshot, "eisImageRenderAverageMs")
+        val eisImageMaxMs = metricDouble(rendererSnapshot, "eisImageRenderMaxMs")
+        val eglSwapAverageMs = metricDouble(rendererSnapshot, "eglSwapAverageMs")
+        val eglSwapMaxMs = metricDouble(rendererSnapshot, "eglSwapMaxMs")
         val renderOk = renderSuccesses.get()
         val encoded = encodedFrames.get()
         val diagnosis = mutableListOf<String>()
@@ -161,9 +175,35 @@ internal class VideoFrameDiagnostics(
                 ", missingMetadata=" + eisMissingMetadata + ", resultImageMissing=" + eisMissingImages +
                 ". Inspect look-ahead depth, ImageReader pressure and timestamp matching."
         }
+        if (cameraCaptureMissing > 0L) {
+            diagnosis += "Camera2 CaptureResult SENSOR_TIMESTAMP cadence has about " + cameraCaptureMissing +
+                " missing 30-fps intervals. This points upstream (sensor/HAL cadence, exposure limits or thermal throttling)."
+        }
+        if (imageReaderMissing > cameraCaptureMissing) {
+            diagnosis += "EIS ImageReader timestamps have about " + imageReaderMissing +
+                " missing intervals versus " + cameraCaptureMissing +
+                " in CaptureResult. ImageReader delivery/back-pressure or buffer acquisition is more likely than sensor cadence."
+        }
         if (eisNativeDrops > 0L) {
             diagnosis += "Native EIS reported " + eisNativeDrops +
                 " dropped-pose results. This can be a pose/gyro/metadata coverage issue; inspect feeder lag and pose readiness."
+        }
+        if (nativeAverageMs > budgetMs * 0.5) {
+            diagnosis += "Native EIS processFrame average is " +
+                String.format(Locale.US, "%.2f", nativeAverageMs) +
+                " ms. Native pose computation is consuming a large part of the 30-fps budget."
+        }
+        if (eisImageAverageMs > budgetMs * 0.25 || eisImageMaxMs > budgetMs * 0.75) {
+            diagnosis += "EIS image conversion/render is expensive (avg=" +
+                String.format(Locale.US, "%.2f", eisImageAverageMs) + " ms, max=" +
+                String.format(Locale.US, "%.2f", eisImageMaxMs) +
+                "). Compare HardwareBuffer and YUV fallback counts; fence waits or CPU YUV upload may be bottlenecks."
+        }
+        if (eglSwapAverageMs > budgetMs * 0.25 || eglSwapMaxMs > budgetMs * 0.75) {
+            diagnosis += "EGL encoder-surface swap is taking too long (avg=" +
+                String.format(Locale.US, "%.2f", eglSwapAverageMs) + " ms, max=" +
+                String.format(Locale.US, "%.2f", eglSwapMaxMs) +
+                "). This often indicates MediaCodec input back-pressure / encoder throughput limits."
         }
         if (renderWakeEstimatedMissing.get() > 0L) {
             diagnosis += "Render-loop callback cadence contains about " +
@@ -202,12 +242,28 @@ internal class VideoFrameDiagnostics(
             appendLine("recordingStarted=" + SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date(startedAtMs)))
             appendLine("elapsedWallSeconds=" + String.format(Locale.US, "%.3f", elapsedNs / 1_000_000_000.0))
             appendLine()
+            val memoryInfo = ActivityManager.MemoryInfo()
+            (context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+                ?.getMemoryInfo(memoryInfo)
+            val thermalStatus = runCatching {
+                (context.getSystemService(Context.POWER_SERVICE) as? PowerManager)
+                    ?.currentThermalStatus
+                    ?.toString() ?: "unavailable"
+            }.getOrDefault("unavailable")
+            val runtime = Runtime.getRuntime()
+            val usedHeapBytes = runtime.totalMemory() - runtime.freeMemory()
+
             appendLine("[DEVICE]")
             appendLine("manufacturer=" + Build.MANUFACTURER)
             appendLine("model=" + Build.MODEL)
             appendLine("hardware=" + Build.HARDWARE)
             appendLine("android=" + Build.VERSION.RELEASE + " (SDK " + Build.VERSION.SDK_INT + ")")
             appendLine("app=" + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")")
+            appendLine("systemAvailableMemoryMiB=" + memoryInfo.availMem / (1024L * 1024L))
+            appendLine("systemLowMemory=" + memoryInfo.lowMemory)
+            appendLine("appHeapUsedMiB=" + usedHeapBytes / (1024L * 1024L))
+            appendLine("appHeapMaxMiB=" + runtime.maxMemory() / (1024L * 1024L))
+            appendLine("thermalStatusAtStop=" + thermalStatus)
             appendLine()
             appendLine("[RECORDING]")
             appendLine("requestedSize=" + requestedSize.width + "x" + requestedSize.height)
@@ -231,6 +287,7 @@ internal class VideoFrameDiagnostics(
             appendLine("renderWakeGapEvents=" + renderWakeGapEvents.get())
             appendLine("renderWakeEstimatedMissing=" + renderWakeEstimatedMissing.get())
             appendLine("pendingFrameReplacements=" + pendingReplacements.get())
+            appendLine("pendingQueueDepthMax=" + pendingQueueDepthMax.get())
             appendLine("renderAttempts=" + renderAttempts.get())
             appendLine("renderSuccesses=" + renderOk)
             appendLine("renderNoFrame=" + renderNoFrame.get())
@@ -281,6 +338,12 @@ internal class VideoFrameDiagnostics(
             .firstOrNull { it.startsWith(key + "=") }
             ?.substringAfter("=")
             ?.toLongOrNull() ?: 0L
+
+    private fun metricDouble(snapshot: String, key: String): Double =
+        snapshot.lineSequence()
+            .firstOrNull { it.startsWith(key + "=") }
+            ?.substringAfter("=")
+            ?.toDoubleOrNull() ?: 0.0
 
     private fun averageMs(totalNs: Long, count: Long): Double =
         if (count <= 0L) 0.0 else totalNs.toDouble() / count / 1_000_000.0
