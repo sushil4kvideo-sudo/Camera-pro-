@@ -344,6 +344,8 @@ fun CameraScreen(
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
     val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
+    val cameraMenuBlurRadius by viewModel.cameraMenuBlurRadius.collectAsState()
+    val cameraMenuTransparency by viewModel.cameraMenuTransparency.collectAsState()
     val currentLutId by viewModel.currentLutId.collectAsState()
     val lutSwipeState = rememberLutSwipeState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
@@ -408,6 +410,9 @@ fun CameraScreen(
     var cameraScreenBounds by remember { mutableStateOf<Rect?>(null) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var previewGlBounds by remember { mutableStateOf<Rect?>(null) }
+    var settingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
+    var videoSettingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
+    var videoEditGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var videoEditPillBounds by remember { mutableStateOf<Rect?>(null) }
     var cameraGLSurfaceView by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
     var joystickTopOffPanX by remember { mutableFloatStateOf(topOffZoomPanX) }
@@ -530,13 +535,62 @@ fun CameraScreen(
         }
     }
 
-    // Capture the live camera surface only while a translucent panel is visible.
-    // Every panel samples the same Photon-style backdrop without modifying the viewfinder.
-    val glassPanelVisible = activePanel != ActivePanel.NONE || videoSettingsPanelOpen
-    val panelBackdrop = rememberCameraPanelBackdrop(
-        surfaceView = cameraGLSurfaceView,
-        enabled = state.isPreviewActive && glassPanelVisible,
-    )
+    // Blur the visible menu area in the existing camera GL output. Coordinates from
+    // Compose and the GLSurfaceView share the same root-pixel space.
+    val glassDensity = LocalDensity.current
+    LaunchedEffect(
+        cameraGLSurfaceView,
+        activePanel,
+        state.captureMode,
+        settingsGlassBounds,
+        videoSettingsGlassBounds,
+        videoEditGlassBounds,
+        videoSettingsPanelOpen,
+        previewGlBounds,
+        cameraMenuBlurRadius,
+    ) {
+        val glView = cameraGLSurfaceView ?: return@LaunchedEffect
+        val preview = previewGlBounds
+        val isVideoEditOpen = activePanel == ActivePanel.EDIT && state.captureMode == CaptureMode.VIDEO
+        val panel = when {
+            activePanel == ActivePanel.SETTINGS -> settingsGlassBounds
+            isVideoEditOpen -> videoEditGlassBounds
+            videoSettingsPanelOpen -> videoSettingsGlassBounds
+            else -> null
+        }
+        if ((activePanel != ActivePanel.SETTINGS && !isVideoEditOpen && !videoSettingsPanelOpen) || preview == null || panel == null ||
+            preview.width <= 0f || preview.height <= 0f || cameraMenuBlurRadius <= 0f
+        ) {
+            glView.setQuickMenuGlassEffect(enabled = false)
+            return@LaunchedEffect
+        }
+
+        val left = maxOf(preview.left, panel.left)
+        val top = maxOf(preview.top, panel.top)
+        val right = minOf(preview.right, panel.right)
+        val bottom = minOf(preview.bottom, panel.bottom)
+        if (right <= left || bottom <= top) {
+            glView.setQuickMenuGlassEffect(enabled = false)
+            return@LaunchedEffect
+        }
+
+        val leftPx = (left - preview.left).coerceIn(0f, preview.width)
+        val rightPx = (right - preview.left).coerceIn(0f, preview.width)
+        val bottomPx = (preview.height - (bottom - preview.top)).coerceIn(0f, preview.height)
+        val topPx = (preview.height - (top - preview.top)).coerceIn(0f, preview.height)
+        val blurRadiusPx = (cameraMenuBlurRadius.coerceIn(0f, 50f) * 2.2f).coerceIn(0f, 160f)
+        val cornerRadiusPx = with(glassDensity) { 30.dp.toPx() }
+
+        glView.setQuickMenuGlassEffect(
+            enabled = true,
+            leftPx = leftPx,
+            bottomPx = bottomPx,
+            rightPx = rightPx,
+            topPx = topPx,
+            blurRadiusPx = blurRadiusPx,
+            cornerRadiusPx = cornerRadiusPx,
+        )
+    }
 
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showParameterRuler by remember(state.captureMode, state.useRaw) { mutableStateOf(false) }
@@ -2952,7 +3006,6 @@ fun CameraScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .liquidGlassBackdropSource(panelBackdrop)
                     .prismalGlassLayer(modeSwitcherBackdrop)
                     .paint(backgroundPainter, contentScale = ContentScale.Crop)
                     .navigationBarsPadding(),
@@ -3068,13 +3121,17 @@ fun CameraScreen(
                 onTopOffZoomEnabledChange = viewModel::setTopOffZoomEnabled,
                 onTopOffZoomFactorChange = viewModel::setTopOffZoomFactor,
                 onDismiss = { videoSettingsPanelOpen = false },
-                panelBackdrop = panelBackdrop,
+                glassTransparency = cameraMenuTransparency,
+                glassBlurStrength = cameraMenuBlurRadius,
+                onGlassBoundsChanged = { videoSettingsGlassBounds = it },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
                     // Keep the floating selector below the video top-bar controls.
                     .padding(top = 112.dp)
             )
+        } else {
+            SideEffect { videoSettingsGlassBounds = null }
         }
 
         val panelDismissBounds = if (isXpan) {
@@ -3094,7 +3151,9 @@ fun CameraScreen(
         // TopSheet for settings
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
-            panelBackdrop = panelBackdrop,
+            glassTransparency = cameraMenuTransparency,
+            glassBlurStrength = cameraMenuBlurRadius,
+            onGlassBoundsChanged = { settingsGlassBounds = it },
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
             topSheetAspectRatios = topSheetAspectRatios,
@@ -3416,6 +3475,11 @@ fun CameraScreen(
                 TransformOrigin(0.5f, 0.86f)
             }
         }
+        LaunchedEffect(isVideoEditVisible) {
+            if (!isVideoEditVisible) {
+                videoEditGlassBounds = null
+            }
+        }
         if (isVideoEditVisible) {
             BackHandler {
                 activePanel = ActivePanel.NONE
@@ -3443,8 +3507,7 @@ fun CameraScreen(
             },
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            LiquidGlassSurface(
-                backdrop = panelBackdrop,
+            OppoCameraGlassSurface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(
@@ -3452,8 +3515,9 @@ fun CameraScreen(
                         indication = null,
                         onClick = {},
                     ),
-                cornerRadius = 30.dp,
-                style = CameraPanelGlassStyle,
+                transparency = cameraMenuTransparency,
+                blurStrength = cameraMenuBlurRadius,
+                onBoundsChanged = { videoEditGlassBounds = it },
             ) {
                 Column(
                     modifier = Modifier
@@ -3484,7 +3548,6 @@ fun CameraScreen(
                 showEffects = true,
                 replaceVignetteWithVideoBrightness = state.captureMode == CaptureMode.VIDEO,
                 videoOnly = state.captureMode == CaptureMode.VIDEO,
-                panelBackdrop = panelBackdrop,
                 onDismiss = {
                     // Keep the Video preview override until the separate recipe reaches DataStore.
                     if (state.captureMode != CaptureMode.VIDEO) {
