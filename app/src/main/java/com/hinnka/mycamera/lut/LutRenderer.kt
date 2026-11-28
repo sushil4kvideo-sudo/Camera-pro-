@@ -252,6 +252,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var stabilizationSessionGeneration = 0L
     @Volatile
     private var stabilizationOutputAvailable = false
+    // The liquid-glass backdrop must never sample the raw OES fallback while EIS+ is warming up.
+    @Volatile
+    private var panelBackdropRequiresStabilizedPreview = false
+    @Volatile
+    private var stabilizedPreviewPresentedForPanelBackdrop = false
     private var previewStabilizationUseCase: StabilizationUseCase? = null
     private var previewStabilizationStrength = 0f
     private var previewPositionLockCropZoom = POSITION_LOCK_CROP_ZOOM
@@ -698,6 +703,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         currentCameraTextureMatrix = stMatrix
         currentFrameTimestampNs = 0L
         stabilizationOutputAvailable = false
+        stabilizedPreviewPresentedForPanelBackdrop = false
         lutTextureId = 0
         baselineLutTextureId = 0
         basicToneTextures.reset()
@@ -1478,6 +1484,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (cameraFrameUpdated && !firstFrameRendered) {
             firstFrameRendered = true
             onFirstFrameRendered?.invoke()
+        }
+        // onDrawFrame has now rendered the current texture source. Only after this point may
+        // the glass-panel PixelCopy sample the preview while EIS+ is active.
+        if (delayedStabilizationEnabled &&
+            stabilizationOutputAvailable &&
+            currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
+        ) {
+            stabilizedPreviewPresentedForPanelBackdrop = true
         }
         if (currentFrameTimestampNs > 0L) {
             onPreviewFrameRendered?.invoke(currentFrameTimestampNs)
@@ -2782,10 +2796,22 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         recreatePreviewStabilizationSession()
     }
 
+    /**
+     * True when the displayed SurfaceView is safe to sample for the glass backdrop.
+     * On supported EIS+ cameras this stays false until an EIS+-processed frame has
+     * actually been rendered; normal OES warm-up frames are never used as backdrop input.
+     */
+    fun isPanelBackdropPreviewSourceReady(): Boolean =
+        !panelBackdropRequiresStabilizedPreview || stabilizedPreviewPresentedForPanelBackdrop
+
     private fun recreatePreviewStabilizationSession(resetPresentationTransform: Boolean = true) {
         val sessionGeneration = cameraGeneration
         stabilizationSession?.stop()
         stabilizationOutputAvailable = false
+        stabilizedPreviewPresentedForPanelBackdrop = false
+        panelBackdropRequiresStabilizedPreview =
+            previewStabilizationUseCase != null &&
+                stabilizationCoordinator?.isCurrentCameraSupported == true
         if (resetPresentationTransform) {
             mgcEisPresentationTransform.reset()
         }
