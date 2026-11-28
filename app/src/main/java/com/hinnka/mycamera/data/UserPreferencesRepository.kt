@@ -179,7 +179,6 @@ data class UserPreferences(
     val keepScreenOn: Boolean = false,  // 屏幕常亮
     val cameraMenuTransparency: Float = DEFAULT_CAMERA_MENU_TRANSPARENCY,
     val cameraMenuBlurRadius: Float = DEFAULT_CAMERA_MENU_BLUR_RADIUS,
-    val cameraPerformanceMode: Boolean = false,
     val retainCaptureSettings: Boolean = false,
     val customCaptureSettings: CustomCaptureSettings? = null,
     val windowScreenBrightness: Float? = null,  // Activity 窗口屏幕亮度，null 表示使用系统默认
@@ -452,7 +451,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val WINDOW_SCREEN_BRIGHTNESS = floatPreferencesKey("window_screen_brightness")
         private val CAMERA_MENU_TRANSPARENCY_KEY = floatPreferencesKey("camera_menu_transparency")
         private val CAMERA_MENU_BLUR_RADIUS_KEY = floatPreferencesKey("camera_menu_blur_radius")
-        private val CAMERA_PERFORMANCE_MODE = booleanPreferencesKey("camera_performance_mode")
         private val VOLUME_KEY_ACTION = stringPreferencesKey("volume_key_action")
         private val AUTO_SAVE_AFTER_CAPTURE = booleanPreferencesKey("auto_save_after_capture")
         private val PHOTO_SAVE_PATH = stringPreferencesKey("photo_save_path")
@@ -781,7 +779,6 @@ class UserPreferencesRepository(private val context: Context) {
                 cameraMenuBlurRadius = (
                     preferences[CAMERA_MENU_BLUR_RADIUS_KEY] ?: DEFAULT_CAMERA_MENU_BLUR_RADIUS
                 ).coerceIn(0f, 50f),
-                cameraPerformanceMode = preferences[CAMERA_PERFORMANCE_MODE] ?: false,
                 volumeKeyAction = VolumeKeyAction.valueOf(
                     preferences[VOLUME_KEY_ACTION] ?: VolumeKeyAction.CAPTURE.name
                 ),
@@ -1708,12 +1705,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveCameraMenuBlurRadius(value: Float) {
         context.dataStore.edit { preferences ->
             preferences[CAMERA_MENU_BLUR_RADIUS_KEY] = value.coerceIn(0f, 50f)
-        }
-    }
-
-    suspend fun saveCameraPerformanceMode(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[CAMERA_PERFORMANCE_MODE] = enabled
         }
     }
 

@@ -67,9 +67,8 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
         private const val SMOOTHING_ALPHA = 0.55f
         private const val VISUAL_TRACK_INTERVAL_MS = 42L
         private const val DETECTION_INTERVAL_MS = 320L
-        private const val MANUAL_DETECTION_MATCH_RADIUS = 0.22f
-        private const val MAX_TARGET_CENTER_DISTANCE = 0.22f
-        private const val MAX_REACQUIRE_CENTER_DISTANCE = 0.30f
+        private const val MANUAL_DETECTION_MATCH_RADIUS = 0.24f
+        private const val MAX_TARGET_CENTER_DISTANCE = 0.58f
     }
 
     private val appContext = context.applicationContext
@@ -101,9 +100,6 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
     private var pendingGeneration = 0
     private var lastTimestampMs = 0L
     private var lastBounds: Candidate? = null
-    // Preserve identity and the last known position when appearance tracking temporarily fails.
-    private var lockedLabel: String? = null
-    private var lockAnchor: Candidate? = null
     private var velocityX = 0f
     private var velocityY = 0f
     private var missingFrames = 0
@@ -204,7 +200,8 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
             confidence = 1f,
         )
         synchronized(lock) {
-            val selectedCandidate = Candidate(
+            manualSelectionActive = true
+            lastBounds = Candidate(
                 left = selected.left,
                 top = selected.top,
                 right = selected.right,
@@ -212,10 +209,6 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
                 label = selected.label,
                 confidence = selected.confidence,
             )
-            manualSelectionActive = true
-            lockedLabel = null
-            lastBounds = selectedCandidate
-            lockAnchor = selectedCandidate
             pendingVisualSeed = selected
             velocityX = 0f
             velocityY = 0f
@@ -230,8 +223,6 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
             lastBounds = null
             pendingVisualSeed = null
             manualSelectionActive = false
-            lockedLabel = null
-            lockAnchor = null
             velocityX = 0f
             velocityY = 0f
             missingFrames = 0
@@ -255,10 +246,9 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
                 val tracked = patchTracker.track(bitmap, fallback)
                 if (tracked == null) {
                     lastBounds = null
-                    pendingVisualSeed = null
-                    // Keep lockAnchor/lockedLabel so the detector can reacquire only this target.
+                    manualSelectionActive = false
                 } else {
-                    val trackedCandidate = Candidate(
+                    lastBounds = Candidate(
                         left = tracked.left,
                         top = tracked.top,
                         right = tracked.right,
@@ -266,8 +256,6 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
                         label = tracked.label,
                         confidence = tracked.confidence,
                     )
-                    lastBounds = trackedCandidate
-                    lockAnchor = trackedCandidate
                 }
                 tracked
             }
@@ -401,16 +389,14 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
             val bottom = (box.bottom / inputHeight).coerceIn(0f, 1f)
             if (right - left < 0.015f || bottom - top < 0.015f) return@mapNotNull null
 
-            val detectedLabel = category.categoryName()
-                .takeIf { it.isNotBlank() }
-                ?: category.displayName().orEmpty().takeIf { it.isNotBlank() }
-                ?: "unknown"
             Candidate(
                 left = left,
                 top = top,
                 right = right,
                 bottom = bottom,
-                label = detectedLabel.trim().lowercase(),
+                // Category names are deliberately not part of target identity. The same
+            // physical object must remain tracked even when the detector changes labels.
+            label = "Subject",
                 confidence = confidence.coerceIn(0f, 1f),
             )
         }
@@ -418,30 +404,9 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
 
     private fun selectTargetLocked(candidates: List<Candidate>): Target? {
         val previous = lastBounds
-        val anchor = previous ?: lockAnchor
-        var manualSelectionMatched = false
         val selected = when {
-            manualSelectionActive -> {
-                // A tap anchors the tracker to a small region first. The first detector box
-                // must be close to that tap; unrelated detections are never allowed to steal it.
-                val selectionAnchor = anchor ?: return null
-                val nearest = candidates.minByOrNull { centerDistance(selectionAnchor, it) }
-                val match = nearest?.takeIf {
-                    centerDistance(selectionAnchor, it) <= MANUAL_DETECTION_MATCH_RADIUS
-                }
-                if (match == null) {
-                    missingFrames = 0
-                    lastBounds = selectionAnchor
-                    return selectionAnchor.toTarget()
-                }
-                manualSelectionMatched = true
-                manualSelectionActive = false
-                lockedLabel = match.label
-                match
-            }
-
-            anchor == null -> {
-                // Initial automatic acquisition: prefer a confident, reasonably central object.
+            previous == null -> {
+                // Automatic acquisition still works when the user has not tapped a target.
                 candidates.maxByOrNull { candidate ->
                     val centrePenalty = centerDistanceToViewfinderCentre(candidate)
                     candidate.confidence *
@@ -449,53 +414,51 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
                         (1f - (centrePenalty * 0.30f).coerceIn(0f, 0.30f))
                 }
             }
-
-            else -> {
-                // Once acquired, keep the MediaPipe class fixed and associate only near the
-                // predicted position. The old 0.58-frame gate let unrelated objects take over.
-                val requiredLabel = lockedLabel
-                val sameClassCandidates = if (!requiredLabel.isNullOrBlank()) {
-                    candidates.filter { it.label.equals(requiredLabel, ignoreCase = true) }
-                } else {
-                    candidates
+            manualSelectionActive -> {
+                // A tap locks the visual region first. If the detector sees an object nearby,
+                // use its tighter box; otherwise keep tracking the tapped region without
+                // requiring a category match.
+                val nearest = candidates.minByOrNull { centerDistance(previous, it) }
+                val match = nearest?.takeIf {
+                    centerDistance(previous, it) <= MANUAL_DETECTION_MATCH_RADIUS
                 }
-                val predictionFrames = 1f + missingFrames.coerceAtMost(5) * 0.55f
-                val predicted = anchor.translated(
+                if (match == null) {
+                    missingFrames = 0
+                    return previous.toTarget()
+                }
+                manualSelectionActive = false
+                match
+            }
+            else -> {
+                // The visual tracker updates lastBounds between detector results, so this
+                // association gate stays around the moving object rather than a stale box.
+                val predictionFrames = 1f + missingFrames.coerceAtMost(5) * 0.65f
+                val predicted = previous.translated(
                     velocityX * predictionFrames,
                     velocityY * predictionFrames,
                 )
-                val maxDistance = if (previous == null) {
-                    MAX_REACQUIRE_CENTER_DISTANCE
-                } else {
-                    (MAX_TARGET_CENTER_DISTANCE + missingFrames * 0.012f)
-                        .coerceAtMost(MAX_REACQUIRE_CENTER_DISTANCE)
+                val maxDistance = (MAX_TARGET_CENTER_DISTANCE + missingFrames * 0.025f)
+                    .coerceAtMost(0.82f)
+                candidates.maxByOrNull { candidate ->
+                    val overlap = intersectionOverUnion(predicted, candidate)
+                    val distance = centerDistance(predicted, candidate)
+                    val motionSimilarity = 1f - (distance / maxDistance).coerceIn(0f, 1f)
+                    val sizeSimilarity = minOf(predicted.area, candidate.area) /
+                        maxOf(predicted.area, candidate.area, 1e-4f)
+                    overlap * 2.4f +
+                        motionSimilarity * 2.1f +
+                        sizeSimilarity * 0.35f +
+                        candidate.confidence * 0.15f
+                }?.takeIf { candidate ->
+                    intersectionOverUnion(predicted, candidate) >= 0.001f ||
+                        centerDistance(predicted, candidate) <= maxDistance
                 }
-                sameClassCandidates.asSequence()
-                    .filter { candidate ->
-                        val distance = centerDistance(predicted, candidate)
-                        val overlap = intersectionOverUnion(predicted, candidate)
-                        distance <= maxDistance &&
-                            (overlap >= 0.002f || distance <= maxDistance * 0.72f)
-                    }
-                    .maxByOrNull { candidate ->
-                        val overlap = intersectionOverUnion(predicted, candidate)
-                        val distance = centerDistance(predicted, candidate)
-                        val motionSimilarity = 1f - (distance / maxDistance).coerceIn(0f, 1f)
-                        val sizeSimilarity = minOf(predicted.area, candidate.area) /
-                            maxOf(predicted.area, candidate.area, 1e-4f)
-                        overlap * 3.0f +
-                            motionSimilarity * 2.5f +
-                            sizeSimilarity * 0.60f +
-                            candidate.confidence * 0.12f
-                    }
             }
         }
 
         if (selected == null) {
             missingFrames++
             if (missingFrames >= LOST_FRAMES_BEFORE_RESET) {
-                // Drop the visible box, but keep the semantic/position lock. A different
-                // subject entering the frame must not silently become the new target.
                 lastBounds = null
                 pendingVisualSeed = null
                 velocityX = 0f
@@ -504,46 +467,40 @@ class PreviewSubjectTrackingProcessor(context: Context) : Closeable {
                 return null
             }
 
+            // Brief detector dropouts do not remove the current visual lock.
             velocityX *= 0.82f
             velocityY *= 0.82f
-            if (previous != null) {
-                val predicted = previous.translated(velocityX, velocityY)
-                lastBounds = predicted
-                lockAnchor = predicted
-                return predicted.toTarget()
-            }
-            return null
+            val predicted = previous?.translated(velocityX, velocityY)
+            lastBounds = predicted
+            return predicted?.toTarget()
         }
 
         missingFrames = 0
-        val baseline = if (manualSelectionMatched) selected else anchor
-        if (baseline == null) {
+        if (previous == null) {
             velocityX = 0f
             velocityY = 0f
         } else {
-            val observedX = selected.centerX - baseline.centerX
-            val observedY = selected.centerY - baseline.centerY
+            val observedX = selected.centerX - previous.centerX
+            val observedY = selected.centerY - previous.centerY
             velocityX = (velocityX * 0.35f + observedX * 0.65f).coerceIn(-0.20f, 0.20f)
             velocityY = (velocityY * 0.35f + observedY * 0.65f).coerceIn(-0.20f, 0.20f)
         }
 
-        val movement = baseline?.let { centerDistance(it, selected) } ?: 0f
+        val movement = previous?.let { centerDistance(it, selected) } ?: 0f
         val smoothing = if (movement > 0.075f) 0.68f else SMOOTHING_ALPHA
-        val smoothed = if (baseline == null) {
+        val smoothed = if (previous == null) {
             selected
         } else {
             Candidate(
-                left = lerp(baseline.left, selected.left, smoothing),
-                top = lerp(baseline.top, selected.top, smoothing),
-                right = lerp(baseline.right, selected.right, smoothing),
-                bottom = lerp(baseline.bottom, selected.bottom, smoothing),
+                left = lerp(previous.left, selected.left, smoothing),
+                top = lerp(previous.top, selected.top, smoothing),
+                right = lerp(previous.right, selected.right, smoothing),
+                bottom = lerp(previous.bottom, selected.bottom, smoothing),
                 label = selected.label,
                 confidence = selected.confidence,
             )
         }
         lastBounds = smoothed
-        lockAnchor = smoothed
-        lockedLabel = selected.label.takeIf { it.isNotBlank() }
         pendingVisualSeed = smoothed.toTarget()
         return smoothed.toTarget()
     }

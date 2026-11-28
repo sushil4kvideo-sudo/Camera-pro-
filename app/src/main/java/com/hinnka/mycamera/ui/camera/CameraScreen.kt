@@ -345,7 +345,6 @@ fun CameraScreen(
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
     val cameraMenuBlurRadius by viewModel.cameraMenuBlurRadius.collectAsState()
     val cameraMenuTransparency by viewModel.cameraMenuTransparency.collectAsState()
-    val cameraPerformanceMode by viewModel.cameraPerformanceMode.collectAsState(initial = false)
     val currentLutId by viewModel.currentLutId.collectAsState()
     val lutNameOverlayState = rememberLutNameOverlayState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
@@ -548,7 +547,6 @@ fun CameraScreen(
         videoSettingsPanelOpen,
         previewGlBounds,
         cameraMenuBlurRadius,
-        cameraPerformanceMode,
     ) {
         val glView = cameraGLSurfaceView ?: return@LaunchedEffect
         val preview = previewGlBounds
@@ -559,9 +557,8 @@ fun CameraScreen(
             videoSettingsPanelOpen -> videoSettingsGlassBounds
             else -> null
         }
-        if (cameraPerformanceMode ||
-            (activePanel != ActivePanel.SETTINGS && !isVideoEditOpen && !videoSettingsPanelOpen) ||
-            preview == null || panel == null || preview.width <= 0f || preview.height <= 0f || cameraMenuBlurRadius <= 0f
+        if ((activePanel != ActivePanel.SETTINGS && !isVideoEditOpen && !videoSettingsPanelOpen) || preview == null || panel == null ||
+            preview.width <= 0f || preview.height <= 0f || cameraMenuBlurRadius <= 0f
         ) {
             glView.setQuickMenuGlassEffect(enabled = false)
             return@LaunchedEffect
@@ -2770,7 +2767,6 @@ fun CameraScreen(
             Controls(
                 state = state,
                 uiStyle = uiStyle,
-                performanceMode = cameraPerformanceMode,
                 viewModel = viewModel,
                 galleryViewModel = galleryViewModel,
                 latestPhoto = latestPhoto,
@@ -2940,7 +2936,7 @@ fun CameraScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .then(if (cameraPerformanceMode) Modifier else Modifier.prismalGlassLayer(modeSwitcherBackdrop))
+                    .prismalGlassLayer(modeSwitcherBackdrop)
                     .paint(backgroundPainter, contentScale = ContentScale.Crop)
                     .navigationBarsPadding(),
             ) {
@@ -3058,7 +3054,6 @@ fun CameraScreen(
                 glassTransparency = cameraMenuTransparency,
                 glassBlurStrength = cameraMenuBlurRadius,
                 onGlassBoundsChanged = { videoSettingsGlassBounds = it },
-                performanceMode = cameraPerformanceMode,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
@@ -3089,7 +3084,6 @@ fun CameraScreen(
             glassTransparency = cameraMenuTransparency,
             glassBlurStrength = cameraMenuBlurRadius,
             onGlassBoundsChanged = { settingsGlassBounds = it },
-            performanceMode = cameraPerformanceMode,
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
             topSheetAspectRatios = topSheetAspectRatios,
@@ -3423,7 +3417,7 @@ fun CameraScreen(
         }
         AnimatedVisibility(
             visible = isVideoEditVisible,
-            enter = if (cameraPerformanceMode) EnterTransition.None else if (videoEditOpenedFromModePill) {
+            enter = if (videoEditOpenedFromModePill) {
                 scaleIn(
                     initialScale = 0.16f,
                     transformOrigin = videoEditTransformOrigin,
@@ -3432,7 +3426,7 @@ fun CameraScreen(
             } else {
                 slideInVertically(initialOffsetY = { it }) + fadeIn()
             },
-            exit = if (cameraPerformanceMode) ExitTransition.None else if (videoEditOpenedFromModePill) {
+            exit = if (videoEditOpenedFromModePill) {
                 scaleOut(
                     targetScale = 0.16f,
                     transformOrigin = videoEditTransformOrigin,
@@ -3454,7 +3448,6 @@ fun CameraScreen(
                 transparency = cameraMenuTransparency,
                 blurStrength = cameraMenuBlurRadius,
                 onBoundsChanged = { videoEditGlassBounds = it },
-                performanceMode = cameraPerformanceMode,
             ) {
                 Column(
                     modifier = Modifier
@@ -3471,7 +3464,7 @@ fun CameraScreen(
                         showEffects = true,
                         replaceVignetteWithVideoBrightness = true,
                         videoOnly = true,
-                        transparentGlassSurface = !cameraPerformanceMode,
+                        transparentGlassSurface = true,
                     )
                 }
             }
@@ -3606,7 +3599,6 @@ fun MultipleExposureOverlay(
 private fun Controls(
     state: CameraState,
     uiStyle: String,
-    performanceMode: Boolean,
     viewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
     latestPhoto: com.hinnka.mycamera.gallery.MediaData?,
@@ -4176,7 +4168,7 @@ private fun Controls(
                 }
 
                 CaptureModeSwitcher(
-                    oppoStyle = uiStyle == "OPPO" || performanceMode,
+                    oppoStyle = uiStyle == "OPPO",
                     modeSwitcherBackdrop = modeSwitcherBackdrop,
                     // Pro/RAW remains an internal capture option, not a visible mode.
                     shootingMode = if (state.captureMode == CaptureMode.VIDEO) {

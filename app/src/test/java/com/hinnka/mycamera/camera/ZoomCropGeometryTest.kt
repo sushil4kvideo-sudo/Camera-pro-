@@ -122,48 +122,4 @@ class ZoomCropGeometryTest {
         assertTrue(crop.bottom <= 1f)
         assertEquals(16f / 9f, crop.width * 4000f / (crop.height * 3000f), 0.0001f)
     }
-    @Test
-    fun displayPanIsMappedToTheRotatedSensorTextureAxes() {
-        val portraitClockwise = ZoomCropGeometry.sensorSpacePanFromDisplay(
-            displayPanX = 1f,
-            displayPanY = 0f,
-            sensorOrientationDegrees = 90,
-        )
-        assertEquals(0f, portraitClockwise.x, 0.0001f)
-        assertEquals(-1f, portraitClockwise.y, 0.0001f)
-
-        val portraitCounterClockwise = ZoomCropGeometry.sensorSpacePanFromDisplay(
-            displayPanX = 1f,
-            displayPanY = 0f,
-            sensorOrientationDegrees = 270,
-        )
-        assertEquals(0f, portraitCounterClockwise.x, 0.0001f)
-        assertEquals(1f, portraitCounterClockwise.y, 0.0001f)
-    }
-
-    @Test
-    fun frontFacingDisplayPanIncludesPreviewMirror() {
-        val pan = ZoomCropGeometry.sensorSpacePanFromDisplay(
-            displayPanX = 0f,
-            displayPanY = 1f,
-            sensorOrientationDegrees = 90,
-            isFrontFacing = true,
-        )
-
-        assertEquals(-1f, pan.x, 0.0001f)
-        assertEquals(0f, pan.y, 0.0001f)
-    }
-
-    @Test
-    fun landscapeSensorKeepsDisplayPanAxes() {
-        val pan = ZoomCropGeometry.sensorSpacePanFromDisplay(
-            displayPanX = 0.4f,
-            displayPanY = -0.6f,
-            sensorOrientationDegrees = 0,
-        )
-
-        assertEquals(0.4f, pan.x, 0.0001f)
-        assertEquals(-0.6f, pan.y, 0.0001f)
-    }
-
 }

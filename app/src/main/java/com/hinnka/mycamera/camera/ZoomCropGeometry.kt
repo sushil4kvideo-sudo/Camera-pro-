@@ -24,12 +24,6 @@ data class NormalizedZoomPanTranslation(
     val yFraction: Float,
 )
 
-/** Pan converted from viewfinder display axes into the unrotated camera-texture axes. */
-data class SensorCoordinateZoomPan(
-    val x: Float,
-    val y: Float,
-)
-
 /**
  * Shared geometry for the movable crop editor and Camera2 SCALER_CROP_REGION.
  *
@@ -38,34 +32,6 @@ data class SensorCoordinateZoomPan(
  * the equivalent ratio after accounting for SENSOR_ORIENTATION.
  */
 object ZoomCropGeometry {
-
-    /**
-     * Convert a pan measured in the rotated viewfinder into the source-texture axes.
-     *
-     * Preview crop rectangles are applied before the SurfaceTexture presentation matrix,
-     * so a portrait sensor swaps the two axes and changes one direction. Keep this mapping
-     * shared with Camera2's freeform crop path and account for the front-preview mirror.
-     */
-    fun sensorSpacePanFromDisplay(
-        displayPanX: Float,
-        displayPanY: Float,
-        sensorOrientationDegrees: Int,
-        isFrontFacing: Boolean = false,
-    ): SensorCoordinateZoomPan {
-        val safeX = displayPanX.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        val safeY = displayPanY.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
-        val rotated = when (Math.floorMod(sensorOrientationDegrees, 360)) {
-            90 -> safeY to -safeX
-            180 -> -safeX to -safeY
-            270 -> -safeY to safeX
-            else -> safeX to safeY
-        }
-        val sensorX = if (isFrontFacing) -rotated.first else rotated.first
-        return SensorCoordinateZoomPan(
-            x = sensorX.coerceIn(-1f, 1f),
-            y = rotated.second.coerceIn(-1f, 1f),
-        )
-    }
 
     /**
      * Converts the selected sensor crop offset into a display-space translation.

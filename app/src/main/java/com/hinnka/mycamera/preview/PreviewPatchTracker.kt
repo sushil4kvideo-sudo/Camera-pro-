@@ -24,11 +24,11 @@ internal class PreviewPatchTracker {
 
     companion object {
         private const val MAX_FRAME_EDGE = 192
-        private const val GRID = 10
+        private const val GRID = 8
         private const val SAMPLE_COUNT = GRID * GRID
-        private const val MIN_MATCH_SCORE = 0.44f
-        private const val MAX_LOST_FRAMES = 10
-        private val SCALES = floatArrayOf(0.95f, 1.0f, 1.05f)
+        private const val MIN_MATCH_SCORE = 0.34f
+        private const val MAX_LOST_FRAMES = 12
+        private val SCALES = floatArrayOf(0.90f, 1.0f, 1.10f)
     }
 
     private val offsetX = FloatArray(SAMPLE_COUNT)
@@ -95,12 +95,10 @@ internal class PreviewPatchTracker {
 
         val predictedX = (centerX + velocityX).coerceIn(1f, frame.width - 2f)
         val predictedY = (centerY + velocityY).coerceIn(1f, frame.height - 2f)
-        // Search close to the motion prediction. A broad 17%-of-frame search lets a
-        // similar-looking neighbour win and makes the overlay jump between subjects.
-        val radiusX = max(boxWidth * 0.32f, frame.width * 0.025f)
-            .coerceAtMost(frame.width * 0.10f).roundToInt().coerceAtLeast(4)
-        val radiusY = max(boxHeight * 0.32f, frame.height * 0.025f)
-            .coerceAtMost(frame.height * 0.10f).roundToInt().coerceAtLeast(4)
+        val radiusX = max(boxWidth * 0.55f, frame.width * 0.045f)
+            .coerceAtMost(frame.width * 0.17f).roundToInt().coerceAtLeast(4)
+        val radiusY = max(boxHeight * 0.55f, frame.height * 0.045f)
+            .coerceAtMost(frame.height * 0.17f).roundToInt().coerceAtLeast(4)
 
         var bestScore = Float.NEGATIVE_INFINITY
         var bestX = predictedX.roundToInt()
