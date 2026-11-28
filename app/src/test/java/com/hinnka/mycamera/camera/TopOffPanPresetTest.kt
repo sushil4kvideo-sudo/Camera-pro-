@@ -19,7 +19,6 @@ class TopOffPanPresetTest {
         assertTrue(preset?.aiSubjectTracking == true)
         assertEquals(2, preset?.points?.size)
     }
-}
 
     @Test
     fun antiShakeIsRemovedFromBuiltInPresets() {
@@ -40,3 +39,4 @@ class TopOffPanPresetTest {
 
         assertEquals(listOf("custom-pan"), restored.map { it.id })
     }
+}

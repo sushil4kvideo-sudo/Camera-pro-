@@ -128,10 +128,7 @@ internal fun TopOffPanPresetSettings(
         listOf(GyroPanMode.POSITION_LOCK).forEach { mode ->
             Column(modifier = Modifier.padding(top = 7.dp)) {
                 Text(
-                    text = when (mode) {
-                        GyroPanMode.POSITION_LOCK -> "Gyro Position Lock"
-                        GyroPanMode.ANTI_SHAKE -> "Gyro Anti-Shake"
-                    },
+                    text = "Gyro Position Lock",
                     color = Color.White,
                     fontWeight = FontWeight.Medium,
                     fontSize = 13.sp,
