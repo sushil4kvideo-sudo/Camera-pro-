@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -46,9 +47,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.camera.TopOffPanPreset
-import com.hinnka.mycamera.ui.components.CameraPanelGlassStyle
-import com.hinnka.mycamera.ui.components.LiquidGlassBackdrop
-import com.hinnka.mycamera.ui.components.LiquidGlassSurface
+import com.hinnka.mycamera.ui.components.OppoCameraGlassSurface
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoCapabilities
 import com.hinnka.mycamera.video.VideoConfig
@@ -80,7 +79,9 @@ fun FloatingVideoSettingsPanel(
     onTopOffZoomEnabledChange: (Boolean) -> Unit,
     onTopOffZoomFactorChange: (Float) -> Unit,
     onDismiss: () -> Unit,
-    panelBackdrop: LiquidGlassBackdrop,
+    glassTransparency: Float,
+    glassBlurStrength: Float,
+    onGlassBoundsChanged: (Rect?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (!isOpen) return
@@ -138,14 +139,14 @@ fun FloatingVideoSettingsPanel(
                         animationSpec = tween(130),
                     ),
             ) {
-                LiquidGlassSurface(
-                    backdrop = panelBackdrop,
+                OppoCameraGlassSurface(
                     modifier = Modifier
                         .widthIn(min = 300.dp, max = 340.dp)
                         .padding(horizontal = 12.dp)
                         .testTag("floating_video_settings_panel"),
-                    cornerRadius = 30.dp,
-                    style = CameraPanelGlassStyle,
+                    transparency = glassTransparency,
+                    blurStrength = glassBlurStrength,
+                    onBoundsChanged = onGlassBoundsChanged,
                 ) {
                     Column(
                         modifier = Modifier
