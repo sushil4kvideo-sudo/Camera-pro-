@@ -278,6 +278,9 @@ class RealtimeStabilizationCoordinator(context: Context) {
     private var captureResultCount = 0L
     // Cumulative EIS+ feeder diagnostics, reset with the camera timestamp timeline.
     private var diagnosticImageFrames = 0L
+    private var diagnosticCaptureResultFrames = 0L
+    private var diagnosticBoundaryFrames = 0L
+    private var diagnosticNativeProcessCount = 0L
     private var diagnosticImageTimestampGapEvents = 0L
     private var diagnosticImageEstimatedMissing = 0L
     private var diagnosticLastImageTimestampNs = 0L
@@ -527,6 +530,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         }
         synchronized(lock) {
             captureResultCount += 1L
+            diagnosticCaptureResultFrames += 1L
             val requestedVideoStabilization = request?.get(
                 CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
             )
@@ -1005,6 +1009,9 @@ class RealtimeStabilizationCoordinator(context: Context) {
 
     private fun resetVideoDiagnosticsLocked() {
         diagnosticImageFrames = 0L
+        diagnosticCaptureResultFrames = 0L
+        diagnosticBoundaryFrames = 0L
+        diagnosticNativeProcessCount = 0L
         diagnosticImageTimestampGapEvents = 0L
         diagnosticImageEstimatedMissing = 0L
         diagnosticLastImageTimestampNs = 0L
@@ -1104,6 +1111,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         }
         lastFrameBoundaryNs = timestampNs
         boundaryCount += 1L
+        diagnosticBoundaryFrames += 1L
         gyroFeedBoundaryNs = timestampNs
         val initialSourceTimestampNs = timestampNs - 1L
         if (lastProcessedGyroTimestampNs == 0L) {
@@ -1186,6 +1194,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
             }
             val frameCalibration = currentCalibration ?: continue
             nativeFrameAttemptCount += 1L
+            diagnosticNativeProcessCount += 1L
             if (nativeFrameAttemptCount <= 3L || nativeFrameAttemptCount % 30L == 0L) {
                 PLog.i(
                     TAG,
@@ -1493,8 +1502,8 @@ class RealtimeStabilizationCoordinator(context: Context) {
     }
 
     fun videoDiagnosticsSnapshot(): String = synchronized(lock) {
-        val nativeAverageMs = if (nativeFrameAttemptCount <= 0L) 0.0 else
-            diagnosticNativeProcessTotalNs.toDouble() / nativeFrameAttemptCount / 1_000_000.0
+        val nativeAverageMs = if (diagnosticNativeProcessCount <= 0L) 0.0 else
+            diagnosticNativeProcessTotalNs.toDouble() / diagnosticNativeProcessCount / 1_000_000.0
         listOf(
             "cameraSupported=" + isCurrentCameraSupported,
             "gyroReady=" + gyroSourceReady,
@@ -1502,10 +1511,10 @@ class RealtimeStabilizationCoordinator(context: Context) {
             "activeSessions=" + activeSessionCount,
             "inputSize=" + nativeFrameWidth + "x" + nativeFrameHeight,
             "lookaheadFrames=" + nativeLookaheadFrames,
-            "captureResults=" + captureResultCount,
+            "captureResults=" + diagnosticCaptureResultFrames,
             "imageFrames=" + diagnosticImageFrames,
-            "boundaries=" + boundaryCount,
-            "nativeFrameAttempts=" + nativeFrameAttemptCount,
+            "boundaries=" + diagnosticBoundaryFrames,
+            "nativeFrameAttempts=" + diagnosticNativeProcessCount,
             "nativePending=" + diagnosticNativePending,
             "nativeStabilized=" + diagnosticNativeStabilized,
             "nativeDropped=" + diagnosticNativeDropped,
