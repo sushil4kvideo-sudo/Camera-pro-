@@ -45,7 +45,7 @@ internal class VideoFrameDiagnostics(
     private val renderWakeCallbacks = AtomicLong()
     private val renderWakeGapEvents = AtomicLong()
     private val renderWakeEstimatedMissing = AtomicLong()
-    private val pendingReplacements = AtomicLong()
+    private val callbacksWhilePending = AtomicLong()
     private val pendingQueueDepthMax = AtomicLong()
     private val renderAttempts = AtomicLong()
     private val renderSuccesses = AtomicLong()
@@ -105,8 +105,8 @@ internal class VideoFrameDiagnostics(
         }
     }
 
-    fun recordPendingReplacement() {
-        pendingReplacements.incrementAndGet()
+    fun recordCallbackWhilePending() {
+        callbacksWhilePending.incrementAndGet()
     }
 
     fun recordPendingQueueDepth(depth: Int) {
@@ -286,7 +286,7 @@ internal class VideoFrameDiagnostics(
             appendLine("renderWakeCallbacks=" + renderWakeCallbacks.get())
             appendLine("renderWakeGapEvents=" + renderWakeGapEvents.get())
             appendLine("renderWakeEstimatedMissing=" + renderWakeEstimatedMissing.get())
-            appendLine("pendingFrameReplacements=" + pendingReplacements.get())
+            appendLine("callbacksArrivingWithPendingWork=" + callbacksWhilePending.get())
             appendLine("pendingQueueDepthMax=" + pendingQueueDepthMax.get())
             appendLine("renderAttempts=" + renderAttempts.get())
             appendLine("renderSuccesses=" + renderOk)
