@@ -1517,7 +1517,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
             "nativeFrameAttempts=" + diagnosticNativeProcessCount,
             "nativePending=" + diagnosticNativePending,
             "nativeStabilized=" + diagnosticNativeStabilized,
-            "nativeDropped=" + diagnosticNativeDropped,
+            "eisDroppedResults=" + diagnosticNativeDropped,
             "missingMetadata=" + diagnosticMissingMetadata,
             "imageQueueOverflow=" + diagnosticImageQueueOverflow,
             "resultImageMissing=" + diagnosticResultImageMissing,
