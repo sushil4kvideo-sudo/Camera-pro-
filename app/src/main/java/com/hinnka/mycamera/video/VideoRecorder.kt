@@ -641,6 +641,8 @@ class VideoRecorder(
                 acceptStopDrainFrames = false
                 withContext(renderDispatcher) {
                     drainRealtimeFrames(allowWhenStopping = true)
+                    // Snapshot EIS queue state before pausing the last session resets its counters.
+                    finishVideoDiagnostics()
                     renderer?.pauseStabilization()
                     signalVideoEndOfInputStream()
                 }
@@ -679,7 +681,6 @@ class VideoRecorder(
                     }
                 }
 
-                finishVideoDiagnostics()
                 releaseCaptureResources()
                 isRecording = false
                 publishedUri = finalizeOutput()
