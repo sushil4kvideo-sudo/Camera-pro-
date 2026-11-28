@@ -175,7 +175,12 @@ internal class VideoFrameDiagnostics(
         val eisOverflow = metric(eisSnapshot, "imageQueueOverflow")
         val eisMissingMetadata = metric(eisSnapshot, "missingMetadata")
         val eisMissingImages = metric(eisSnapshot, "resultImageMissing")
-        val eisNativeDrops = metric(eisSnapshot, "nativeDropped")
+        val eisDroppedResults = metric(eisSnapshot, "eisDroppedResults")
+        val cameraSupported = metricBoolean(eisSnapshot, "cameraSupported")
+        val halStabilizationConflict = metricBoolean(eisSnapshot, "halStabilizationConflict")
+        val gyroReady = metricBoolean(eisSnapshot, "gyroReady")
+        val eisRenderFailures = metric(rendererSnapshot, "eisRenderFailures")
+        val yuvFallbackFrames = metric(rendererSnapshot, "eisYuvFallbackFrames")
         val cameraCaptureMissing = metric(eisSnapshot, "captureEstimatedMissing")
         val imageReaderMissing = metric(eisSnapshot, "imageEstimatedMissing")
         val nativeAverageMs = metricDouble(eisSnapshot, "nativeProcessAverageMs")
@@ -201,9 +206,26 @@ internal class VideoFrameDiagnostics(
                 " missing intervals versus " + cameraCaptureMissing +
                 " in CaptureResult. ImageReader delivery/back-pressure or buffer acquisition is more likely than sensor cadence."
         }
-        if (eisNativeDrops > 0L) {
-            diagnosis += "Native EIS reported " + eisNativeDrops +
-                " dropped-pose results. This can be a pose/gyro/metadata coverage issue; inspect feeder lag and pose readiness."
+        if (cameraSupported == false) {
+            diagnosis += "This camera/lens is not reported as EIS+ supported. Video may be running through the regular OES fallback instead of the native EIS path."
+        }
+        if (halStabilizationConflict) {
+            diagnosis += "Camera HAL video/OIS stabilization conflict was detected. The HAL may be overriding or conflicting with the EIS+ request."
+        }
+        if (gyroReady == false) {
+            diagnosis += "EIS gyro source was not ready at snapshot time. Check sensor availability, event delivery and timestamp alignment."
+        }
+        if (eisDroppedResults > 0L) {
+            diagnosis += "The EIS pipeline marked " + eisDroppedResults +
+                " results as dropped (including metadata-unmatched results). Inspect missingMetadata, gyro/metadata lag and native pose readiness."
+        }
+        if (eisRenderFailures > 0L) {
+            diagnosis += "EIS image rendering failed " + eisRenderFailures +
+                " times after the HardwareBuffer and YUV paths were attempted. Check renderer errors and image-buffer validity."
+        }
+        if (yuvFallbackFrames > 0L) {
+            diagnosis += "EIS used the YUV fallback for " + yuvFallbackFrames +
+                " frames. This can add CPU upload/conversion cost compared with the HardwareBuffer path."
         }
         if (nativeAverageMs > budgetMs * 0.5) {
             diagnosis += "Native EIS processFrame average is " +
@@ -363,6 +385,12 @@ internal class VideoFrameDiagnostics(
             anomalyEvents.addLast("t+" + elapsedMs + "ms " + message)
         }
     }
+
+    private fun metricBoolean(snapshot: String, key: String): Boolean? =
+        snapshot.lineSequence()
+            .firstOrNull { it.startsWith(key + "=") }
+            ?.substringAfter("=")
+            ?.toBooleanStrictOrNull()
 
     private fun metric(snapshot: String, key: String): Long =
         snapshot.lineSequence()
