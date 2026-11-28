@@ -28,12 +28,28 @@ object PositionLockSensorCropMapper {
         scalerCropRegion: Rect?,
         fallbackZoom: Float = POSITION_LOCK_CROP_ZOOM,
     ): PositionLockSensorCropBounds? {
-        if (activeArray == null || activeArray.width() <= 0 || activeArray.height() <= 0) {
-            return null
-        }
+        if (activeArray == null) return null
 
-        val sensorCrop = Rect(scalerCropRegion ?: activeArray)
-        if (!sensorCrop.intersect(activeArray)) sensorCrop.set(activeArray)
+        // Use Rect's public coordinates directly so this mapper works in local JVM tests.
+        val activeLeft = activeArray.left
+        val activeTop = activeArray.top
+        val activeRight = activeArray.right
+        val activeBottom = activeArray.bottom
+        if (activeRight <= activeLeft || activeBottom <= activeTop) return null
+
+        val requestedCrop = scalerCropRegion ?: activeArray
+        var cropLeft = max(requestedCrop.left, activeLeft)
+        var cropTop = max(requestedCrop.top, activeTop)
+        var cropRight = min(requestedCrop.right, activeRight)
+        var cropBottom = min(requestedCrop.bottom, activeBottom)
+        if (cropRight <= cropLeft || cropBottom <= cropTop) {
+            cropLeft = activeLeft
+            cropTop = activeTop
+            cropRight = activeRight
+            cropBottom = activeBottom
+        }
+        val cropWidth = (cropRight - cropLeft).toFloat()
+        val cropHeight = (cropBottom - cropTop).toFloat()
         val safeZoom = fallbackZoom.takeIf { it.isFinite() }?.coerceIn(1f, 10f)
             ?: POSITION_LOCK_CROP_ZOOM
 
@@ -43,10 +59,10 @@ object PositionLockSensorCropMapper {
             val cropLeft = (1f - widthFraction) * 0.5f
             val cropTop = (1f - heightFraction) * 0.5f
             return normalizeSensorBounds(
-                sensorCrop.left + cropLeft * sensorCrop.width(),
-                sensorCrop.top + cropTop * sensorCrop.height(),
-                sensorCrop.left + (cropLeft + widthFraction) * sensorCrop.width(),
-                sensorCrop.top + (cropTop + heightFraction) * sensorCrop.height(),
+                cropLeft + cropLeft * cropWidth,
+                cropTop + cropTop * cropHeight,
+                cropLeft + (cropLeft + widthFraction) * cropWidth,
+                cropTop + (cropTop + heightFraction) * cropHeight,
                 activeArray,
             )
         }
@@ -71,8 +87,8 @@ object PositionLockSensorCropMapper {
                     val sourceY = (1f - source.second) * 0.5f
                     if (!sourceX.isFinite() || !sourceY.isFinite()) continue
 
-                    val sensorX = sensorCrop.left + sourceX * sensorCrop.width()
-                    val sensorY = sensorCrop.top + sourceY * sensorCrop.height()
+                    val sensorX = cropLeft + sourceX * cropWidth
+                    val sensorY = cropTop + sourceY * cropHeight
                     minSensorX = min(minSensorX, sensorX)
                     minSensorY = min(minSensorY, sensorY)
                     maxSensorX = max(maxSensorX, sensorX)
@@ -123,8 +139,8 @@ object PositionLockSensorCropMapper {
         bottom: Float,
         activeArray: Rect,
     ): PositionLockSensorCropBounds? {
-        val width = activeArray.width().toFloat()
-        val height = activeArray.height().toFloat()
+        val width = (activeArray.right - activeArray.left).toFloat()
+        val height = (activeArray.bottom - activeArray.top).toFloat()
         if (width <= 0f || height <= 0f) return null
         // Keep overflow visible in the UI, but reject pathological matrices.
         val normalized = PositionLockSensorCropBounds(
