@@ -8,12 +8,14 @@ import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.os.Build
 import androidx.annotation.RequiresApi
-import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,6 +30,8 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.PaintingStyle
@@ -42,7 +46,6 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -60,7 +63,7 @@ import kotlin.math.floor
  * glass node is only re-rendered when its backdrop or geometry changes, not when panel content does.
  *
  * Capability tiers: API 33+ full lens + highlight; API 31-32 vibrancy with a flat rim;
- * API 30 an opaque fallback color without backdrop capture.
+ * API 30 a fallback tint without backdrop capture.
  */
 @Immutable
 data class LiquidGlassStyle(
@@ -78,17 +81,43 @@ data class LiquidGlassStyle(
     val fallbackColor: Color = Color(0xF0141414),
 )
 
+internal val CameraPanelGlassStyle = LiquidGlassStyle(
+    blurRadius = 40.dp,
+    refractionAmount = 0.dp,
+    saturation = 1f,
+    tint = AppPanelMaterial.Tint.copy(alpha = 0.55f),
+    highlightAlpha = 0f,
+    fallbackColor = AppPanelMaterial.Tint.copy(alpha = 0.70f),
+)
+
 /** Backdrop captured by [liquidGlassBackdropSource] and sampled by [LiquidGlassSurface]. */
 @Stable
-class LiquidGlassBackdrop internal constructor(internal val layer: GraphicsLayer) {
+class LiquidGlassBackdrop internal constructor(
+    internal val layer: GraphicsLayer,
+    internal val usesImageFrames: Boolean = false,
+) {
     internal var positionInRoot by mutableStateOf(Offset.Unspecified)
     internal var size by mutableStateOf(IntSize.Zero)
+    internal var imageFrame by mutableStateOf<LiquidGlassImageFrame?>(null)
 }
+
+/** Frame from an external surface, positioned over the recorded Compose background. */
+internal data class LiquidGlassImageFrame(
+    val image: ImageBitmap,
+    val positionInRoot: Offset,
+    val size: IntSize,
+)
 
 @Composable
 fun rememberLiquidGlassBackdrop(): LiquidGlassBackdrop {
     val layer = rememberGraphicsLayer()
     return remember(layer) { LiquidGlassBackdrop(layer) }
+}
+
+@Composable
+internal fun rememberLiquidGlassImageBackdrop(): LiquidGlassBackdrop {
+    val layer = rememberGraphicsLayer()
+    return remember(layer) { LiquidGlassBackdrop(layer, usesImageFrames = true) }
 }
 
 /** Records this node's content into [backdrop] while drawing it unchanged. */
@@ -116,123 +145,179 @@ fun LiquidGlassSurface(
     cornerRadius: Dp = 24.dp,
     openBottomEdge: Boolean = false,
     style: LiquidGlassStyle = LiquidGlassStyle(),
-    enabled: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    if (!enabled) {
-        Box(
-            modifier = modifier.background(Color(0xB31A1A1A), RoundedCornerShape(cornerRadius)),
-            content = content,
-        )
-        return
-    }
-    val glassStyle = style
-    var positionInRoot by remember { mutableStateOf(Offset.Unspecified) }
-    val shaders = remember { if (LENS_SUPPORTED) GlassShaders() else null }
     Box(
-        modifier = modifier
-            .onGloballyPositioned { positionInRoot = it.positionInRoot() }
-            // Like Surface: the panel never lets touches fall through to the content underneath.
-            .pointerInput(Unit) {}
-            .drawWithCache {
-                val width = size.width
-                val height = size.height
-                val radius = cornerRadius.toPx().coerceAtMost(minOf(width, height) / 2f)
-                // Same rounding as FrameLiquidGlass: whole-pixel half width, doubled for the clipped inner stroke.
-                val highlightStroke = ceil(minOf(style.highlightWidth.toPx(), minOf(width, height) / 2f)) * 2f
-                val refractionHeight = style.refractionHeight.toPx()
-                // Extend the geometry below the bounds so its bottom edge stays out of view.
-                val geometryHeight = if (openBottomEdge) height + refractionHeight + highlightStroke else height
-                val bottomRadius = if (openBottomEdge) 0f else radius
-                val outline = Path().apply {
-                    addRoundRect(
-                        RoundRect(
-                            rect = Rect(0f, 0f, width, geometryHeight),
-                            topLeft = CornerRadius(radius),
-                            topRight = CornerRadius(radius),
-                            bottomRight = CornerRadius(bottomRadius),
-                            bottomLeft = CornerRadius(bottomRadius),
-                        )
-                    )
-                }
-
-                val backdropPosition = backdrop.positionInRoot
-                val backdropSize = backdrop.size
-                if (!BACKDROP_SUPPORTED) {
-                    return@drawWithCache onDrawBehind {
-                        clipRect { drawPath(outline, style.fallbackColor) }
-                    }
-                }
-                if (!positionInRoot.isSpecified || !backdropPosition.isSpecified ||
-                    backdropSize == IntSize.Zero || width <= 0f || height <= 0f
-                ) {
-                    return@drawWithCache onDrawBehind {}
-                }
-
-                // Glass layer covers the surface plus blur padding (the lens only samples inward), limited to the backdrop bounds so
-                // clamped blur edges come from real content instead of transparent pixels.
-                val blurRadius = style.blurRadius.toPx()
-                val padding = blurRadius * 2f
-                val backdropOrigin = backdropPosition - positionInRoot
-                val captureRect = Rect(-padding, -padding, width + padding, height + padding)
-                    .intersect(Rect(backdropOrigin, backdropSize.toSize()))
-                val layerOffset = IntOffset(floor(captureRect.left).toInt(), floor(captureRect.top).toInt())
-                val layerSize = IntSize(
-                    ceil(captureRect.right).toInt() - layerOffset.x,
-                    ceil(captureRect.bottom).toInt() - layerOffset.y,
-                )
-                if (layerSize.width <= 0 || layerSize.height <= 0) {
-                    return@drawWithCache onDrawBehind {}
-                }
-
-                val glassLayer = obtainGraphicsLayer().apply {
-                    topLeft = layerOffset
-                    renderEffect = glassEffect(
-                        style = style,
-                        blurRadius = blurRadius,
-                        refractionHeight = refractionHeight,
-                        refractionAmount = style.refractionAmount.toPx(),
-                        shapeOffset = Offset(-layerOffset.x.toFloat(), -layerOffset.y.toFloat()),
-                        shapeWidth = width,
-                        shapeHeight = geometryHeight,
-                        radius = radius,
-                        bottomRadius = bottomRadius,
-                        shaders = shaders,
-                    ).asComposeRenderEffect()
-                    record(size = layerSize) {
-                        translate(backdropOrigin.x - layerOffset.x, backdropOrigin.y - layerOffset.y) {
-                            drawLayer(backdrop.layer)
-                        }
-                    }
-                }
-                val highlightPaint = Paint().apply {
-                    this.style = PaintingStyle.Stroke
-                    strokeWidth = highlightStroke
-                    blendMode = BlendMode.Plus
-                    if (shaders != null) {
-                        shaders.setHighlightUniforms(width, geometryHeight, radius, bottomRadius, glassStyle.highlightAlpha)
-                        shader = shaders.highlight
-                    } else {
-                        color = Color.White.copy(alpha = glassStyle.highlightAlpha * 0.3f)
-                    }
-                    val highlightBlur = glassStyle.highlightBlur.toPx()
-                    if (highlightBlur > 0f) {
-                        asFrameworkPaint().maskFilter = BlurMaskFilter(highlightBlur, BlurMaskFilter.Blur.NORMAL)
-                    }
-                }
-
-                onDrawBehind {
-                    clipRect {
-                        clipPath(outline) {
-                            drawLayer(glassLayer)
-                            drawRect(style.tint)
-                            drawIntoCanvas { it.drawPath(outline, highlightPaint) }
-                        }
-                    }
-                }
-            },
+        modifier = modifier.liquidGlassBackground(
+            backdrop = backdrop,
+            cornerRadius = cornerRadius,
+            openBottomEdge = openBottomEdge,
+            style = style,
+        ),
         content = content,
     )
+}
+
+/** Draws glass within the existing layout bounds. [sampleBottomLeftInRoot] anchors backdrop sampling independently of placement. */
+@Composable
+internal fun Modifier.liquidGlassBackground(
+    backdrop: LiquidGlassBackdrop,
+    cornerRadius: Dp = 24.dp,
+    openBottomEdge: Boolean = false,
+    openTopEdge: Boolean = false,
+    style: LiquidGlassStyle = LiquidGlassStyle(),
+    sampleBottomLeftInRoot: Offset? = null,
+): Modifier {
+    var positionInRoot by remember { mutableStateOf(Offset.Unspecified) }
+    val shaders = remember { if (LENS_SUPPORTED) GlassShaders() else null }
+    val imageAlpha = if (backdrop.usesImageFrames && BACKDROP_SUPPORTED) {
+        val hasImage by remember(backdrop) { derivedStateOf { backdrop.imageFrame != null } }
+        animateFloatAsState(
+            targetValue = if (hasImage) 1f else 0f,
+            animationSpec = tween(120),
+            label = "glassPreviewFadeIn",
+        )
+    } else {
+        null
+    }
+    val positioned = if (sampleBottomLeftInRoot == null) {
+        onGloballyPositioned { positionInRoot = it.positionInRoot() }
+    } else this
+    return positioned
+        // Like Surface: the panel never lets touches fall through to the content underneath.
+        .pointerInput(Unit) {}
+        .drawWithCache {
+            val width = size.width
+            val height = size.height
+            val radius = cornerRadius.toPx().coerceAtMost(minOf(width, height) / 2f)
+            // Same rounding as FrameLiquidGlass: whole-pixel half width, doubled for the clipped inner stroke.
+            val highlightStroke = ceil(minOf(style.highlightWidth.toPx(), minOf(width, height) / 2f)) * 2f
+            val refractionHeight = style.refractionHeight.toPx()
+            val edgeExtension = refractionHeight + highlightStroke
+            val geometryTop = if (openTopEdge) -edgeExtension else 0f
+            val geometryBottom = if (openBottomEdge) height + edgeExtension else height
+            val geometryHeight = geometryBottom - geometryTop
+            val topRadius = if (openTopEdge) 0f else radius
+            val bottomRadius = if (openBottomEdge) 0f else radius
+            val outline = Path().apply {
+                addRoundRect(
+                    RoundRect(
+                        rect = Rect(0f, geometryTop, width, geometryBottom),
+                        topLeft = CornerRadius(topRadius),
+                        topRight = CornerRadius(topRadius),
+                        bottomRight = CornerRadius(bottomRadius),
+                        bottomLeft = CornerRadius(bottomRadius),
+                    )
+                )
+            }
+
+            val backdropPosition = backdrop.positionInRoot
+            val backdropSize = backdrop.size
+            val surfacePosition = when {
+                sampleBottomLeftInRoot == null -> positionInRoot
+                sampleBottomLeftInRoot.isSpecified -> sampleBottomLeftInRoot - Offset(0f, height)
+                else -> Offset.Unspecified
+            }
+            if (!BACKDROP_SUPPORTED || !surfacePosition.isSpecified || !backdropPosition.isSpecified ||
+                backdropSize == IntSize.Zero
+            ) {
+                return@drawWithCache onDrawBehind {
+                    clipRect { drawPath(outline, style.fallbackColor) }
+                }
+            }
+            if (width <= 0f || height <= 0f) {
+                return@drawWithCache onDrawBehind {}
+            }
+
+            // Glass layer covers the surface plus blur padding (the lens only samples inward), limited to the backdrop bounds so
+            // clamped blur edges come from real content instead of transparent pixels.
+            val blurRadius = style.blurRadius.toPx()
+            val padding = blurRadius * 2f
+            val backdropOrigin = backdropPosition - surfacePosition
+            val captureRect = Rect(-padding, -padding, width + padding, height + padding)
+                .intersect(Rect(backdropOrigin, backdropSize.toSize()))
+            val layerOffset = IntOffset(floor(captureRect.left).toInt(), floor(captureRect.top).toInt())
+            val layerSize = IntSize(
+                ceil(captureRect.right).toInt() - layerOffset.x,
+                ceil(captureRect.bottom).toInt() - layerOffset.y,
+            )
+            if (layerSize.width <= 0 || layerSize.height <= 0) {
+                return@drawWithCache onDrawBehind {
+                    clipRect { drawPath(outline, style.fallbackColor) }
+                }
+            }
+
+            val glassLayer = obtainGraphicsLayer().apply {
+                topLeft = layerOffset
+                renderEffect = glassEffect(
+                    style = style,
+                    blurRadius = blurRadius,
+                    refractionHeight = refractionHeight,
+                    refractionAmount = style.refractionAmount.toPx(),
+                    shapeOffset = Offset(-layerOffset.x.toFloat(), geometryTop - layerOffset.y),
+                    shapeWidth = width,
+                    shapeHeight = geometryHeight,
+                    topRadius = topRadius,
+                    bottomRadius = bottomRadius,
+                    shaders = shaders,
+                ).asComposeRenderEffect()
+            }
+
+            fun recordBackdrop(frame: LiquidGlassImageFrame?, frameAlpha: Float = 1f) {
+                glassLayer.record(size = layerSize) {
+                    // Use the recorded page background before the first camera frame arrives.
+                    // The panel should never briefly reveal the sharp controls underneath it.
+                    if (backdrop.usesImageFrames) drawRect(Color.Black)
+                    val backgroundOffset = backdropOrigin - Offset(layerOffset.x.toFloat(), layerOffset.y.toFloat())
+                    translate(backgroundOffset.x, backgroundOffset.y) {
+                        drawLayer(backdrop.layer)
+                    }
+                    if (frame != null) {
+                        val frameOffset = frame.positionInRoot - surfacePosition
+                        drawImage(
+                            image = frame.image,
+                            dstOffset = IntOffset(
+                                frameOffset.x.toInt() - layerOffset.x,
+                                frameOffset.y.toInt() - layerOffset.y,
+                            ),
+                            dstSize = frame.size,
+                            alpha = frameAlpha,
+                            filterQuality = FilterQuality.Low,
+                        )
+                    }
+                }
+            }
+            if (!backdrop.usesImageFrames) recordBackdrop(null)
+
+            val highlightPaint = Paint().apply {
+                this.style = PaintingStyle.Stroke
+                strokeWidth = highlightStroke
+                blendMode = BlendMode.Plus
+                if (shaders != null) {
+                    shaders.setHighlightUniforms(width, geometryHeight, geometryTop, topRadius, bottomRadius, style.highlightAlpha)
+                    shader = shaders.highlight
+                } else {
+                    color = Color.White.copy(alpha = style.highlightAlpha * 0.3f)
+                }
+                val highlightBlur = style.highlightBlur.toPx()
+                if (highlightBlur > 0f) {
+                    asFrameworkPaint().maskFilter = BlurMaskFilter(highlightBlur, BlurMaskFilter.Blur.NORMAL)
+                }
+            }
+
+            onDrawBehind {
+                if (backdrop.usesImageFrames) {
+                    recordBackdrop(backdrop.imageFrame, imageAlpha?.value ?: 1f)
+                }
+                clipRect {
+                    clipPath(outline) {
+                        drawLayer(glassLayer)
+                        drawRect(style.tint)
+                        drawIntoCanvas { it.drawPath(outline, highlightPaint) }
+                    }
+                }
+            }
+        }
 }
 
 private fun IntSize.toSize() = androidx.compose.ui.geometry.Size(width.toFloat(), height.toFloat())
@@ -246,7 +331,7 @@ private fun glassEffect(
     shapeOffset: Offset,
     shapeWidth: Float,
     shapeHeight: Float,
-    radius: Float,
+    topRadius: Float,
     bottomRadius: Float,
     shaders: GlassShaders?,
 ): RenderEffect {
@@ -259,8 +344,10 @@ private fun glassEffect(
     } else {
         vibrancy
     }
-    if (shaders == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return blur
-    return shaders.lensEffect(blur, shapeOffset, shapeWidth, shapeHeight, radius, bottomRadius,
+    if (refractionAmount == 0f || refractionHeight == 0f || shaders == null ||
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+    ) return blur
+    return shaders.lensEffect(blur, shapeOffset, shapeWidth, shapeHeight, topRadius, bottomRadius,
         refractionHeight, refractionAmount)
 }
 
@@ -275,14 +362,14 @@ private class GlassShaders {
         shapeOffset: Offset,
         width: Float,
         height: Float,
-        radius: Float,
+        topRadius: Float,
         bottomRadius: Float,
         refractionHeight: Float,
         refractionAmount: Float,
     ): RenderEffect {
         lens.setFloatUniform("shapeOffset", shapeOffset.x, shapeOffset.y)
         lens.setFloatUniform("size", width, height)
-        lens.setFloatUniform("cornerRadii", radius, radius, bottomRadius, bottomRadius)
+        lens.setFloatUniform("cornerRadii", topRadius, topRadius, bottomRadius, bottomRadius)
         lens.setFloatUniform("refractionHeight", refractionHeight)
         // Negative amount samples inward, matching FrameGlassGpu.setUniforms.
         lens.setFloatUniform("refractionAmount", -refractionAmount)
@@ -290,9 +377,12 @@ private class GlassShaders {
         return RenderEffect.createChainEffect(RenderEffect.createRuntimeShaderEffect(lens, "content"), input)
     }
 
-    fun setHighlightUniforms(width: Float, height: Float, radius: Float, bottomRadius: Float, alpha: Float) {
+    fun setHighlightUniforms(
+        width: Float, height: Float, top: Float, topRadius: Float, bottomRadius: Float, alpha: Float
+    ) {
         highlight.setFloatUniform("size", width, height)
-        highlight.setFloatUniform("cornerRadii", radius, radius, bottomRadius, bottomRadius)
+        highlight.setFloatUniform("top", top)
+        highlight.setFloatUniform("cornerRadii", topRadius, topRadius, bottomRadius, bottomRadius)
         highlight.setFloatUniform("angle", HIGHLIGHT_ANGLE)
         highlight.setFloatUniform("falloff", HIGHLIGHT_FALLOFF)
         highlight.setFloatUniform("alpha", alpha)
@@ -367,6 +457,7 @@ half4 main(float2 fragCoord) {
 
 private const val HIGHLIGHT_SHADER = """
 uniform float2 size;
+uniform float top;
 uniform float4 cornerRadii;
 uniform float angle;
 uniform float falloff;
@@ -374,7 +465,7 @@ uniform float alpha;
 $SDF_FUNCTIONS
 half4 main(float2 coord) {
     float2 halfSize = size * 0.5;
-    float2 centered = coord - halfSize;
+    float2 centered = coord - float2(0.0, top) - halfSize;
     float radius = radiusAt(centered, cornerRadii);
     float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));
     float2 grad = gradSdRoundedRect(centered, halfSize, gradRadius);
