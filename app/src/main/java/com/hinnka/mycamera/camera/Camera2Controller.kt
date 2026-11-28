@@ -6800,16 +6800,13 @@ class Camera2Controller(private val context: Context) {
         displayPanY: Float,
         sensorOrientation: Int = cameraInfo?.sensorOrientation ?: 0,
     ): Pair<Float, Float> {
-        val sensorPan = when (Math.floorMod(sensorOrientation, 360)) {
-            90 -> displayPanY to -displayPanX
-            180 -> -displayPanX to -displayPanY
-            270 -> -displayPanY to displayPanX
-            else -> displayPanX to displayPanY
-        }
-        val sensorX = if (
-            cameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
-        ) -sensorPan.first else sensorPan.first
-        return sensorX.coerceIn(-1f, 1f) to sensorPan.second.coerceIn(-1f, 1f)
+        val sensorPan = ZoomCropGeometry.sensorSpacePanFromDisplay(
+            displayPanX = displayPanX,
+            displayPanY = displayPanY,
+            sensorOrientationDegrees = sensorOrientation,
+            isFrontFacing = cameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT,
+        )
+        return sensorPan.x to sensorPan.y
     }
 
     /**

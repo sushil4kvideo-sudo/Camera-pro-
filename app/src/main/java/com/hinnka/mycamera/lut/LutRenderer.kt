@@ -14,6 +14,7 @@ import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.ZoomCropGeometry
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.POSITION_LOCK_CROP_ZOOM
 import com.hinnka.mycamera.stabilization.PositionLockSensorCropBounds
@@ -2088,11 +2089,20 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             sourceTextureId = currentCameraTextureId,
             sourceStMatrix = currentCameraTextureMatrix,
             sourceCropRect = if (topOffZoomCropEnabled) {
+                // The preview crop is applied to source UVs before SurfaceTexture rotates
+                // them. Convert AI/joystick pan from display axes to those source axes;
+                // otherwise a 90° sensor makes horizontal tracking move vertically.
+                val texturePan = ZoomCropGeometry.sensorSpacePanFromDisplay(
+                    displayPanX = topOffZoomCropPanX,
+                    displayPanY = topOffZoomCropPanY,
+                    sensorOrientationDegrees = sensorOrientation,
+                    isFrontFacing = lensFacing == 0,
+                )
                 resolveRealtimeVideoZoomCropRect(
                     cropRect,
                     topOffZoomCropRatio,
-                    topOffZoomCropPanX,
-                    topOffZoomCropPanY,
+                    texturePan.x,
+                    texturePan.y,
                 )
             } else {
                 cropRect
