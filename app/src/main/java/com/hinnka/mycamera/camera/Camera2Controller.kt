@@ -13891,6 +13891,23 @@ class Camera2Controller(private val context: Context) {
                     ?.let(::addTarget)
                 applyBaseCameraSettings(this, isCapture = false)
             }
+            if (useMgcStabilization && _state.value.videoConfig.fps.fps == 30) {
+                val min30FpsRange = resolveEnhancedStabilization30FpsRange()
+                if (min30FpsRange != null) {
+                    builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, min30FpsRange)
+                    PLog.i(
+                        TAG,
+                        "EIS+ 4K30 frame-rate floor requested: aeRange=$min30FpsRange " +
+                            "(prefers a supported 31-fps floor when the camera advertises one)"
+                    )
+                } else {
+                    PLog.w(
+                        TAG,
+                        "EIS+ 4K30: camera advertises no AE FPS range with a 30-fps minimum; " +
+                            "30-fps sensor cadence cannot be guaranteed by Camera2"
+                    )
+                }
+            }
             if (_state.value.videoConfig.fps == VideoFpsPreset.FPS_120) {
                 builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, requireNotNull(highSpeedFpsRange))
                 builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
@@ -14019,6 +14036,24 @@ class Camera2Controller(private val context: Context) {
 
     fun setFastShutterTargetFps(fps: Int) {
         fastShutterTargetFps = fps.coerceIn(5, 20)
+    }
+
+    /**
+     * Select only a camera-advertised AE FPS range. Prefer a supported 31-fps floor as headroom;
+     * otherwise require a 30-fps floor. Never invent an unsupported Range or silently select a
+     * range whose lower bound allows the sensor cadence to fall below 30 fps.
+     */
+    private fun resolveEnhancedStabilization30FpsRange(): Range<Int>? {
+        val ranges = getActiveOpenCameraCharacteristics()
+            ?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ?.toList()
+            .orEmpty()
+        return ranges
+            .filter { it.lower == 31 }
+            .minByOrNull { it.upper - it.lower }
+            ?: ranges
+                .filter { it.lower >= 30 }
+                .minWithOrNull(compareBy<Range<Int>> { it.lower }.thenBy { it.upper - it.lower })
     }
 
     private fun applyFastShutterTargetFps(builder: CaptureRequest.Builder) {
