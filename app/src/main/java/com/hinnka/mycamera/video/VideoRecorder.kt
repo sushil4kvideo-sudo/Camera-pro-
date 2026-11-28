@@ -416,6 +416,7 @@ class VideoRecorder(
         statsRenderTimeTotalMs = 0L
         statsRenderTimeMaxMs = 0L
         frameDiagnostics = if (
+            VideoFrameDiagnostics.isEnabled(context) &&
             requestedEnhancedStabilization &&
             requestedFps == 30 &&
             maxOf(requestedOutputSize.width, requestedOutputSize.height) >= 3840

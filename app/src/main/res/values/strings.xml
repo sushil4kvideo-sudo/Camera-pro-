@@ -1450,4 +1450,14 @@
     <string name="special_video_virtual_telephoto_stop_recording_to_change">Stop recording before changing the 4x virtual lens.</string>
 
     <string name="done">Done</string>
+    <string name="settings_video_diagnostics_title">Advanced EIS+ Diagnostics</string>
+    <string name="settings_video_diagnostics_description">Measure frame timing and locate 4K 30 fps EIS+ drops. This adds low-overhead counters only while recording.</string>
+    <string name="settings_video_diagnostics_toggle_title">Collect EIS+ frame diagnostics</string>
+    <string name="settings_video_diagnostics_toggle_description">Runs automatically only for EIS+ recordings at 4K and 30 fps. Turn off to disable diagnostic instrumentation.</string>
+    <string name="settings_video_diagnostics_report_title">Latest diagnostic report</string>
+    <string name="settings_video_diagnostics_report_time">Created %1$s</string>
+    <string name="settings_video_diagnostics_no_report">No report yet. Record an EIS+ video at 4K / 30 fps and stop recording.</string>
+    <string name="settings_video_diagnostics_share">Share report</string>
+    <string name="settings_video_diagnostics_share_chooser">Share EIS+ diagnostics</string>
+    <string name="settings_video_diagnostics_share_error">Could not share the diagnostics report.</string>
 </resources>

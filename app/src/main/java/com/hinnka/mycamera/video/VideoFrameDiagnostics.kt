@@ -35,6 +35,29 @@ internal class VideoFrameDiagnostics(
         private const val TAG = "VideoFrameDiagnostics"
         private const val CODEC_CONFIG_FLAG = 2
         private const val NANOS_PER_SECOND = 1_000_000_000L
+        private const val PREFERENCES_NAME = "video_frame_diagnostics"
+        private const val PREFERENCE_ENABLED = "enabled"
+
+        /** Enabled by default to preserve automatic EIS+ 4K/30 telemetry. */
+        fun isEnabled(context: Context): Boolean =
+            context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+                .getBoolean(PREFERENCE_ENABLED, true)
+
+        fun setEnabled(context: Context, enabled: Boolean) {
+            context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREFERENCE_ENABLED, enabled)
+                .apply()
+        }
+
+        fun latestReport(context: Context): File? {
+            val root = context.getExternalFilesDir(null) ?: context.filesDir
+            return File(root, "video-diagnostics")
+                .listFiles { file ->
+                    file.isFile && file.name.startsWith("eis-plus-4k30-") && file.extension == "txt"
+                }
+                ?.maxByOrNull(File::lastModified)
+        }
     }
 
     private val startedAtMs = System.currentTimeMillis()

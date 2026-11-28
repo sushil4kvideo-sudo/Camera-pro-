@@ -1928,6 +1928,7 @@ fun SettingsScreen(
                             sensorOrientationDegrees = activeCameraInfo?.sensorOrientation ?: 0,
                         )
                     }
+                    VideoFrameDiagnosticsSettings()
                 }
 
                 SettingsPage.INTERFACE -> {
