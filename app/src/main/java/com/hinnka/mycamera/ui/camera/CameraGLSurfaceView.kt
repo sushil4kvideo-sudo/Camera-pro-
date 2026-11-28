@@ -352,6 +352,32 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * 设置 LUT 是否启用
+     */
+
+    fun setQuickMenuGlassEffect(
+        enabled: Boolean,
+        leftPx: Float = 0f,
+        bottomPx: Float = 0f,
+        rightPx: Float = 0f,
+        topPx: Float = 0f,
+        blurRadiusPx: Float = 0f,
+        cornerRadiusPx: Float = 0f,
+    ) {
+        queueEvent {
+            renderer.setQuickMenuGlassEffect(
+                enabled = enabled,
+                leftPx = leftPx,
+                bottomPx = bottomPx,
+                rightPx = rightPx,
+                topPx = topPx,
+                blurRadiusPx = blurRadiusPx,
+                cornerRadiusPx = cornerRadiusPx,
+            )
+            requestRender()
+        }
+    }
 
     fun setLutEnabled(enabled: Boolean) {
         renderer.lutEnabled = enabled
@@ -431,10 +457,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     fun getSurfaceTexture(): SurfaceTexture? = renderer.getSurfaceTexture()
 
     fun getRenderSurface(): Surface? = currentSurface
-
-    /** Avoid sampling the normal OES warm-up preview as a liquid-glass backdrop during EIS+. */
-    fun isPanelBackdropPreviewSourceReady(): Boolean =
-        renderer.isPanelBackdropPreviewSourceReady()
 
     fun setSourceCrop(crop: PhantomPipCrop) {
         queueEvent {
