@@ -16,9 +16,10 @@ import com.hinnka.mycamera.utils.PLog
 /**
  * MGC's production image path: Camera2 HardwareBuffer -> EGLImage -> external texture -> mesh.
  *
- * This mirrors the original jxg renderer. The caller retains ownership of [StabilizationFrame]'s
- * Image and closes it after a successful draw; a null result leaves it available for the explicit
- * CPU YUV fallback on devices that cannot import the buffer into EGL.
+ * This mirrors the original jxg renderer. Successful HardwareBuffer imports are retained until
+ * an EGL fence confirms that the GPU has finished sampling the source buffer. This avoids a
+ * blocking fence wait on every frame while keeping Camera2 buffer lifetime correct. A null
+ * result leaves the image available for the explicit CPU YUV fallback.
  */
 internal class MgcEisHardwareBufferRenderer(private val tag: String) {
     data class Frame(val timestampNs: Long, val textureId: Int, val width: Int, val height: Int)
@@ -40,7 +41,16 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
     private var positionLocation = -1
     private var textureCoordinateLocation = -1
     private var sourceSamplerLocation = -1
-    private var sourceTextureId = 0
+    private data class PendingSourceSampling(
+        val slot: Int,
+        val imageHandle: Long,
+        val fence: EGLSync,
+        val image: com.hinnka.mycamera.stabilization.StabilizationImage,
+    )
+
+    private val pendingSourceSampling = mutableListOf<PendingSourceSampling>()
+    private var sourceTextureIds = IntArray(0)
+    private var nextSourceTextureSlot = 0
     private var outputTextureId = 0
     private var outputFramebufferId = 0
     private var width = 0
@@ -49,8 +59,9 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
     private var loggedZeroCopy = false
 
     /**
-     * Attempts the zero-copy path without closing the source image. The image must remain open
-     * until this function returns because the EGLImage is created from its HardwareBuffer.
+     * Attempts the zero-copy path. On success this renderer takes ownership of the acquired image
+     * until the GPU fence signals; callers must not close that image. On failure the caller still
+     * owns it and may use the CPU YUV fallback.
      */
     fun render(frame: StabilizationFrame): Frame? {
         val width = frame.image.width
@@ -65,7 +76,9 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
         } ?: return null
         if (!ensure(width, height)) return null
 
-        val imageHandle = GlesHardwareBufferImage.create(hardwareBuffer)
+        val slot = acquireSourceTextureSlot()
+        val sourceTextureId = sourceTextureIds[slot]
+        var imageHandle = GlesHardwareBufferImage.create(hardwareBuffer)
         if (imageHandle == 0L) {
             if (!loggedImportFailure) {
                 loggedImportFailure = true
@@ -74,7 +87,8 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
             return null
         }
 
-        return try {
+        var sourceSamplingSubmitted = false
+        try {
             if (!GlesHardwareBufferImage.bind(imageHandle, sourceTextureId)) {
                 PLog.w(tag, "MGC EGLImage bind failed ts=${frame.timestampNs}")
                 return null
@@ -92,66 +106,164 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
                 textureCoordinateLocation = textureCoordinateLocation,
                 rowHomographies = frame.transform?.rowHomographies ?: droppedFrameHomographies(frame.positionLock),
             )
-            // The camera owns this HardwareBuffer and may recycle it as soon as Image.close()
-            // returns.  A GL draw only enqueues sampling work, so a memory barrier alone cannot
-            // protect that lifetime.  MGC's jwn/jxg renderers insert and wait on an EGL fence at
-            // this exact hand-off before releasing their input EGLImage/HardwareBuffer.
-            awaitSourceSampling()
+            sourceSamplingSubmitted = true
+
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             GLES31.glMemoryBarrier(
                 GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
             )
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+
+            // Defer the source Image/EGLImage release instead of blocking this render thread for
+            // every camera frame. The ring slot prevents rebinding this OES texture while the GPU
+            // may still be sampling the previous HardwareBuffer from it.
+            val display = EGL14.eglGetCurrentDisplay()
+            val fence = if (display != EGL14.EGL_NO_DISPLAY) {
+                EGL15.eglCreateSync(
+                    display,
+                    EGL15.EGL_SYNC_FENCE,
+                    longArrayOf(EGL14.EGL_NONE.toLong()),
+                    0,
+                )
+            } else {
+                EGL15.EGL_NO_SYNC
+            }
+            if (fence == EGL15.EGL_NO_SYNC) {
+                // Fence creation is uncommon to fail, but never release the camera buffer early.
+                GLES30.glFinish()
+                GlesHardwareBufferImage.destroy(imageHandle)
+                imageHandle = 0L
+                frame.image.close()
+            } else {
+                GLES30.glFlush()
+                pendingSourceSampling += PendingSourceSampling(
+                    slot = slot,
+                    imageHandle = imageHandle,
+                    fence = fence,
+                    image = frame.image,
+                )
+                imageHandle = 0L // Ownership moved to pendingSourceSampling.
+            }
+
             if (!loggedZeroCopy) {
                 loggedZeroCopy = true
-                PLog.i(tag, "MGC HardwareBuffer EGLImage renderer active")
+                PLog.i(tag, "MGC HardwareBuffer EGLImage renderer active (fenced ring buffer)")
             }
-            Frame(frame.timestampNs, outputTextureId, width, height)
+            return Frame(frame.timestampNs, outputTextureId, width, height)
         } catch (error: RuntimeException) {
+            if (sourceSamplingSubmitted) {
+                // The caller will run the YUV fallback; wait before it can close/recycle this Image.
+                GLES30.glFinish()
+            }
             PLog.w(tag, "MGC EGLImage draw failed ts=${frame.timestampNs}: ${error.message}")
-            null
+            return null
         } finally {
-            GlesHardwareBufferImage.destroy(imageHandle)
+            if (imageHandle != 0L) {
+                if (sourceSamplingSubmitted) {
+                    GLES30.glFinish()
+                }
+                GlesHardwareBufferImage.destroy(imageHandle)
+            }
         }
     }
 
     /**
-     * Completes the submitted external-texture sampling before its Camera2 buffer is returned to
-     * ImageReader.  The normal path is the same EGL fence hand-off used by MGC.  If this context
-     * cannot create a fence, glFinish is the only safe fallback: returning the buffer early would
-     * let a later camera frame overwrite pixels while this draw still reads them.
+     * Poll fences without stalling the render thread. When all ring slots are still in flight,
+     * wait only for the oldest one before reusing that slot. The Camera2 Image and EGLImage are
+     * released together, only after their source sampling has completed.
      */
-    private fun awaitSourceSampling() {
+    private fun acquireSourceTextureSlot(): Int {
+        pollCompletedSourceSampling()
+        val occupied = pendingSourceSampling.mapTo(mutableSetOf()) { it.slot }
+        for (offset in sourceTextureIds.indices) {
+            val slot = (nextSourceTextureSlot + offset) % sourceTextureIds.size
+            if (slot !in occupied) {
+                nextSourceTextureSlot = (slot + 1) % sourceTextureIds.size
+                return slot
+            }
+        }
+
+        val oldest = pendingSourceSampling.firstOrNull() ?: return 0
+        waitForSourceSampling(oldest)
+        pendingSourceSampling.remove(oldest)
+        nextSourceTextureSlot = (oldest.slot + 1) % sourceTextureIds.size
+        return oldest.slot
+    }
+
+    private fun pollCompletedSourceSampling() {
+        if (pendingSourceSampling.isEmpty()) return
+        val display = EGL14.eglGetCurrentDisplay()
+        if (display == EGL14.EGL_NO_DISPLAY) return
+
+        var index = 0
+        while (index < pendingSourceSampling.size) {
+            val pending = pendingSourceSampling[index]
+            val result = runCatching {
+                EGL15.eglClientWaitSync(display, pending.fence, 0, 0L)
+            }.getOrDefault(EGL14.EGL_FALSE)
+            if (result == EGL15.EGL_CONDITION_SATISFIED) {
+                releasePendingSourceSampling(pending, display)
+                pendingSourceSampling.removeAt(index)
+            } else if (result == EGL14.EGL_FALSE) {
+                PLog.w(tag, "MGC EGL fence poll failed; forcing GL completion")
+                runCatching { GLES30.glFinish() }
+                releasePendingSourceSampling(pending, display)
+                pendingSourceSampling.removeAt(index)
+            } else {
+                index += 1
+            }
+        }
+    }
+
+    private fun waitForSourceSampling(pending: PendingSourceSampling) {
         val display = EGL14.eglGetCurrentDisplay()
         if (display == EGL14.EGL_NO_DISPLAY) {
-            GLES30.glFinish()
+            runCatching { GLES30.glFinish() }
+            releasePendingSourceSampling(pending, display)
             return
         }
-        val fence: EGLSync = EGL15.eglCreateSync(
-            display,
-            EGL15.EGL_SYNC_FENCE,
-            longArrayOf(EGL14.EGL_NONE.toLong()),
-            0,
-        )
-        if (fence == EGL15.EGL_NO_SYNC) {
-            GLES30.glFinish()
-            return
-        }
-        try {
-            val waitResult = EGL15.eglClientWaitSync(
+        val result = runCatching {
+            EGL15.eglClientWaitSync(
                 display,
-                fence,
+                pending.fence,
                 EGL15.EGL_SYNC_FLUSH_COMMANDS_BIT,
                 EGL15.EGL_FOREVER,
             )
-            if (waitResult != EGL15.EGL_CONDITION_SATISFIED) {
-                PLog.w(tag, "MGC EGL fence wait failed result=$waitResult; forcing GL completion")
-                GLES30.glFinish()
-            }
-        } finally {
-            EGL15.eglDestroySync(display, fence)
+        }.getOrDefault(EGL14.EGL_FALSE)
+        if (result != EGL15.EGL_CONDITION_SATISFIED) {
+            PLog.w(tag, "MGC EGL fence wait failed result=$result; forcing GL completion")
+            runCatching { GLES30.glFinish() }
         }
+        releasePendingSourceSampling(pending, display)
+    }
+
+    private fun releasePendingSourceSampling(
+        pending: PendingSourceSampling,
+        display: android.opengl.EGLDisplay,
+    ) {
+        if (display != EGL14.EGL_NO_DISPLAY) {
+            runCatching { EGL15.eglDestroySync(display, pending.fence) }
+        }
+        runCatching { GlesHardwareBufferImage.destroy(pending.imageHandle) }
+            .onFailure { PLog.w(tag, "MGC EGLImage cleanup failed: ${it.message}") }
+        pending.image.close()
+    }
+
+    private fun releaseAllPendingSourceSampling() {
+        if (pendingSourceSampling.isEmpty()) return
+        val display = EGL14.eglGetCurrentDisplay()
+        if (display != EGL14.EGL_NO_DISPLAY) {
+            pendingSourceSampling.toList().forEach(::waitForSourceSampling)
+        } else {
+            // A lost EGL context cannot safely use its fences; retire native and Camera2 leases.
+            runCatching { GLES30.glFinish() }
+            pendingSourceSampling.forEach { pending ->
+                runCatching { GlesHardwareBufferImage.destroy(pending.imageHandle) }
+                pending.image.close()
+            }
+        }
+        pendingSourceSampling.clear()
     }
 
     fun resetAfterContextLoss() {
@@ -159,7 +271,8 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
         positionLocation = -1
         textureCoordinateLocation = -1
         sourceSamplerLocation = -1
-        sourceTextureId = 0
+        sourceTextureIds = IntArray(0)
+        nextSourceTextureSlot = 0
         outputTextureId = 0
         outputFramebufferId = 0
         width = 0
@@ -168,7 +281,8 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
     }
 
     fun release() {
-        val textures = intArrayOf(sourceTextureId, outputTextureId)
+        releaseAllPendingSourceSampling()
+        val textures = (sourceTextureIds.toList() + outputTextureId)
             .filter { it != 0 }
             .toIntArray()
         if (textures.isNotEmpty()) GLES30.glDeleteTextures(textures.size, textures, 0)
@@ -193,9 +307,10 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
         textureCoordinateLocation = GLES30.glGetAttribLocation(programId, "aTexCoord")
         sourceSamplerLocation = GLES30.glGetUniformLocation(programId, "uCameraTexture")
         mesh.initialize()
-        sourceTextureId = GlUtils.createOESTexture()
+        sourceTextureIds = IntArray(SOURCE_TEXTURE_SLOT_COUNT) { GlUtils.createOESTexture() }
+        nextSourceTextureSlot = 0
         outputTextureId = createTexture(requestedWidth, requestedHeight)
-        if (sourceTextureId == 0 || outputTextureId == 0 ||
+        if (sourceTextureIds.any { it == 0 } || outputTextureId == 0 ||
             !createOutputTarget(outputTextureId)
         ) {
             release()
@@ -249,6 +364,8 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
     }
 
     private companion object {
+        const val SOURCE_TEXTURE_SLOT_COUNT = 3
+
         val VERTEX_SHADER = """
             #version 300 es
             in vec4 aPosition;
