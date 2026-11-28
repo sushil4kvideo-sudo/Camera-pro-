@@ -432,6 +432,10 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     fun getRenderSurface(): Surface? = currentSurface
 
+    /** Avoid sampling the normal OES warm-up preview as a liquid-glass backdrop during EIS+. */
+    fun isPanelBackdropPreviewSourceReady(): Boolean =
+        renderer.isPanelBackdropPreviewSourceReady()
+
     fun setSourceCrop(crop: PhantomPipCrop) {
         queueEvent {
             renderer.setSourceCrop(crop)
