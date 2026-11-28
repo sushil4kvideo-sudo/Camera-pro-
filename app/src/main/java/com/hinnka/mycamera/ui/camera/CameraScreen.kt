@@ -309,6 +309,7 @@ fun CameraScreen(
     val topOffZoomPanX by viewModel.topOffZoomPanX.collectAsState()
     val topOffZoomPanY by viewModel.topOffZoomPanY.collectAsState()
     val topOffZoomRollDegrees by viewModel.topOffZoomRollDegrees.collectAsState()
+    var positionLockSensorCropBounds by remember { mutableStateOf<PositionLockSensorCropBounds?>(null) }
     val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
     val spatialVideoPreviewSensorOrientation by
@@ -408,7 +409,6 @@ fun CameraScreen(
     var cameraScreenBounds by remember { mutableStateOf<Rect?>(null) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var previewGlBounds by remember { mutableStateOf<Rect?>(null) }
-    var positionLockSensorCropBounds by remember { mutableStateOf<PositionLockSensorCropBounds?>(null) }
     var settingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var videoSettingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var videoEditGlassBounds by remember { mutableStateOf<Rect?>(null) }
@@ -4234,6 +4234,27 @@ private fun PositionLockSensorCropOverlay(
         PositionLockSensorCropBounds(inset, inset, inset + fraction, inset + fraction)
     }
     val outside = bounds.isOutsideSensor
+    val displayBounds = when (Math.floorMod(sensorOrientationDegrees, 360)) {
+        90 -> PositionLockSensorCropBounds(
+            left = 1f - bounds.bottom,
+            top = bounds.left,
+            right = 1f - bounds.top,
+            bottom = bounds.right,
+        )
+        180 -> PositionLockSensorCropBounds(
+            left = 1f - bounds.right,
+            top = 1f - bounds.bottom,
+            right = 1f - bounds.left,
+            bottom = 1f - bounds.top,
+        )
+        270 -> PositionLockSensorCropBounds(
+            left = bounds.top,
+            top = 1f - bounds.right,
+            right = bounds.bottom,
+            bottom = 1f - bounds.left,
+        )
+        else -> bounds
+    }
 
     Column(
         modifier = modifier
@@ -4272,10 +4293,10 @@ private fun PositionLockSensorCropOverlay(
 
             // MGC's current crop window is allowed to extend beyond the sensor outline;
             // the red stroke makes an unsafe/out-of-sensor crop immediately visible.
-            val cropLeft = sensorLeft + bounds.left * sensorWidth
-            val cropTop = sensorTop + bounds.top * sensorHeight
-            val cropRight = sensorLeft + bounds.right * sensorWidth
-            val cropBottom = sensorTop + bounds.bottom * sensorHeight
+            val cropLeft = sensorLeft + displayBounds.left * sensorWidth
+            val cropTop = sensorTop + displayBounds.top * sensorHeight
+            val cropRight = sensorLeft + displayBounds.right * sensorWidth
+            val cropBottom = sensorTop + displayBounds.bottom * sensorHeight
             drawRect(
                 color = if (outside) Color(0xFFFF5148) else Color(0xFF36E0C0),
                 topLeft = Offset(cropLeft, cropTop),

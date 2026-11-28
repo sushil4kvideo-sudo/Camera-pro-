@@ -3231,7 +3231,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             rowHomographies = frame.transform?.rowHomographies,
             activeArray = frame.sensorActiveArray,
             scalerCropRegion = frame.sensorCropRegion,
-            fallbackZoom = previewPositionLockCropZoom,
+            fallbackZoom = POSITION_LOCK_CROP_ZOOM,
         )
         onPositionLockSensorCropUpdated?.invoke(bounds)
     }
