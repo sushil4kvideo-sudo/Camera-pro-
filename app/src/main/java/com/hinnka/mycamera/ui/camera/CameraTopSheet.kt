@@ -56,11 +56,9 @@ import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.ui.components.AppModalBottomSheet
-import com.hinnka.mycamera.ui.components.CameraPanelGlassStyle
-import com.hinnka.mycamera.ui.components.LiquidGlassBackdrop
-import com.hinnka.mycamera.ui.components.liquidGlassBackground
 import com.hinnka.mycamera.ui.components.RawDcpLensOption
 import com.hinnka.mycamera.ui.components.RawRenderingEngineSettingsPanel
+import com.hinnka.mycamera.ui.components.OppoCameraGlassSurface
 import com.hinnka.mycamera.video.*
 import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
@@ -81,7 +79,9 @@ private val CameraTopSheetContentTopPadding = 32.dp
 @Composable
 fun CameraTopSheet(
     visible: Boolean,
-    panelBackdrop: LiquidGlassBackdrop,
+    glassTransparency: Float,
+    glassBlurStrength: Float,
+    onGlassBoundsChanged: (Rect?) -> Unit,
     captureMode: CaptureMode,
     aspectRatio: AspectRatio,
     topSheetAspectRatios: List<AspectRatio>,
@@ -179,6 +179,10 @@ fun CameraTopSheet(
         expandedVideoPanel = null
     }
 
+    LaunchedEffect(visible) {
+        if (!visible) onGlassBoundsChanged(null)
+    }
+
     LaunchedEffect(useRaw) {
         if (!useRaw) {
             showRenderingEngineSheet = false
@@ -191,14 +195,11 @@ fun CameraTopSheet(
         exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
         modifier = modifier
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .liquidGlassBackground(
-                    backdrop = panelBackdrop,
-                    openTopEdge = true,
-                    style = CameraPanelGlassStyle,
-                )
+        OppoCameraGlassSurface(
+            modifier = Modifier.fillMaxWidth(),
+            transparency = glassTransparency,
+            blurStrength = glassBlurStrength,
+            onBoundsChanged = onGlassBoundsChanged,
         ) {
             Column(
                 modifier = Modifier
@@ -865,8 +866,7 @@ fun CameraTopSheet(
     }
 
     if (showRenderingEngineSheet) {
-        CameraPanelBottomSheet(
-            backdrop = panelBackdrop,
+        AppModalBottomSheet(
             onDismissRequest = { showRenderingEngineSheet = false },
             dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
