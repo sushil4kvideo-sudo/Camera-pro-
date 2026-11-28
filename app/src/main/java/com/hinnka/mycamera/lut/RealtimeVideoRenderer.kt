@@ -1023,7 +1023,8 @@ class RealtimeVideoRenderer(
             val hardwareRendered = mgcEisHardwareBufferRenderer.render(frame)
             if (hardwareRendered != null) {
                 diagnosticHardwareBufferFrames += 1L
-                frame.image.close()
+                // MgcEisHardwareBufferRenderer owns the Image until its asynchronous EGL fence
+                // signals; closing it here would recycle the Camera2 buffer while the GPU reads it.
                 return hardwareRendered
             }
             val yuvRendered = mgcEisYuvRenderer.render(frame)
