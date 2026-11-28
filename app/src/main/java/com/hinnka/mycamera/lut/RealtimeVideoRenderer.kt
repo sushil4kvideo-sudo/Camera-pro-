@@ -214,6 +214,19 @@ class RealtimeVideoRenderer(
     @Volatile
     private var stabilizationSessionStarted = false
 
+    @Volatile private var diagnosticLastSkipReason = "NOT_STARTED"
+    @Volatile private var diagnosticGpuVendor = "unavailable"
+    @Volatile private var diagnosticGpuRenderer = "unavailable"
+    @Volatile private var diagnosticGpuVersion = "unavailable"
+    private var diagnosticHardwareBufferFrames = 0L
+    private var diagnosticYuvFallbackFrames = 0L
+    private var diagnosticEisRenderFailures = 0L
+    private var diagnosticEisRenderTotalNs = 0L
+    private var diagnosticEisRenderMaxNs = 0L
+    private var diagnosticEglSwapFrames = 0L
+    private var diagnosticEglSwapTotalNs = 0L
+    private var diagnosticEglSwapMaxNs = 0L
+
     val inputSurface: Surface?
         get() = cameraSurface
 
@@ -344,6 +357,9 @@ class RealtimeVideoRenderer(
         check(!initialized) { "Realtime video renderer is already initialized" }
         initializeEgl(encoderSurface)
         check(makeCurrent()) { "Cannot make realtime video EGL context current" }
+        diagnosticGpuVendor = GLES30.glGetString(GLES30.GL_VENDOR) ?: "unavailable"
+        diagnosticGpuRenderer = GLES30.glGetString(GLES30.GL_RENDERER) ?: "unavailable"
+        diagnosticGpuVersion = GLES30.glGetString(GLES30.GL_VERSION) ?: "unavailable"
         initializeGeometry()
         initializeLayerTextures()
         initializeWatermarkOverlay()
@@ -428,13 +444,22 @@ class RealtimeVideoRenderer(
     fun renderLatestFrame(
         mapPresentationTimeNs: (cameraTimestampNs: Long, switchableInput: Boolean) -> Long,
     ): Long? {
-        if (!initialized || !makeCurrent()) return null
-        val surfaceTexture = cameraSurfaceTexture ?: return null
+        if (!initialized || !makeCurrent()) {
+            diagnosticLastSkipReason = "EGL_CONTEXT_UNAVAILABLE"
+            return null
+        }
+        val surfaceTexture = cameraSurfaceTexture ?: run {
+            diagnosticLastSkipReason = "CAMERA_SURFACE_TEXTURE_MISSING"
+            return null
+        }
         val useSwitchableCameraInput = switchableCameraInputActive &&
             switchableCameraSurfaceTexture != null
         if (dualCaptureSurfaceTexture != null) {
             acquireLatestDualCaptureFrame()
-            if (!dualCaptureHasFrame) return null
+            if (!dualCaptureHasFrame) {
+                diagnosticLastSkipReason = "DUAL_CAPTURE_WAITING_FOR_FRAME"
+                return null
+            }
         }
 
         val cameraFrameUpdated = if (useSwitchableCameraInput) {
@@ -469,14 +494,26 @@ class RealtimeVideoRenderer(
         }
 
         if (useSwitchableCameraInput) {
-            if (!switchableFrameUpdated) return null
-            val alternateSize = switchableCameraInputSize ?: return null
+            if (!switchableFrameUpdated) {
+                diagnosticLastSkipReason = "SWITCHABLE_CAMERA_FRAME_UNAVAILABLE"
+                return null
+            }
+            val alternateSize = switchableCameraInputSize ?: run {
+                diagnosticLastSkipReason = "SWITCHABLE_CAMERA_SIZE_UNAVAILABLE"
+                return null
+            }
             val presentationMatrix = resolveSwitchableCameraPresentationMatrix(
                 switchableCameraStMatrix,
                 alternateSize,
             )
-            timestampNs = switchableCameraSurfaceTexture?.timestamp ?: return null
-            if (timestampNs <= 0L) return null
+            timestampNs = switchableCameraSurfaceTexture?.timestamp ?: run {
+                diagnosticLastSkipReason = "SWITCHABLE_CAMERA_TIMESTAMP_UNAVAILABLE"
+                return null
+            }
+            if (timestampNs <= 0L) {
+                diagnosticLastSkipReason = "INVALID_SWITCHABLE_CAMERA_TIMESTAMP"
+                return null
+            }
             sourceTextureId = switchableCameraTextureId
             sourceStMatrix = presentationMatrix
             sourceCropRect = resolveCameraCropRect(
@@ -485,14 +522,21 @@ class RealtimeVideoRenderer(
                 inputHeight = alternateSize.height,
             )
         } else if (stabilizationSessionOperational) {
-            val frame = session?.dequeueFrame() ?: return null
+            val frame = session?.dequeueFrame() ?: run {
+                diagnosticLastSkipReason = "EIS_LOOKAHEAD_WAITING_FOR_NATIVE_RESULT"
+                return null
+            }
             if (positionLockEnabled && frame.transform == null) {
+                diagnosticLastSkipReason = "EIS_POSE_MISSING_POSITION_LOCK"
                 // A missing MGC pose must not reset the virtual camera to a centered 2.5x crop.
                 // Skip this timestamp; the next valid Position Lock pose resumes from the same anchor.
                 frame.image.close()
                 return null
             }
-            val rendered = renderMgcEisFrame(frame) ?: return null
+            val rendered = renderMgcEisFrame(frame) ?: run {
+                diagnosticLastSkipReason = "EIS_HARDWAREBUFFER_AND_YUV_RENDER_FAILED"
+                return null
+            }
             sourceTextureSource = PreviewColorTextureSource.TEXTURE_2D
             sourceTextureTarget = GLES30.GL_TEXTURE_2D
             sourceTextureId = rendered.textureId
@@ -504,10 +548,16 @@ class RealtimeVideoRenderer(
             )
             timestampNs = rendered.timestampNs
         } else {
-            if (!cameraFrameUpdated || timestampNs <= 0L) return null
+            if (!cameraFrameUpdated || timestampNs <= 0L) {
+                diagnosticLastSkipReason = "CAMERA_OES_FRAME_UNAVAILABLE"
+                return null
+            }
             sourceCropRect = cameraCropRect
         }
-        if (timestampNs <= 0L) return null
+        if (timestampNs <= 0L) {
+            diagnosticLastSkipReason = "INVALID_SOURCE_FRAME_TIMESTAMP"
+            return null
+        }
         if (positionLockEnabled && sourceTextureSource == PreviewColorTextureSource.EXTERNAL_OES) {
             // Match the selected Position Lock crop until the first timestamp-matched MGC frame arrives.
             val safePositionLockZoom = positionLockCropZoom
@@ -523,7 +573,10 @@ class RealtimeVideoRenderer(
             currentCameraInputPanY,
         )
         val presentationTimeNs = mapPresentationTimeNs(timestampNs, useSwitchableCameraInput)
-        if (presentationTimeNs <= 0L) return null
+        if (presentationTimeNs <= 0L) {
+            diagnosticLastSkipReason = "INVALID_MAPPED_PRESENTATION_TIMESTAMP"
+            return null
+        }
 
         val firstLayer = layers.first()
         val grainEnabled = finalFilmGrainEnabled
@@ -589,11 +642,18 @@ class RealtimeVideoRenderer(
         GLES30.glViewport(0, 0, encoderOutputSize.width, encoderOutputSize.height)
 
         EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, presentationTimeNs)
+        val swapStartNs = System.nanoTime()
         if (!EGL14.eglSwapBuffers(eglDisplay, encoderEglSurface)) {
+            diagnosticLastSkipReason = "EGL_SWAP_BUFFERS_FAILED"
             throw IllegalStateException(
                 "Realtime video eglSwapBuffers failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
             )
         }
+        val swapDurationNs = (System.nanoTime() - swapStartNs).coerceAtLeast(0L)
+        diagnosticEglSwapFrames += 1L
+        diagnosticEglSwapTotalNs += swapDurationNs
+        diagnosticEglSwapMaxNs = maxOf(diagnosticEglSwapMaxNs, swapDurationNs)
+        diagnosticLastSkipReason = "NONE"
         return presentationTimeNs
     }
 
@@ -956,18 +1016,30 @@ class RealtimeVideoRenderer(
     private fun renderMgcEisFrame(
         frame: com.hinnka.mycamera.stabilization.StabilizationFrame,
     ): MgcEisHardwareBufferRenderer.Frame? {
-        val hardwareRendered = mgcEisHardwareBufferRenderer.render(frame)
-        if (hardwareRendered != null) {
-            frame.image.close()
-            return hardwareRendered
-        }
-        return mgcEisYuvRenderer.render(frame)?.let { rendered ->
-            MgcEisHardwareBufferRenderer.Frame(
-                timestampNs = rendered.timestampNs,
-                textureId = rendered.textureId,
-                width = rendered.width,
-                height = rendered.height,
-            )
+        val renderStartNs = System.nanoTime()
+        try {
+            val hardwareRendered = mgcEisHardwareBufferRenderer.render(frame)
+            if (hardwareRendered != null) {
+                diagnosticHardwareBufferFrames += 1L
+                frame.image.close()
+                return hardwareRendered
+            }
+            val yuvRendered = mgcEisYuvRenderer.render(frame)
+            if (yuvRendered != null) {
+                diagnosticYuvFallbackFrames += 1L
+                return MgcEisHardwareBufferRenderer.Frame(
+                    timestampNs = yuvRendered.timestampNs,
+                    textureId = yuvRendered.textureId,
+                    width = yuvRendered.width,
+                    height = yuvRendered.height,
+                )
+            }
+            diagnosticEisRenderFailures += 1L
+            return null
+        } finally {
+            val durationNs = (System.nanoTime() - renderStartNs).coerceAtLeast(0L)
+            diagnosticEisRenderTotalNs += durationNs
+            diagnosticEisRenderMaxNs = maxOf(diagnosticEisRenderMaxNs, durationNs)
         }
     }
 
@@ -1571,6 +1643,33 @@ class RealtimeVideoRenderer(
             "operational=${session?.isOperational == true}, " +
             "poseReady=${session?.isPoseSourceReady == true}, " +
             "pendingResults=${session?.pendingResultCount() ?: 0}"
+    }
+
+    fun videoDiagnosticsSnapshot(): String {
+        val eisAverageMs = if (diagnosticHardwareBufferFrames + diagnosticYuvFallbackFrames == 0L) {
+            0.0
+        } else {
+            diagnosticEisRenderTotalNs.toDouble() /
+                (diagnosticHardwareBufferFrames + diagnosticYuvFallbackFrames + diagnosticEisRenderFailures) /
+                1_000_000.0
+        }
+        val swapAverageMs = if (diagnosticEglSwapFrames == 0L) 0.0 else
+            diagnosticEglSwapTotalNs.toDouble() / diagnosticEglSwapFrames / 1_000_000.0
+        return listOf(
+            "gpuVendor=" + diagnosticGpuVendor,
+            "gpuRenderer=" + diagnosticGpuRenderer,
+            "gpuVersion=" + diagnosticGpuVersion,
+            "eisHardwareBufferFrames=" + diagnosticHardwareBufferFrames,
+            "eisYuvFallbackFrames=" + diagnosticYuvFallbackFrames,
+            "eisRenderFailures=" + diagnosticEisRenderFailures,
+            "eisImageRenderAverageMs=" + String.format(java.util.Locale.US, "%.3f", eisAverageMs),
+            "eisImageRenderMaxMs=" + String.format(java.util.Locale.US, "%.3f", diagnosticEisRenderMaxNs / 1_000_000.0),
+            "eglSwapFrames=" + diagnosticEglSwapFrames,
+            "eglSwapAverageMs=" + String.format(java.util.Locale.US, "%.3f", swapAverageMs),
+            "eglSwapMaxMs=" + String.format(java.util.Locale.US, "%.3f", diagnosticEglSwapMaxNs / 1_000_000.0),
+            "lastFrameSkipReason=" + diagnosticLastSkipReason,
+            "stabilization=" + stabilizationDiagnostics(),
+        ).joinToString("\n")
     }
 
     @Synchronized
