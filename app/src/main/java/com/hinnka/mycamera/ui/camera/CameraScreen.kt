@@ -2830,8 +2830,10 @@ fun CameraScreen(
                     onGalleryClick()
                 },
                 showTrackingPad = canShowZoomJoystick,
-                // Keep the preset picker reachable before Top-Off is enabled.
+                // Keep preset selection reachable, but expose Run only when Top-Off Zoom is enabled.
                 showTopOffPanPresetControls = isVideoMode &&
+                    !spatialVideoEnabled && !dualCaptureEnabled,
+                showTopOffZoomRunButton = isVideoMode && topOffZoomEnabled &&
                     !spatialVideoEnabled && !dualCaptureEnabled,
                 aiSubjectTrackingEnabled = aiSubjectTrackingEnabled,
                 onAiSubjectTrackingToggle = {
@@ -3623,6 +3625,7 @@ private fun Controls(
     onGalleryClick: () -> Unit,
     showTrackingPad: Boolean,
     showTopOffPanPresetControls: Boolean,
+    showTopOffZoomRunButton: Boolean,
     aiSubjectTrackingEnabled: Boolean,
     onAiSubjectTrackingToggle: () -> Unit,
     onTrackingPadPan: (Float, Float) -> Unit,
@@ -3923,9 +3926,9 @@ private fun Controls(
                 )
 
 
-                // Keep only Run beside the shutter. Hold the trackpad to open preset
-                // selection, including the AI Subject Tracking preset.
-                if (showTopOffPanPresetControls || state.videoRecordingState.isRecording) {
+                // Show Run beside the shutter only while Top-Off Zoom is enabled.
+                // Hold the trackpad to open preset selection, including AI Subject Tracking.
+                if (showTopOffZoomRunButton || state.videoRecordingState.isRecording) {
                     Row(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
@@ -3933,7 +3936,7 @@ private fun Controls(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
-                        if (showTopOffPanPresetControls) {
+                        if (showTopOffZoomRunButton) {
                             IconButton(
                                 onClick = {
                                     val runningPreset = runningTopOffPanPreset
