@@ -215,6 +215,7 @@ class RealtimeVideoRenderer(
     private var stabilizationSessionStarted = false
 
     @Volatile private var diagnosticLastSkipReason = "NOT_STARTED"
+    private val diagnosticSkipReasons = linkedMapOf<String, Long>()
     @Volatile private var diagnosticGpuVendor = "unavailable"
     @Volatile private var diagnosticGpuRenderer = "unavailable"
     @Volatile private var diagnosticGpuVersion = "unavailable"
@@ -446,11 +447,11 @@ class RealtimeVideoRenderer(
         mapPresentationTimeNs: (cameraTimestampNs: Long, switchableInput: Boolean) -> Long,
     ): Long? {
         if (!initialized || !makeCurrent()) {
-            diagnosticLastSkipReason = "EGL_CONTEXT_UNAVAILABLE"
+            markDiagnosticFrameSkip("EGL_CONTEXT_UNAVAILABLE")
             return null
         }
         val surfaceTexture = cameraSurfaceTexture ?: run {
-            diagnosticLastSkipReason = "CAMERA_SURFACE_TEXTURE_MISSING"
+            markDiagnosticFrameSkip("CAMERA_SURFACE_TEXTURE_MISSING")
             return null
         }
         val useSwitchableCameraInput = switchableCameraInputActive &&
@@ -458,7 +459,7 @@ class RealtimeVideoRenderer(
         if (dualCaptureSurfaceTexture != null) {
             acquireLatestDualCaptureFrame()
             if (!dualCaptureHasFrame) {
-                diagnosticLastSkipReason = "DUAL_CAPTURE_WAITING_FOR_FRAME"
+                markDiagnosticFrameSkip("DUAL_CAPTURE_WAITING_FOR_FRAME")
                 return null
             }
         }
@@ -496,11 +497,11 @@ class RealtimeVideoRenderer(
 
         if (useSwitchableCameraInput) {
             if (!switchableFrameUpdated) {
-                diagnosticLastSkipReason = "SWITCHABLE_CAMERA_FRAME_UNAVAILABLE"
+                markDiagnosticFrameSkip("SWITCHABLE_CAMERA_FRAME_UNAVAILABLE")
                 return null
             }
             val alternateSize = switchableCameraInputSize ?: run {
-                diagnosticLastSkipReason = "SWITCHABLE_CAMERA_SIZE_UNAVAILABLE"
+                markDiagnosticFrameSkip("SWITCHABLE_CAMERA_SIZE_UNAVAILABLE")
                 return null
             }
             val presentationMatrix = resolveSwitchableCameraPresentationMatrix(
@@ -508,11 +509,11 @@ class RealtimeVideoRenderer(
                 alternateSize,
             )
             timestampNs = switchableCameraSurfaceTexture?.timestamp ?: run {
-                diagnosticLastSkipReason = "SWITCHABLE_CAMERA_TIMESTAMP_UNAVAILABLE"
+                markDiagnosticFrameSkip("SWITCHABLE_CAMERA_TIMESTAMP_UNAVAILABLE")
                 return null
             }
             if (timestampNs <= 0L) {
-                diagnosticLastSkipReason = "INVALID_SWITCHABLE_CAMERA_TIMESTAMP"
+                markDiagnosticFrameSkip("INVALID_SWITCHABLE_CAMERA_TIMESTAMP")
                 return null
             }
             sourceTextureId = switchableCameraTextureId
@@ -524,18 +525,18 @@ class RealtimeVideoRenderer(
             )
         } else if (stabilizationSessionOperational) {
             val frame = session?.dequeueFrame() ?: run {
-                diagnosticLastSkipReason = "EIS_LOOKAHEAD_WAITING_FOR_NATIVE_RESULT"
+                markDiagnosticFrameSkip("EIS_LOOKAHEAD_WAITING_FOR_NATIVE_RESULT")
                 return null
             }
             if (positionLockEnabled && frame.transform == null) {
-                diagnosticLastSkipReason = "EIS_POSE_MISSING_POSITION_LOCK"
+                markDiagnosticFrameSkip("EIS_POSE_MISSING_POSITION_LOCK")
                 // A missing MGC pose must not reset the virtual camera to a centered 2.5x crop.
                 // Skip this timestamp; the next valid Position Lock pose resumes from the same anchor.
                 frame.image.close()
                 return null
             }
             val rendered = renderMgcEisFrame(frame) ?: run {
-                diagnosticLastSkipReason = "EIS_HARDWAREBUFFER_AND_YUV_RENDER_FAILED"
+                markDiagnosticFrameSkip("EIS_HARDWAREBUFFER_AND_YUV_RENDER_FAILED")
                 return null
             }
             sourceTextureSource = PreviewColorTextureSource.TEXTURE_2D
@@ -550,13 +551,13 @@ class RealtimeVideoRenderer(
             timestampNs = rendered.timestampNs
         } else {
             if (!cameraFrameUpdated || timestampNs <= 0L) {
-                diagnosticLastSkipReason = "CAMERA_OES_FRAME_UNAVAILABLE"
+                markDiagnosticFrameSkip("CAMERA_OES_FRAME_UNAVAILABLE")
                 return null
             }
             sourceCropRect = cameraCropRect
         }
         if (timestampNs <= 0L) {
-            diagnosticLastSkipReason = "INVALID_SOURCE_FRAME_TIMESTAMP"
+            markDiagnosticFrameSkip("INVALID_SOURCE_FRAME_TIMESTAMP")
             return null
         }
         if (positionLockEnabled && sourceTextureSource == PreviewColorTextureSource.EXTERNAL_OES) {
@@ -575,7 +576,7 @@ class RealtimeVideoRenderer(
         )
         val presentationTimeNs = mapPresentationTimeNs(timestampNs, useSwitchableCameraInput)
         if (presentationTimeNs <= 0L) {
-            diagnosticLastSkipReason = "INVALID_MAPPED_PRESENTATION_TIMESTAMP"
+            markDiagnosticFrameSkip("INVALID_MAPPED_PRESENTATION_TIMESTAMP")
             return null
         }
 
@@ -645,7 +646,7 @@ class RealtimeVideoRenderer(
         EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, presentationTimeNs)
         val swapStartNs = System.nanoTime()
         if (!EGL14.eglSwapBuffers(eglDisplay, encoderEglSurface)) {
-            diagnosticLastSkipReason = "EGL_SWAP_BUFFERS_FAILED"
+            markDiagnosticFrameSkip("EGL_SWAP_BUFFERS_FAILED")
             throw IllegalStateException(
                 "Realtime video eglSwapBuffers failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
             )
@@ -1646,6 +1647,11 @@ class RealtimeVideoRenderer(
             "pendingResults=${session?.pendingResultCount() ?: 0}"
     }
 
+    private fun markDiagnosticFrameSkip(reason: String) {
+        diagnosticLastSkipReason = reason
+        diagnosticSkipReasons[reason] = (diagnosticSkipReasons[reason] ?: 0L) + 1L
+    }
+
     fun videoDiagnosticsSnapshot(): String {
         val eisAverageMs = if (diagnosticHardwareBufferFrames + diagnosticYuvFallbackFrames == 0L) {
             0.0
@@ -1669,6 +1675,9 @@ class RealtimeVideoRenderer(
             "eglSwapAverageMs=" + String.format(java.util.Locale.US, "%.3f", swapAverageMs),
             "eglSwapMaxMs=" + String.format(java.util.Locale.US, "%.3f", diagnosticEglSwapMaxNs / 1_000_000.0),
             "lastFrameSkipReason=" + diagnosticLastSkipReason,
+            "skipReasonCounts=" + diagnosticSkipReasons.entries.joinToString(",") {
+                it.key + ":" + it.value
+            },
             "stabilization=" + stabilizationDiagnostics(),
         ).joinToString("\n")
     }
