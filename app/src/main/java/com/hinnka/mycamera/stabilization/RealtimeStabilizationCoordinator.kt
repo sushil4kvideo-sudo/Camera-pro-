@@ -760,7 +760,6 @@ class RealtimeStabilizationCoordinator(context: Context) {
         positionLockCropZoom: Float,
     ): Long? = synchronized(lock) {
         if (!isCurrentCameraSupported) return null
-        if (activeSessions.isEmpty()) resetVideoDiagnosticsLocked()
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
         val normalizedPositionLockCropZoom = if (positionLockEnabled) {
             positionLockCropZoom.takeIf { it.isFinite() }?.coerceIn(1f, 10f) ?: POSITION_LOCK_CROP_ZOOM
@@ -996,6 +995,12 @@ class RealtimeStabilizationCoordinator(context: Context) {
         nativeLookaheadFrames = lookahead
         cameraReconfigurationPending = false
         return restarted
+    }
+
+    fun beginVideoDiagnostics() {
+        synchronized(lock) {
+            resetVideoDiagnosticsLocked()
+        }
     }
 
     private fun resetVideoDiagnosticsLocked() {
