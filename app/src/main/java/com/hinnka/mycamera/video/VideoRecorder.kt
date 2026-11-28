@@ -243,6 +243,7 @@ class VideoRecorder(
     private var statsRenderedFrames: Int = 0
     private var statsRenderTimeTotalMs: Long = 0L
     private var statsRenderTimeMaxMs: Long = 0L
+    private var frameDiagnostics: VideoFrameDiagnostics? = null
 
     private var videoDrainJob: Job? = null
     private var audioDrainJob: Job? = null
@@ -414,6 +415,23 @@ class VideoRecorder(
         statsRenderedFrames = 0
         statsRenderTimeTotalMs = 0L
         statsRenderTimeMaxMs = 0L
+        frameDiagnostics = if (
+            requestedEnhancedStabilization &&
+            requestedFps == 30 &&
+            maxOf(requestedOutputSize.width, requestedOutputSize.height) >= 3840
+        ) {
+            VideoFrameDiagnostics(
+                context = context,
+                requestedSize = requestedOutputSize,
+                requestedFps = requestedFps,
+                requestedBitrateMbps = requestedBitrateMbps,
+                requestedMime = requestedCodecMime,
+                lookaheadFrames = requestedEnhancedStabilizationLookahead,
+                stabilizationStrength = requestedEnhancedStabilizationStrength,
+            )
+        } else {
+            null
+        }
         stopRequested = false
         cameraInputStarted = false
         var rendererInitialized = false
@@ -661,6 +679,7 @@ class VideoRecorder(
                     }
                 }
 
+                finishVideoDiagnostics()
                 releaseCaptureResources()
                 isRecording = false
                 publishedUri = finalizeOutput()
@@ -857,9 +876,11 @@ class VideoRecorder(
         // logical Camera2 session. Samples beyond the shared stop cutoff are discarded.
         if (!isRecording || (stopRequested && !acceptStopDrainFrames) || isPaused || !cameraInputStarted) return
         statsIncomingFrames += 1
+        frameDiagnostics?.recordRenderWakeCallback(SystemClock.elapsedRealtimeNanos())
         synchronized(realtimeFrameLock) {
             if (pendingRealtimeFrameCount > 0) {
                 statsReplacedPendingFrames += 1
+                frameDiagnostics?.recordPendingReplacement()
             }
             pendingRealtimeFrameCount = if (requestedEnhancedStabilization) {
                 pendingRealtimeFrameCount + 1
@@ -1039,6 +1060,15 @@ class VideoRecorder(
                     requestedCodecMime = candidate.mimeType
                     requestedSize = candidateSize
                     preparedEncoderColorConfig = resolvedColorConfig
+                    frameDiagnostics?.setEncoderInfo(
+                        name = candidate.codecInfo.name,
+                        mime = candidate.mimeType,
+                        isHardwareAccelerated = candidate.codecInfo.isHardwareAccelerated,
+                        size = candidateSize,
+                        bitrate = videoBitrate,
+                        profile = resolvedColorConfig.codecProfile?.toString() ?: "unavailable",
+                        colorPipeline = resolvedColorConfig.pipeline.toString(),
+                    )
 
                     PLog.i(
                         TAG,
@@ -1610,14 +1640,20 @@ class VideoRecorder(
 
             try {
                 val videoRenderer = renderer ?: continue
-                val renderStartMs = SystemClock.elapsedRealtime()
-                val presentationTimeNs = videoRenderer.renderLatestFrame(
+                val renderStartNs = SystemClock.elapsedRealtimeNanos()
+                val renderedPresentationTimeNs = videoRenderer.renderLatestFrame(
                     mapPresentationTimeNs = { timestampNs, switchableInput ->
                         mapCameraTimestampToBoottimeNs(timestampNs, switchableInput)
                     },
-                ) ?: continue
+                )
+                val renderCostNs = (SystemClock.elapsedRealtimeNanos() - renderStartNs).coerceAtLeast(0L)
+                frameDiagnostics?.recordRenderAttempt(
+                    success = renderedPresentationTimeNs != null,
+                    durationNs = renderCostNs,
+                )
+                val presentationTimeNs = renderedPresentationTimeNs ?: continue
                 establishTimelineOrigin(presentationTimeNs / 1_000L)
-                val renderCostMs = (SystemClock.elapsedRealtime() - renderStartMs).coerceAtLeast(0L)
+                val renderCostMs = renderCostNs / 1_000_000L
                 statsAcceptedFrames += 1
                 statsRenderedFrames += 1
                 statsRenderTimeTotalMs += renderCostMs
@@ -1754,6 +1790,13 @@ class VideoRecorder(
                     return false
                 }
                 if (outputBuffer != null && bufferInfo.size > 0) {
+                    if (isVideo) {
+                        frameDiagnostics?.recordEncoderOutput(
+                            presentationTimeUs = bufferInfo.presentationTimeUs,
+                            sizeBytes = bufferInfo.size,
+                            flags = bufferInfo.flags,
+                        )
+                    }
                     writeSample(
                         isVideo = isVideo,
                         buffer = outputBuffer,
@@ -2095,10 +2138,21 @@ class VideoRecorder(
             info = info,
             maximumPresentationTimeUs = maximumPresentationTimeUs,
         ) ?: return
+        val activeMuxer = muxer ?: return
+        val writeStartNs = SystemClock.elapsedRealtimeNanos()
+        var writeSucceeded = false
         try {
-            muxer?.writeSampleData(trackIndex, buffer, normalizedInfo)
+            activeMuxer.writeSampleData(trackIndex, buffer, normalizedInfo)
+            writeSucceeded = true
         } catch (e: Exception) {
             PLog.w(TAG, "Video recorder write sample error", e)
+        } finally {
+            if (isVideo) {
+                frameDiagnostics?.recordMuxerWrite(
+                    durationNs = SystemClock.elapsedRealtimeNanos() - writeStartNs,
+                    succeeded = writeSucceeded,
+                )
+            }
         }
     }
 
@@ -2298,7 +2352,17 @@ class VideoRecorder(
         }
     }
 
+    private fun finishVideoDiagnostics() {
+        val diagnostics = frameDiagnostics ?: return
+        frameDiagnostics = null
+        diagnostics.finish(
+            eisSnapshot = stabilizationCoordinator?.videoDiagnosticsSnapshot().orEmpty(),
+            rendererSnapshot = renderer?.videoDiagnosticsSnapshot().orEmpty(),
+        )
+    }
+
     private suspend fun cleanup() {
+        finishVideoDiagnostics()
         releaseCaptureResources()
 
         resetMuxerState()
