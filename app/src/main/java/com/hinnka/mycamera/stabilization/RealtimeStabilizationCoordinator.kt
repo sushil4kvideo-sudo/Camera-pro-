@@ -12,6 +12,7 @@ import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
 import android.os.Build
+import android.os.SystemClock
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.SizeF
@@ -221,6 +222,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         private const val HAL_OPTICAL_CORRECTION_PROBE_FRAME_COUNT =
             DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD + 3
         private const val MIN_OPTICAL_CORRECTION_SAMPLES_PER_FRAME = 2
+        private const val DIAGNOSTIC_30FPS_INTERVAL_NS = 1_000_000_000L / 30L
         private const val MAX_BUFFERED_STABILIZATION_IMAGES =
             STABILIZATION_LOOKAHEAD_FRAME_COUNT + 8
         const val STABILIZATION_IMAGE_READER_MAX_IMAGES =
@@ -274,6 +276,23 @@ class RealtimeStabilizationCoordinator(context: Context) {
     private var boundaryCount = 0L
     private var nativeFrameAttemptCount = 0L
     private var captureResultCount = 0L
+    // Cumulative EIS+ feeder diagnostics, reset with the camera timestamp timeline.
+    private var diagnosticImageFrames = 0L
+    private var diagnosticImageTimestampGapEvents = 0L
+    private var diagnosticImageEstimatedMissing = 0L
+    private var diagnosticLastImageTimestampNs = 0L
+    private var diagnosticCaptureTimestampGapEvents = 0L
+    private var diagnosticCaptureEstimatedMissing = 0L
+    private var diagnosticLastCaptureTimestampNs = 0L
+    private var diagnosticMissingMetadata = 0L
+    private var diagnosticNativePending = 0L
+    private var diagnosticNativeStabilized = 0L
+    private var diagnosticNativeDropped = 0L
+    private var diagnosticNativeProcessTotalNs = 0L
+    private var diagnosticNativeProcessMaxNs = 0L
+    private var diagnosticImageQueueOverflow = 0L
+    private var diagnosticResultImageMissing = 0L
+    private var diagnosticResultQueueTrimmed = 0L
     private var consecutiveHalStabilizationConflictCount = 0
     private var rawGyroCallbackCount = 0L
     private var opticalCorrectionSourceActive = false
@@ -619,6 +638,17 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 )
                 return@synchronized
             }
+            if (diagnosticLastCaptureTimestampNs > 0L &&
+                timestampNs > diagnosticLastCaptureTimestampNs
+            ) {
+                val deltaNs = timestampNs - diagnosticLastCaptureTimestampNs
+                if (deltaNs > DIAGNOSTIC_30FPS_INTERVAL_NS * 3L / 2L) {
+                    diagnosticCaptureTimestampGapEvents += 1L
+                    diagnosticCaptureEstimatedMissing +=
+                        (deltaNs / DIAGNOSTIC_30FPS_INTERVAL_NS - 1L).coerceAtLeast(0L)
+                }
+            }
+            diagnosticLastCaptureTimestampNs = timestampNs
             frameMetadata[timestampNs] = metadata
             latestMetadataTimestampNs = maxOf(latestMetadataTimestampNs, timestampNs)
             trimOldest(frameMetadata, MAX_METADATA_COUNT)
@@ -677,6 +707,18 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 return
             }
             cameraReconfigurationPending = false
+            diagnosticImageFrames += 1L
+            if (diagnosticLastImageTimestampNs > 0L &&
+                timestampNs > diagnosticLastImageTimestampNs
+            ) {
+                val deltaNs = timestampNs - diagnosticLastImageTimestampNs
+                if (deltaNs > DIAGNOSTIC_30FPS_INTERVAL_NS * 3L / 2L) {
+                    diagnosticImageTimestampGapEvents += 1L
+                    diagnosticImageEstimatedMissing +=
+                        (deltaNs / DIAGNOSTIC_30FPS_INTERVAL_NS - 1L).coerceAtLeast(0L)
+                }
+            }
+            diagnosticLastImageTimestampNs = timestampNs
             bufferedImages.remove(timestampNs)?.let(::retireBufferedImageLocked)
             bufferedImages[timestampNs] = BufferedStabilizationImage(
                 image = image,
@@ -868,6 +910,22 @@ class RealtimeStabilizationCoordinator(context: Context) {
         boundaryCount = 0L
         nativeFrameAttemptCount = 0L
         captureResultCount = 0L
+        diagnosticImageFrames = 0L
+        diagnosticImageTimestampGapEvents = 0L
+        diagnosticImageEstimatedMissing = 0L
+        diagnosticLastImageTimestampNs = 0L
+        diagnosticCaptureTimestampGapEvents = 0L
+        diagnosticCaptureEstimatedMissing = 0L
+        diagnosticLastCaptureTimestampNs = 0L
+        diagnosticMissingMetadata = 0L
+        diagnosticNativePending = 0L
+        diagnosticNativeStabilized = 0L
+        diagnosticNativeDropped = 0L
+        diagnosticNativeProcessTotalNs = 0L
+        diagnosticNativeProcessMaxNs = 0L
+        diagnosticImageQueueOverflow = 0L
+        diagnosticResultImageMissing = 0L
+        diagnosticResultQueueTrimmed = 0L
         consecutiveHalStabilizationConflictCount = 0
         rawGyroCallbackCount = 0L
         gyroSourceReady = false
@@ -1096,6 +1154,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
             val metadata = frameMetadata.remove(frameTimestampNs)
             val currentCalibration = calibration
             if (metadata == null) {
+                diagnosticMissingMetadata += 1L
                 val nearestMetadataTimestampNs = frameMetadata.keys.minByOrNull {
                     absoluteTimestampDifference(it, frameTimestampNs)
                 }
@@ -1121,6 +1180,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                         "sensorTs=${metadata.timestampNs}",
                 )
             }
+            val nativeStartNs = SystemClock.elapsedRealtimeNanos()
             val result = nativeEngine.processFrame(
                 MgcEisNativeEngine.FrameInput(
                     sensorTimestampNs = metadata.timestampNs,
@@ -1135,6 +1195,13 @@ class RealtimeStabilizationCoordinator(context: Context) {
                     focalLengthMm = metadata.focalLengthMm,
                 ),
             )
+            val nativeDurationNs =
+                (SystemClock.elapsedRealtimeNanos() - nativeStartNs).coerceAtLeast(0L)
+            diagnosticNativeProcessTotalNs += nativeDurationNs
+            diagnosticNativeProcessMaxNs = maxOf(diagnosticNativeProcessMaxNs, nativeDurationNs)
+            if (result == null) {
+                diagnosticNativePending += 1L
+            }
             if (nativeFrameAttemptCount <= 3L || nativeFrameAttemptCount % 30L == 0L) {
                 PLog.i(
                     TAG,
@@ -1166,6 +1233,10 @@ class RealtimeStabilizationCoordinator(context: Context) {
         activeArray: Rect? = null,
         cropRegion: Rect? = null,
     ) {
+        when (result) {
+            is MgcEisNativeEngine.FrameResult.Stabilized -> diagnosticNativeStabilized += 1L
+            is MgcEisNativeEngine.FrameResult.Dropped -> diagnosticNativeDropped += 1L
+        }
         resultSequence += 1L
         nativeResults.addLast(
             SequencedNativeResult(
@@ -1175,7 +1246,10 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 cropRegion = cropRegion?.let { Rect(it) },
             ),
         )
-        while (nativeResults.size > MAX_RESULT_COUNT) nativeResults.removeFirst()
+        while (nativeResults.size > MAX_RESULT_COUNT) {
+            nativeResults.removeFirst()
+            diagnosticResultQueueTrimmed += 1L
+        }
         activeSessions.values.forEach { callback ->
             try {
                 callback?.invoke()
@@ -1233,6 +1307,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
             val oldestTimestamp = oldestEntry.key
             val oldest = bufferedImages.remove(oldestTimestamp) ?: continue
             oldest.image.close()
+            diagnosticImageQueueOverflow += 1L
             PLog.w(
                 TAG,
                 "MGC YUV queue overflow; dropping source image $oldestTimestamp " +
@@ -1336,6 +1411,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 }
                 val image = coordinator.acquireImageForSession(sessionId, timestampNs)
                 if (image == null) {
+                    coordinator.recordDiagnosticResultImageMissing()
                     if (next.sequence <= 3L || next.sequence % 30L == 0L) {
                         PLog.i(
                             TAG,
@@ -1395,6 +1471,51 @@ class RealtimeStabilizationCoordinator(context: Context) {
         } else {
             0
         }
+    }
+
+    internal fun recordDiagnosticResultImageMissing() {
+        synchronized(lock) {
+            diagnosticResultImageMissing += 1L
+        }
+    }
+
+    fun videoDiagnosticsSnapshot(): String = synchronized(lock) {
+        val nativeAverageMs = if (nativeFrameAttemptCount <= 0L) 0.0 else
+            diagnosticNativeProcessTotalNs.toDouble() / nativeFrameAttemptCount / 1_000_000.0
+        listOf(
+            "cameraSupported=" + isCurrentCameraSupported,
+            "gyroReady=" + gyroSourceReady,
+            "halStabilizationConflict=" + halStabilizationConflictDetected,
+            "activeSessions=" + activeSessionCount,
+            "inputSize=" + nativeFrameWidth + "x" + nativeFrameHeight,
+            "lookaheadFrames=" + nativeLookaheadFrames,
+            "captureResults=" + captureResultCount,
+            "imageFrames=" + diagnosticImageFrames,
+            "boundaries=" + boundaryCount,
+            "nativeFrameAttempts=" + nativeFrameAttemptCount,
+            "nativePending=" + diagnosticNativePending,
+            "nativeStabilized=" + diagnosticNativeStabilized,
+            "nativeDropped=" + diagnosticNativeDropped,
+            "missingMetadata=" + diagnosticMissingMetadata,
+            "imageQueueOverflow=" + diagnosticImageQueueOverflow,
+            "resultImageMissing=" + diagnosticResultImageMissing,
+            "resultQueueTrimmed=" + diagnosticResultQueueTrimmed,
+            "bufferedImagesNow=" + bufferedImages.size,
+            "metadataQueueNow=" + frameMetadata.size,
+            "nativeResultsQueuedNow=" + nativeResults.size,
+            "pendingGyroNow=" + pendingGyroSamples.size,
+            "imageTimestampGapEvents=" + diagnosticImageTimestampGapEvents,
+            "imageEstimatedMissing=" + diagnosticImageEstimatedMissing,
+            "captureTimestampGapEvents=" + diagnosticCaptureTimestampGapEvents,
+            "captureEstimatedMissing=" + diagnosticCaptureEstimatedMissing,
+            "nativeProcessAverageMs=" + String.format(java.util.Locale.US, "%.3f", nativeAverageMs),
+            "nativeProcessMaxMs=" + String.format(
+                java.util.Locale.US, "%.3f", diagnosticNativeProcessMaxNs / 1_000_000.0
+            ),
+            "gyroLagMs=" + timestampLagMs(lastFrameBoundaryNs, lastProcessedGyroTimestampNs),
+            "metadataLagMs=" + timestampLagMs(lastFrameBoundaryNs, latestMetadataTimestampNs),
+            "opticalCorrectionLagMs=" + timestampLagMs(lastFrameBoundaryNs, lastOpticalCorrectionTimestampNs),
+        ).joinToString("\n")
     }
 
     private fun isSessionActive(sessionId: Long): Boolean = synchronized(lock) {
